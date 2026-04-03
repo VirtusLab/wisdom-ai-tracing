@@ -511,6 +511,227 @@ pub async fn update_llm_settings(
     Ok(StatusCode::OK)
 }
 
+// --- Chat Summarization Settings ---
+
+#[derive(Serialize)]
+pub struct ChatSettingsResponse {
+    pub provider: Option<String>,
+    pub has_api_key: bool,
+    pub model: Option<String>,
+    pub base_url: Option<String>,
+    pub auto_summarize: bool,
+}
+
+pub async fn get_chat_settings(
+    State(state): State<AppState>,
+    auth: OrgAuth,
+) -> Result<Json<ChatSettingsResponse>, AppError> {
+    if auth.role != "owner" && auth.role != "admin" {
+        return Err(AppError::Forbidden("Requires admin role".into()));
+    }
+
+    let row = sqlx::query_as::<
+        _,
+        (
+            Option<String>,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+            bool,
+        ),
+    >(
+        "SELECT chat_summarization_provider, chat_summarization_api_key_encrypted, chat_summarization_model, chat_summarization_base_url, chat_auto_summarize
+         FROM org_compliance_settings WHERE org_id = $1",
+    )
+    .bind(auth.org_id)
+    .fetch_optional(&state.pool)
+    .await?;
+
+    if let Some(r) = row {
+        Ok(Json(ChatSettingsResponse {
+            provider: r.0,
+            has_api_key: r.1.is_some(),
+            model: r.2,
+            base_url: r.3,
+            auto_summarize: r.4,
+        }))
+    } else {
+        Ok(Json(ChatSettingsResponse {
+            provider: None,
+            has_api_key: false,
+            model: None,
+            base_url: None,
+            auto_summarize: false,
+        }))
+    }
+}
+
+#[derive(Deserialize)]
+pub struct UpdateChatSettingsRequest {
+    pub provider: Option<String>,
+    pub api_key: Option<String>,
+    pub model: Option<String>,
+    pub base_url: Option<String>,
+    pub auto_summarize: Option<bool>,
+}
+
+pub async fn update_chat_settings(
+    State(state): State<AppState>,
+    auth: OrgAuth,
+    Json(req): Json<UpdateChatSettingsRequest>,
+) -> Result<StatusCode, AppError> {
+    if auth.role != "owner" && auth.role != "admin" {
+        return Err(AppError::Forbidden("Requires admin role".into()));
+    }
+
+    if let Some(ref provider) = req.provider {
+        if provider != "anthropic" && provider != "openai" {
+            return Err(AppError::BadRequest(
+                "Provider must be 'anthropic' or 'openai'".into(),
+            ));
+        }
+    }
+
+    // Encrypt API key if provided
+    let (encrypted_key, nonce) = if let Some(ref api_key) = req.api_key {
+        let (ct, n) = state
+            .extensions
+            .encryption
+            .encrypt(api_key)
+            .map_err(|e| AppError::Internal(format!("Encryption error: {e}")))?;
+        (Some(ct), Some(n))
+    } else {
+        (None, None)
+    };
+
+    let org_id = auth.org_id;
+
+    // Upsert: ensure row exists for this org
+    sqlx::query(
+        "INSERT INTO org_compliance_settings (org_id) VALUES ($1) ON CONFLICT (org_id) DO NOTHING",
+    )
+    .bind(org_id)
+    .execute(&state.pool)
+    .await?;
+
+    // Build dynamic UPDATE
+    let mut set_clauses = vec!["updated_at = NOW()".to_string()];
+    let mut param_idx = 2u32; // $1 is org_id
+
+    if req.provider.is_some() {
+        set_clauses.push(format!("chat_summarization_provider = ${param_idx}"));
+        param_idx += 1;
+    }
+    if encrypted_key.is_some() {
+        set_clauses.push(format!("chat_summarization_api_key_encrypted = ${param_idx}"));
+        param_idx += 1;
+        set_clauses.push(format!("chat_summarization_api_key_nonce = ${param_idx}"));
+        param_idx += 1;
+    }
+    if req.model.is_some() {
+        set_clauses.push(format!("chat_summarization_model = ${param_idx}"));
+        param_idx += 1;
+    }
+    if req.base_url.is_some() {
+        set_clauses.push(format!("chat_summarization_base_url = ${param_idx}"));
+        param_idx += 1;
+    }
+    if req.auto_summarize.is_some() {
+        set_clauses.push(format!("chat_auto_summarize = ${param_idx}"));
+    }
+
+    let sql = format!(
+        "UPDATE org_compliance_settings SET {} WHERE org_id = $1",
+        set_clauses.join(", ")
+    );
+
+    let mut query = sqlx::query(&sql).bind(org_id);
+
+    if let Some(ref provider) = req.provider {
+        query = query.bind(provider);
+    }
+    if let Some(ref ek) = encrypted_key {
+        query = query.bind(ek);
+        query = query.bind(nonce.as_ref().unwrap());
+    }
+    if let Some(ref model) = req.model {
+        query = query.bind(model);
+    }
+    if let Some(ref base_url) = req.base_url {
+        query = query.bind(base_url);
+    }
+    if let Some(auto_summarize) = req.auto_summarize {
+        query = query.bind(auto_summarize);
+    }
+
+    query.execute(&state.pool).await?;
+
+    crate::audit::log(
+        &state.pool,
+        crate::audit::user_action(
+            auth.org_id,
+            auth.user_id,
+            "chat_settings.update",
+            "org",
+            Some(org_id),
+            Some(serde_json::json!({
+                "provider": req.provider,
+                "model": req.model,
+                "base_url": req.base_url,
+                "api_key_changed": req.api_key.is_some(),
+                "auto_summarize": req.auto_summarize,
+            })),
+        ),
+    )
+    .await;
+
+    Ok(StatusCode::OK)
+}
+
+// --- Chat LLM resolution helpers ---
+
+pub async fn resolve_chat_llm(
+    state: &AppState,
+    org_id: Uuid,
+) -> Option<Box<dyn crate::llm::StoryLlm>> {
+    resolve_chat_llm_from_pool(&state.pool, org_id, state.extensions.encryption.as_ref()).await
+}
+
+pub async fn resolve_chat_llm_from_pool(
+    pool: &sqlx::PgPool,
+    org_id: Uuid,
+    encryption: &dyn crate::extensions::EncryptionProvider,
+) -> Option<Box<dyn crate::llm::StoryLlm>> {
+    let row = sqlx::query_as::<
+        _,
+        (
+            Option<String>,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+        ),
+    >(
+        "SELECT chat_summarization_provider, chat_summarization_api_key_encrypted, chat_summarization_api_key_nonce, chat_summarization_model, chat_summarization_base_url
+         FROM org_compliance_settings WHERE org_id = $1",
+    )
+    .bind(org_id)
+    .fetch_optional(pool)
+    .await
+    .ok()??;
+
+    let provider = row.0?;
+    let encrypted_key = row.1?;
+    let nonce = row.2?;
+
+    let api_key = encryption
+        .decrypt(&encrypted_key, &nonce)
+        .map_err(|e| tracing::error!("Failed to decrypt chat LLM API key: {e}"))
+        .ok()?;
+
+    crate::llm::create_llm_from_params(&provider, api_key, row.3, row.4)
+}
+
 // --- Invitation Requests (admin) ---
 
 #[derive(Serialize)]

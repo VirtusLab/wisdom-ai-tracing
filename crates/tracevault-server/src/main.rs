@@ -227,6 +227,10 @@ async fn main() {
             "/api/v1/orgs/{slug}/llm-settings",
             get(api::orgs::get_llm_settings).put(api::orgs::update_llm_settings),
         )
+        .route(
+            "/api/v1/orgs/{slug}/chat-settings",
+            get(api::orgs::get_chat_settings).put(api::orgs::update_chat_settings),
+        )
         // Org-scoped: repos
         .route(
             "/api/v1/orgs/{slug}/repos",
