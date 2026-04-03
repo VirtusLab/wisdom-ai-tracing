@@ -133,6 +133,23 @@ async fn main() {
         });
     }
 
+    let embedding_service: Option<
+        std::sync::Arc<tracevault_server::service::chat_embeddings::EmbeddingService>,
+    > = if extensions.features.chat_search {
+        match tracevault_server::service::chat_embeddings::EmbeddingService::new() {
+            Ok(svc) => {
+                tracing::info!("Chat embedding service initialized");
+                Some(std::sync::Arc::new(svc))
+            }
+            Err(e) => {
+                tracing::warn!("Failed to initialize embedding service: {e}");
+                None
+            }
+        }
+    } else {
+        None
+    };
+
     let bind_addr = cfg.bind_addr();
 
     // Auth routes (strict: 10 req/min per IP)
@@ -499,6 +516,7 @@ async fn main() {
             http_client: http_client.clone(),
             cors_origin: cfg.cors_origin.clone(),
             invite_expiry_minutes: cfg.invite_expiry_minutes,
+            embedding_service,
         });
 
     let listener = tokio::net::TcpListener::bind(&bind_addr).await.unwrap();

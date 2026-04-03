@@ -31,4 +31,6 @@ pub struct AppState {
     pub http_client: reqwest::Client,
     pub cors_origin: String,
     pub invite_expiry_minutes: u64,
+    pub embedding_service:
+        Option<std::sync::Arc<crate::service::chat_embeddings::EmbeddingService>>,
 }

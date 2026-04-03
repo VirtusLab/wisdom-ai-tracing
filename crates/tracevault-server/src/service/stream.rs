@@ -289,6 +289,38 @@ impl StreamService {
                 {
                     tracing::warn!("Failed to seal session {session_db_id} on end: {e}");
                 }
+
+                // Trigger chat indexing if enabled
+                if state.extensions.features.chat_search {
+                    if let Some(ref emb_svc) = state.embedding_service {
+                        let pool = state.pool.clone();
+                        let emb = emb_svc.clone();
+                        let encryption = state.extensions.encryption.clone();
+                        tokio::spawn(async move {
+                            let llm = crate::api::orgs::resolve_chat_llm_from_pool(
+                                &pool,
+                                org_id,
+                                encryption.as_ref(),
+                            )
+                            .await;
+                            if let Some(llm) = llm {
+                                if let Err(e) =
+                                    crate::service::chat_indexing::ChatIndexingService::index_session(
+                                        &pool,
+                                        &emb,
+                                        llm.as_ref(),
+                                        session_db_id,
+                                    )
+                                    .await
+                                {
+                                    tracing::warn!(
+                                        "Background chat indexing failed for session {session_db_id}: {e}"
+                                    );
+                                }
+                            }
+                        });
+                    }
+                }
             }
 
             // 8. SessionStart -- session already upserted above
