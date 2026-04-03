@@ -85,12 +85,11 @@ impl ChatConversationRepo {
     }
 
     pub async fn delete(pool: &PgPool, id: Uuid, user_id: Uuid) -> Result<bool, AppError> {
-        let result =
-            sqlx::query("DELETE FROM chat_conversations WHERE id = $1 AND user_id = $2")
-                .bind(id)
-                .bind(user_id)
-                .execute(pool)
-                .await?;
+        let result = sqlx::query("DELETE FROM chat_conversations WHERE id = $1 AND user_id = $2")
+            .bind(id)
+            .bind(user_id)
+            .execute(pool)
+            .await?;
         Ok(result.rows_affected() > 0)
     }
 

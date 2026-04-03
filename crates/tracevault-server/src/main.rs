@@ -35,6 +35,7 @@ async fn main() {
             Method::GET,
             Method::POST,
             Method::PUT,
+            Method::PATCH,
             Method::DELETE,
             Method::OPTIONS,
         ])
@@ -495,6 +496,29 @@ async fn main() {
         .route(
             "/api/v1/orgs/{slug}/analytics/ai-tools/users/{user_id}",
             get(api::analytics::get_ai_tools_user_detail),
+        )
+        // Org-scoped: chat (enterprise)
+        .route(
+            "/api/v1/orgs/{slug}/chat/conversations",
+            get(api::chat::list_conversations).post(api::chat::create_conversation),
+        )
+        .route(
+            "/api/v1/orgs/{slug}/chat/conversations/{id}",
+            get(api::chat::get_conversation)
+                .patch(api::chat::rename_conversation)
+                .delete(api::chat::delete_conversation),
+        )
+        .route(
+            "/api/v1/orgs/{slug}/chat/conversations/{id}/messages",
+            post(api::chat::send_message),
+        )
+        .route(
+            "/api/v1/orgs/{slug}/chat/indexing/status",
+            get(api::chat_indexing::get_indexing_status),
+        )
+        .route(
+            "/api/v1/orgs/{slug}/chat/indexing/backfill",
+            post(api::chat_indexing::trigger_backfill),
         )
         // Org-scoped: CI
         .route(

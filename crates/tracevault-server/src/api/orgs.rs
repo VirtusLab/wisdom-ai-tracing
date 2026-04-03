@@ -623,7 +623,9 @@ pub async fn update_chat_settings(
         param_idx += 1;
     }
     if encrypted_key.is_some() {
-        set_clauses.push(format!("chat_summarization_api_key_encrypted = ${param_idx}"));
+        set_clauses.push(format!(
+            "chat_summarization_api_key_encrypted = ${param_idx}"
+        ));
         param_idx += 1;
         set_clauses.push(format!("chat_summarization_api_key_nonce = ${param_idx}"));
         param_idx += 1;
