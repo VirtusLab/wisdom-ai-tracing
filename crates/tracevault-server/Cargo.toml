@@ -37,6 +37,8 @@ aes-gcm = "0.10"
 dotenvy = "0.15.7"
 thiserror.workspace = true
 tower_governor = "0.6"
+pgvector = { version = "0.4", features = ["sqlx"] }
+fastembed = { version = "4", optional = true }
 
 [dependencies.tracevault-enterprise]
 path = "../../enterprise"
@@ -47,4 +49,4 @@ sqlx = { version = "0.8", features = ["runtime-tokio", "postgres", "uuid", "chro
 
 [features]
 default = []
-enterprise = ["dep:tracevault-enterprise"]
+enterprise = ["dep:tracevault-enterprise", "dep:fastembed"]
