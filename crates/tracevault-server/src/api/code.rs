@@ -985,7 +985,7 @@ async fn save_story_cache(
 
 // --- Per-org LLM resolution ---
 
-async fn resolve_org_llm(state: &AppState, org_id: Uuid) -> Option<Box<dyn crate::llm::StoryLlm>> {
+pub async fn resolve_org_llm(state: &AppState, org_id: Uuid) -> Option<Box<dyn crate::llm::StoryLlm>> {
     let row = sqlx::query_as::<
         _,
         (
