@@ -26,6 +26,14 @@ pub struct ChunkSearchResult {
     pub distance: f64,
 }
 
+pub struct SessionSearchFilter<'a> {
+    pub repo_id: Option<Uuid>,
+    pub user_id: Option<Uuid>,
+    pub time_from: Option<DateTime<Utc>>,
+    pub time_to: Option<DateTime<Utc>>,
+    pub model_filter: Option<&'a str>,
+}
+
 pub struct ChatEmbeddingsRepo;
 
 impl ChatEmbeddingsRepo {
@@ -96,11 +104,7 @@ impl ChatEmbeddingsRepo {
         org_id: Uuid,
         query_embedding: &[f32],
         limit: i64,
-        repo_id: Option<Uuid>,
-        user_id: Option<Uuid>,
-        time_from: Option<DateTime<Utc>>,
-        time_to: Option<DateTime<Utc>>,
-        model_filter: Option<&str>,
+        filter: &SessionSearchFilter<'_>,
     ) -> Result<Vec<SessionSearchResult>, AppError> {
         let embedding_str = format_embedding(query_embedding);
         let rows = sqlx::query_as::<_, SessionSearchResult>(
@@ -129,11 +133,11 @@ impl ChatEmbeddingsRepo {
         )
         .bind(&embedding_str)
         .bind(org_id)
-        .bind(repo_id)
-        .bind(user_id)
-        .bind(time_from)
-        .bind(time_to)
-        .bind(model_filter)
+        .bind(filter.repo_id)
+        .bind(filter.user_id)
+        .bind(filter.time_from)
+        .bind(filter.time_to)
+        .bind(filter.model_filter)
         .bind(limit)
         .fetch_all(pool)
         .await?;

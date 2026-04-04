@@ -4,7 +4,9 @@ use uuid::Uuid;
 
 use crate::error::AppError;
 use crate::llm::StoryLlm;
-use crate::repo::chat_embeddings::{ChatEmbeddingsRepo, ChunkSearchResult, SessionSearchResult};
+use crate::repo::chat_embeddings::{
+    ChatEmbeddingsRepo, ChunkSearchResult, SessionSearchFilter, SessionSearchResult,
+};
 use crate::repo::chat_messages::{ChatMessageRepo, ChatMessageRow};
 use crate::service::chat_embeddings::EmbeddingService;
 
@@ -93,16 +95,19 @@ impl ChatService {
             .map_err(|e| AppError::Internal(format!("Embedding failed: {e}")))?;
 
         // 5. Coarse retrieval: session summaries, top 20
-        let sessions = ChatEmbeddingsRepo::search_session_summaries(
-            pool,
-            org_id,
-            &query_embedding,
-            20,
+        let search_filter = SessionSearchFilter {
             repo_id,
             user_id,
             time_from,
             time_to,
             model_filter,
+        };
+        let sessions = ChatEmbeddingsRepo::search_session_summaries(
+            pool,
+            org_id,
+            &query_embedding,
+            20,
+            &search_filter,
         )
         .await?;
 
