@@ -126,12 +126,10 @@
 
 	async function handleSendMessage(content: string) {
 		if (!activeConversationId) {
-			// Auto-create conversation
 			await handleCreateConversation();
 			if (!activeConversationId) return;
 		}
 
-		// Optimistically add user message
 		const tempUserMsg: ChatMessage = {
 			id: `temp-${Date.now()}`,
 			conversation_id: activeConversationId,
@@ -152,23 +150,19 @@
 				{ content }
 			);
 
-			// Reload messages to get proper IDs
 			await loadMessages(activeConversationId);
 
-			// Update references
 			referencedSessions = resp.referenced_sessions;
 			referencedCommits = resp.referenced_commits;
 			lastFilters = resp.filters;
 			showResults = resp.referenced_sessions.length > 0 || resp.referenced_commits.length > 0;
 
-			// Update conversation title if it was the first message
 			const conv = conversations.find((c) => c.id === activeConversationId);
 			if (conv && !conv.title) {
 				await loadConversations();
 			}
 		} catch (err) {
 			error = err instanceof Error ? err.message : 'Failed to send message';
-			// Remove optimistic user message on error
 			messages = messages.filter((m) => m.id !== tempUserMsg.id);
 		} finally {
 			sending = false;
@@ -185,7 +179,8 @@
 		<EnterpriseUpgrade feature="chat_search" title="Chat Search" />
 	</div>
 {:else}
-	<div class="flex h-[calc(100vh-4rem)]">
+	<!-- Negative margin to counteract the parent p-6, full bleed layout -->
+	<div class="flex -m-6 h-[calc(100vh-3.5rem)] overflow-hidden">
 		<!-- Sidebar -->
 		<ChatSidebar
 			{conversations}
@@ -197,9 +192,9 @@
 		/>
 
 		<!-- Main chat area -->
-		<div class="flex flex-1 flex-col min-w-0">
+		<div class="flex flex-1 flex-col min-w-0 bg-background">
 			{#if error}
-				<div class="border-b border-border bg-destructive/10 px-4 py-2 text-sm text-destructive">
+				<div class="border-b border-destructive/20 bg-destructive/5 px-4 py-2.5 text-sm text-destructive">
 					{error}
 				</div>
 			{/if}

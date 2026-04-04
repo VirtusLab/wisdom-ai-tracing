@@ -1,5 +1,5 @@
 <script lang="ts">
-	import Send from '@lucide/svelte/icons/send';
+	import { ArrowUp } from '@lucide/svelte';
 
 	let {
 		onSend,
@@ -31,23 +31,28 @@
 	}
 </script>
 
-<div class="border-t border-border p-3">
-	<div class="flex items-end gap-2">
-		<textarea
-			bind:this={textarea}
-			bind:value={text}
-			onkeydown={handleKeydown}
-			{disabled}
-			placeholder="Ask about your sessions, commits, or code..."
-			rows={1}
-			class="flex-1 resize-none rounded-md border border-border bg-background p-3 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring disabled:opacity-50"
-		></textarea>
-		<button
-			onclick={submit}
-			disabled={disabled || !text.trim()}
-			class="shrink-0 rounded-md bg-primary p-3 text-primary-foreground transition-colors hover:bg-primary/90 disabled:opacity-50"
-		>
-			<Send class="h-4 w-4" />
-		</button>
+<div class="border-t border-border bg-background px-4 py-3">
+	<div class="mx-auto max-w-3xl">
+		<div class="flex items-end gap-2 rounded-xl border border-border bg-muted/30 p-2 transition-colors focus-within:border-ring focus-within:ring-1 focus-within:ring-ring">
+			<textarea
+				bind:this={textarea}
+				bind:value={text}
+				onkeydown={handleKeydown}
+				{disabled}
+				placeholder="Ask about your sessions, commits, or code..."
+				rows={1}
+				class="flex-1 resize-none bg-transparent px-2 py-1.5 text-sm text-foreground placeholder:text-muted-foreground/60 focus:outline-none disabled:opacity-50"
+			></textarea>
+			<button
+				onclick={submit}
+				disabled={disabled || !text.trim()}
+				class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-primary text-primary-foreground transition-all hover:bg-primary/90 disabled:opacity-30 disabled:hover:bg-primary"
+			>
+				<ArrowUp class="h-4 w-4" />
+			</button>
+		</div>
+		<p class="mt-1.5 text-center text-[10px] text-muted-foreground/50">
+			Searches across your session transcripts using AI
+		</p>
 	</div>
 </div>
