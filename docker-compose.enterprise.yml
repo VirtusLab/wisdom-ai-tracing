@@ -1,0 +1,11 @@
+# Enterprise overlay — use with:
+#   docker compose -f docker-compose.yml -f docker-compose.enterprise.yml up
+# Requires: git submodule update --init enterprise
+services:
+  db:
+    image: pgvector/pgvector:pg16
+
+  server:
+    build:
+      context: .
+      dockerfile: Dockerfile.enterprise

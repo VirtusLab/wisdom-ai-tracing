@@ -1,6 +1,6 @@
 services:
   test-db:
-    image: pgvector/pgvector:pg16
+    image: postgres:16
     environment:
       POSTGRES_DB: tracevault_test
       POSTGRES_USER: tracevault_test
