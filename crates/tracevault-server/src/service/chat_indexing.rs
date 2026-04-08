@@ -193,8 +193,7 @@ impl ChatIndexingService {
     ) -> Result<u64, String> {
         let session_ids: Vec<(Uuid,)> = sqlx::query_as(
             "SELECT s.id FROM sessions s
-             WHERE s.status = 'completed'
-               AND NOT EXISTS (
+             WHERE NOT EXISTS (
                    SELECT 1 FROM chat_indexing_status ci
                    WHERE ci.session_id = s.id AND ci.status = 'completed'
                )

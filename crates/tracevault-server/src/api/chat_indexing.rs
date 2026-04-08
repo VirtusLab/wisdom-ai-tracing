@@ -37,7 +37,7 @@ pub async fn get_indexing_status(
     check_chat_admin(&state, &auth)?;
 
     let (total_sessions,): (i64,) =
-        sqlx::query_as("SELECT COUNT(*) FROM sessions WHERE org_id = $1 AND status = 'completed'")
+        sqlx::query_as("SELECT COUNT(*) FROM sessions WHERE org_id = $1")
             .bind(auth.org_id)
             .fetch_one(&state.pool)
             .await?;
