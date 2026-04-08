@@ -147,7 +147,7 @@
 		try {
 			const resp = await api.post<SendMessageResponse>(
 				`/api/v1/orgs/${slug}/chat/conversations/${activeConversationId}/messages`,
-				{ content }
+				{ message: content }
 			);
 
 			await loadMessages(activeConversationId);
@@ -159,7 +159,12 @@
 
 			const conv = conversations.find((c) => c.id === activeConversationId);
 			if (conv && !conv.title) {
-				await loadConversations();
+				const autoTitle = content.slice(0, 60).trim();
+				if (autoTitle) {
+					conversations = conversations.map((c) =>
+						c.id === activeConversationId ? { ...c, title: autoTitle } : c
+					);
+				}
 			}
 		} catch (err) {
 			error = err instanceof Error ? err.message : 'Failed to send message';
@@ -196,6 +201,9 @@
 			{#if error}
 				<div class="border-b border-destructive/20 bg-destructive/5 px-4 py-2.5 text-sm text-destructive">
 					{error}
+					{#if error.includes('LLM not configured')}
+						<a href="/orgs/{slug}/settings/chat" class="ml-1 underline font-medium hover:text-destructive/80">Go to Chat LLM settings</a>
+					{/if}
 				</div>
 			{/if}
 

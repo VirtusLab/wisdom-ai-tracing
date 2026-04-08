@@ -18,10 +18,10 @@
 		{ href: `/orgs/${slug}/dashboard`, label: 'Dashboard', icon: LayoutDashboard },
 		{ href: `/orgs/${slug}/repos`, label: 'Repos', icon: FolderGit2 },
 		{ href: `/orgs/${slug}/traces`, label: 'Traces', icon: GitCommitHorizontal },
+		{ href: `/orgs/${slug}/analytics`, label: 'Analytics', icon: BarChart3 },
 		...($features.chat_search
 			? [{ href: `/orgs/${slug}/chat`, label: 'Chat', icon: MessageCircle }]
 			: []),
-		{ href: `/orgs/${slug}/analytics`, label: 'Analytics', icon: BarChart3 },
 		{ href: `/orgs/${slug}/compliance`, label: 'Compliance', icon: ShieldCheck },
 		{ href: `/orgs/${slug}/settings`, label: 'Settings', icon: Settings }
 	]);
@@ -55,9 +55,9 @@
 	const settingsSubItems = $derived([
 		{ href: `/orgs/${slug}/settings`, label: 'Organizations' },
 		{ href: `/orgs/${slug}/settings/pricing`, label: 'Pricing' },
-		{ href: `/orgs/${slug}/settings/llm`, label: 'LLM' },
+		{ href: `/orgs/${slug}/settings/llm`, label: 'Stories LLM' },
 		...($features.chat_search
-			? [{ href: `/orgs/${slug}/settings/chat`, label: 'Chat' }]
+			? [{ href: `/orgs/${slug}/settings/chat`, label: 'Chat LLM' }]
 			: [])
 	]);
 

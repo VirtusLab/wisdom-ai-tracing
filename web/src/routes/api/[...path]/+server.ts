@@ -9,12 +9,13 @@ const handler: RequestHandler = async ({ request, params, url }) => {
 	const headers = new Headers(request.headers);
 	headers.delete('host');
 
+	const hasBody = request.method !== 'GET' && request.method !== 'HEAD';
+	const body = hasBody ? await request.text() : undefined;
+
 	return fetch(target, {
 		method: request.method,
 		headers,
-		body: request.method !== 'GET' && request.method !== 'HEAD' ? request.body : undefined,
-		// @ts-expect-error - duplex needed for streaming body
-		duplex: 'half'
+		body
 	});
 };
 

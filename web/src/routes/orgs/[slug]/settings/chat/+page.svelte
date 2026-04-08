@@ -90,7 +90,7 @@
 
 			await api.put(`/api/v1/orgs/${slug}/chat-settings`, body);
 			editing = false;
-			success = 'Chat settings saved.';
+			success = 'Chat LLM settings saved.';
 			await loadSettings();
 		} catch (err) {
 			error = err instanceof Error ? err.message : 'Failed to save chat settings';
@@ -105,7 +105,7 @@
 </script>
 
 <svelte:head>
-	<title>Chat Settings - TraceVault</title>
+	<title>Chat LLM Settings - TraceVault</title>
 </svelte:head>
 
 {#if !$features.chat_search}
@@ -114,7 +114,7 @@
 	</div>
 {:else}
 	<div class="space-y-6">
-		<h1 class="text-2xl font-bold">Chat Configuration</h1>
+		<h1 class="text-2xl font-bold">Chat LLM Configuration</h1>
 		<p class="text-muted-foreground text-sm">Configure the AI model provider used for chat summarization and RAG queries.</p>
 
 		{#if error}

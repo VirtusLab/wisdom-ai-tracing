@@ -161,12 +161,27 @@ pub async fn send_message(
     // Save user message
     ChatMessageRepo::insert(&state.pool, id, "user", &req.message, None, None, None).await?;
 
-    // Resolve LLM
-    let llm = crate::api::code::resolve_org_llm(&state, auth.org_id)
+    // Auto-title: first 60 chars of user message if no title
+    if conversation.title.is_none() {
+        let auto_title: String = req
+            .message
+            .chars()
+            .take(60)
+            .collect::<String>()
+            .trim()
+            .to_string();
+        if !auto_title.is_empty() {
+            let _ = ChatConversationRepo::rename(&state.pool, id, auth.user_id, &auto_title).await;
+        }
+    }
+
+    // Resolve Chat LLM
+    let llm = crate::api::orgs::resolve_chat_llm(&state, auth.org_id)
         .await
         .ok_or_else(|| {
             AppError::BadRequest(
-                "LLM not configured for this organization. Configure it in org settings.".into(),
+                "Chat LLM not configured for this organization. Configure it in Chat LLM settings."
+                    .into(),
             )
         })?;
 
@@ -214,20 +229,6 @@ pub async fn send_message(
 
     // Touch conversation updated_at
     ChatConversationRepo::touch(&state.pool, id).await?;
-
-    // Auto-title: first 60 chars of response if no title
-    if conversation.title.is_none() {
-        let auto_title: String = response
-            .content
-            .chars()
-            .take(60)
-            .collect::<String>()
-            .trim()
-            .to_string();
-        if !auto_title.is_empty() {
-            let _ = ChatConversationRepo::rename(&state.pool, id, auth.user_id, &auto_title).await;
-        }
-    }
 
     // Build response
     let session_refs: Vec<SessionRef> = response

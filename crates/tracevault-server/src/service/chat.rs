@@ -155,12 +155,13 @@ impl ChatService {
             .collect::<Vec<_>>()
             .join("\n");
 
-        let today = Utc::now().format("%Y-%m-%d").to_string();
+        let now = Utc::now();
+        let today = now.format("%Y-%m-%dT%H:%M:%SZ").to_string();
 
         let prompt = format!(
             r#"You are a filter extraction assistant. Given a user's question about coding sessions, extract structured filters.
 
-Today's date: {today}
+Current datetime (UTC): {today}
 
 Conversation history:
 {history_text}
@@ -172,8 +173,10 @@ Return ONLY valid JSON with these fields:
 - "user": email of a specific user if mentioned, or null
 - "repo": repository name if mentioned, or null
 - "time_from": ISO 8601 datetime string if a start time is mentioned (e.g. "last week" -> appropriate date), or null
-- "time_to": ISO 8601 datetime string if an end time is mentioned, or null
+- "time_to": ISO 8601 datetime string if an end time is mentioned, or null. If the range includes today or "now", either set to null or use the current datetime above. Never use midnight of today as the end time — that excludes the entire day.
 - "model": AI model name if mentioned (e.g. "claude-3.5-sonnet"), or null
+
+If the user asks about recent activity without specifying a clear end date, set time_to to null (meaning "up to now").
 
 Respond with ONLY the JSON object, no markdown, no explanation."#
         );

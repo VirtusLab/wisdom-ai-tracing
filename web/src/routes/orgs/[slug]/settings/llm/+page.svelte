@@ -49,7 +49,7 @@
 			editBaseUrl = settings.base_url ?? '';
 			editApiKey = '';
 		} catch (err) {
-			error = err instanceof Error ? err.message : 'Failed to load LLM settings';
+			error = err instanceof Error ? err.message : 'Failed to load Stories LLM settings';
 		} finally {
 			loading = false;
 		}
@@ -83,10 +83,10 @@
 
 			await api.put(`/api/v1/orgs/${slug}/llm-settings`, body);
 			editing = false;
-			success = 'LLM settings saved.';
+			success = 'Stories LLM settings saved.';
 			await loadSettings();
 		} catch (err) {
-			error = err instanceof Error ? err.message : 'Failed to save LLM settings';
+			error = err instanceof Error ? err.message : 'Failed to save Stories LLM settings';
 		} finally {
 			saving = false;
 		}
@@ -98,11 +98,11 @@
 </script>
 
 <svelte:head>
-	<title>LLM Settings - TraceVault</title>
+	<title>Stories LLM Settings - TraceVault</title>
 </svelte:head>
 
 <div class="space-y-6">
-	<h1 class="text-2xl font-bold">LLM Configuration</h1>
+	<h1 class="text-2xl font-bold">Stories LLM Configuration</h1>
 	<p class="text-muted-foreground text-sm">Configure the AI model provider used for story generation across the platform.</p>
 
 	{#if error}
