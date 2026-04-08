@@ -8,7 +8,10 @@
 		SendMessageResponse,
 		ChatSessionRef,
 		ChatCommitRef,
-		ExtractedFilters
+		ExtractedFilters,
+		MentionItem,
+		MentionRef,
+		MentionsResponse
 	} from '$lib/types';
 	import ChatSidebar from '$lib/components/chat/ChatSidebar.svelte';
 	import ChatMessages from '$lib/components/chat/ChatMessages.svelte';
@@ -31,11 +34,31 @@
 	let referencedCommits = $state<ChatCommitRef[]>([]);
 	let lastFilters = $state<ExtractedFilters | null>(null);
 	let showResults = $state(false);
+	let mentionItems = $state<MentionItem[]>([]);
+	let mentionInterval: ReturnType<typeof setInterval> | undefined;
+
+	async function loadMentions() {
+		try {
+			const resp = await api.get<MentionsResponse>(`/api/v1/orgs/${slug}/chat/mentions`);
+			mentionItems = [
+				...resp.users.map((u) => ({ type: 'user' as const, id: u.id, display: u.display, email: u.email })),
+				...resp.repos.map((r) => ({ type: 'repo' as const, id: r.id, display: r.display })),
+				...resp.models.map((m) => ({ type: 'model' as const, display: m.display }))
+			];
+		} catch {
+			// Non-critical — mentions just won't be available
+		}
+	}
 
 	$effect(() => {
 		if (slug && $features.chat_search) {
 			loadConversations();
+			loadMentions();
+			mentionInterval = setInterval(loadMentions, 60_000);
 		}
+		return () => {
+			if (mentionInterval) clearInterval(mentionInterval);
+		};
 	});
 
 	async function loadConversations() {
@@ -124,7 +147,7 @@
 		}
 	}
 
-	async function handleSendMessage(content: string) {
+	async function handleSendMessage(content: string, mentions: MentionRef[] = []) {
 		if (!activeConversationId) {
 			await handleCreateConversation();
 			if (!activeConversationId) return;
@@ -147,7 +170,7 @@
 		try {
 			const resp = await api.post<SendMessageResponse>(
 				`/api/v1/orgs/${slug}/chat/conversations/${activeConversationId}/messages`,
-				{ message: content }
+				{ message: content, mentions }
 			);
 
 			await loadMessages(activeConversationId);
@@ -221,6 +244,7 @@
 			<ChatInput
 				onSend={handleSendMessage}
 				disabled={sending}
+				mentions={mentionItems}
 			/>
 		</div>
 
