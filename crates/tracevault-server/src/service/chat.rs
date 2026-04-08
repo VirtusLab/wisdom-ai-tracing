@@ -320,7 +320,7 @@ Respond with ONLY the JSON object, no markdown, no explanation."#
             .enumerate()
             .map(|(i, text)| {
                 let truncated = if text.len() > 1500 {
-                    &text[..1500]
+                    &text[..text.floor_char_boundary(1500)]
                 } else {
                     text
                 };
