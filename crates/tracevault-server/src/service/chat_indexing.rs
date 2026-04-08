@@ -37,8 +37,8 @@ impl ChatIndexingService {
         Self::mark_processing(pool, session_id).await?;
 
         match Self::index_session_inner(pool, embedding_service, llm, session_id).await {
-            Ok(()) => {
-                Self::mark_completed(pool, session_id).await?;
+            Ok(chunk_count) => {
+                Self::mark_completed(pool, session_id, chunk_count).await?;
                 Ok(())
             }
             Err(e) => {
@@ -53,7 +53,7 @@ impl ChatIndexingService {
         embedding_service: &EmbeddingService,
         llm: &dyn StoryLlm,
         session_id: Uuid,
-    ) -> Result<(), String> {
+    ) -> Result<i32, String> {
         // 2. Load transcript chunks
         let chunks: Vec<TranscriptChunkRow> = sqlx::query_as(
             "SELECT chunk_index, data FROM transcript_chunks WHERE session_id = $1 ORDER BY chunk_index",
@@ -66,6 +66,8 @@ impl ChatIndexingService {
         if chunks.is_empty() {
             return Err("No transcript chunks found for session".to_string());
         }
+
+        let chunk_count = chunks.len() as i32;
 
         // 3. Load session metadata
         let metadata: SessionMetadataRow = sqlx::query_as(
@@ -140,7 +142,7 @@ impl ChatIndexingService {
             .map_err(|e| format!("Failed to store chunk embeddings: {e}"))?;
         }
 
-        Ok(())
+        Ok(chunk_count)
     }
 
     async fn mark_processing(pool: &PgPool, session_id: Uuid) -> Result<(), String> {
@@ -157,12 +159,14 @@ impl ChatIndexingService {
         Ok(())
     }
 
-    async fn mark_completed(pool: &PgPool, session_id: Uuid) -> Result<(), String> {
+    async fn mark_completed(pool: &PgPool, session_id: Uuid, chunk_count: i32) -> Result<(), String> {
         sqlx::query(
-            "UPDATE chat_indexing_status SET status = 'completed', updated_at = now()
+            "UPDATE chat_indexing_status
+             SET status = 'completed', indexed_chunk_count = $2, updated_at = now()
              WHERE session_id = $1",
         )
         .bind(session_id)
+        .bind(chunk_count)
         .execute(pool)
         .await
         .map_err(|e| format!("Failed to mark session as completed: {e}"))?;
@@ -193,10 +197,12 @@ impl ChatIndexingService {
     ) -> Result<u64, String> {
         let session_ids: Vec<(Uuid,)> = sqlx::query_as(
             "SELECT s.id FROM sessions s
-             WHERE NOT EXISTS (
-                   SELECT 1 FROM chat_indexing_status ci
-                   WHERE ci.session_id = s.id AND ci.status = 'completed'
-               )
+             LEFT JOIN chat_indexing_status ci ON ci.session_id = s.id
+             WHERE ci.id IS NULL
+                OR ci.status != 'completed'
+                OR ci.indexed_chunk_count < (
+                    SELECT COUNT(*) FROM transcript_chunks tc WHERE tc.session_id = s.id
+                )
              ORDER BY s.started_at DESC
              LIMIT $1",
         )

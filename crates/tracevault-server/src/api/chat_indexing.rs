@@ -45,7 +45,10 @@ pub async fn get_indexing_status(
     let (indexed_sessions,): (i64,) = sqlx::query_as(
         "SELECT COUNT(*) FROM chat_indexing_status ci
          JOIN sessions s ON s.id = ci.session_id
-         WHERE s.org_id = $1 AND ci.status = 'completed'",
+         WHERE s.org_id = $1 AND ci.status = 'completed'
+           AND ci.indexed_chunk_count >= (
+               SELECT COUNT(*) FROM transcript_chunks tc WHERE tc.session_id = s.id
+           )",
     )
     .bind(auth.org_id)
     .fetch_one(&state.pool)
