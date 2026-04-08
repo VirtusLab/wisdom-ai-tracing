@@ -36,11 +36,14 @@ pub async fn get_indexing_status(
 ) -> Result<Json<IndexingStatusResponse>, AppError> {
     check_chat_admin(&state, &auth)?;
 
-    let (total_sessions,): (i64,) =
-        sqlx::query_as("SELECT COUNT(*) FROM sessions WHERE org_id = $1")
-            .bind(auth.org_id)
-            .fetch_one(&state.pool)
-            .await?;
+    let (total_sessions,): (i64,) = sqlx::query_as(
+        "SELECT COUNT(*) FROM sessions s
+         WHERE s.org_id = $1
+           AND EXISTS (SELECT 1 FROM transcript_chunks tc WHERE tc.session_id = s.id)",
+    )
+    .bind(auth.org_id)
+    .fetch_one(&state.pool)
+    .await?;
 
     let (indexed_sessions,): (i64,) = sqlx::query_as(
         "SELECT COUNT(*) FROM sessions s

@@ -199,13 +199,27 @@ impl ChatIndexingService {
         Ok(())
     }
 
-    /// Find unindexed completed sessions and index them in batches.
+    /// Find sessions needing indexing (new or with grown transcripts) and index them.
     pub async fn backfill(
         pool: &PgPool,
         embedding_service: &EmbeddingService,
         llm: &dyn StoryLlm,
         batch_size: i64,
     ) -> Result<u64, String> {
+        // Count total and empty sessions for diagnostics
+        let (total,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM sessions")
+            .fetch_one(pool)
+            .await
+            .map_err(|e| format!("Failed to count sessions: {e}"))?;
+
+        let (empty,): (i64,) = sqlx::query_as(
+            "SELECT COUNT(*) FROM sessions s
+             WHERE NOT EXISTS (SELECT 1 FROM transcript_chunks tc WHERE tc.session_id = s.id)",
+        )
+        .fetch_one(pool)
+        .await
+        .map_err(|e| format!("Failed to count empty sessions: {e}"))?;
+
         let session_ids: Vec<(Uuid,)> = sqlx::query_as(
             "SELECT s.id FROM sessions s
              LEFT JOIN chat_indexing_status ci ON ci.session_id = s.id
@@ -219,6 +233,11 @@ impl ChatIndexingService {
         .fetch_all(pool)
         .await
         .map_err(|e| format!("Failed to find unindexed sessions: {e}"))?;
+
+        tracing::info!(
+            "Backfill: {total} total sessions, {empty} without transcripts, {} eligible for indexing",
+            session_ids.len()
+        );
 
         let mut indexed = 0u64;
         for (session_id,) in &session_ids {
