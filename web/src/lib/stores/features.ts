@@ -13,6 +13,7 @@ export interface FeatureFlags {
 	encryption_at_rest: boolean;
 	full_policy_engine: boolean;
 	advanced_redaction: boolean;
+	chat_search: boolean;
 	initialized: boolean;
 	loaded: boolean;
 }
@@ -28,6 +29,7 @@ const communityDefaults: FeatureFlags = {
 	encryption_at_rest: false,
 	full_policy_engine: false,
 	advanced_redaction: false,
+	chat_search: false,
 	initialized: false,
 	loaded: false
 };

@@ -219,6 +219,7 @@ pub fn community_registry() -> ExtensionRegistry {
             encryption_at_rest: false,
             full_policy_engine: false,
             advanced_redaction: false,
+            chat_search: false,
         },
         encryption: Arc::new(CommunityEncryptionProvider),
         story: Arc::new(CommunityStoryProvider),

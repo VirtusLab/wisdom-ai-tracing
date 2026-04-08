@@ -1,5 +1,8 @@
 pub mod analytics;
 pub mod api_keys;
+pub mod chat_conversations;
+pub mod chat_embeddings;
+pub mod chat_messages;
 pub mod code_stories;
 pub mod commits;
 pub mod compliance;

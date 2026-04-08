@@ -75,7 +75,7 @@ Plus a SvelteKit web dashboard and a GitHub Action for CI verification.
 ## Prerequisites
 
 - Rust stable toolchain (install via [rustup](https://rustup.rs))
-- PostgreSQL 16+ (or Docker)
+- PostgreSQL 14+ (or Docker) with the [pgvector](https://github.com/pgvector/pgvector) extension enabled (`CREATE EXTENSION vector;`). pgvector is available out of the box on all major managed providers (AWS RDS, GCP Cloud SQL, Azure Database for PostgreSQL, Supabase, Neon).
 - Node.js 20+ and pnpm (for the web dashboard)
 - Docker & Docker Compose (for containerized deployment)
 
@@ -91,22 +91,33 @@ Binaries land in `target/release/`:
 - `tracevault` (CLI)
 - `tracevault-server`
 
-### 2. Start the server with Docker Compose
+### 2. Start with Docker Compose (recommended)
 
 ```sh
 # Generate an encryption key (required — encrypts per-org signing keys in the DB)
 export TRACEVAULT_ENCRYPTION_KEY=$(openssl rand -base64 32)
 
-docker compose up -d
+# Start all services
+docker compose up -d --build
 ```
 
-This starts PostgreSQL, the TraceVault server on port 3000, and the web dashboard on port 5173. Migrations run automatically on startup.
+This starts three containers:
+
+| Service | URL | Description |
+|---------|-----|-------------|
+| `db` | `localhost:5432` | PostgreSQL 16 |
+| `server` | `localhost:3000` | TraceVault API server |
+| `web` | `localhost:5173` | SvelteKit web dashboard |
+
+Database migrations run automatically on startup. Open `http://localhost:5173` to access the dashboard.
 
 To run just the database (useful during development):
 
 ```sh
 docker compose up -d db
 ```
+
+For the **Enterprise** edition (adds RAG chat, vector search, compliance features), see the [enterprise README](enterprise/README.md).
 
 ### 3. Run the backend server locally (development)
 

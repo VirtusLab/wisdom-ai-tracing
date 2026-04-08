@@ -1,6 +1,8 @@
 pub mod analytics;
 pub mod api_keys;
 pub mod auth;
+pub mod chat;
+pub mod chat_indexing;
 pub mod ci;
 pub mod code;
 pub mod commit_push;

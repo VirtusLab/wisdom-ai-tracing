@@ -114,7 +114,7 @@
 			</div>
 
 			<div class="space-y-2">
-				<label class="text-sm font-medium">Signing Key (Ed25519 seed, base64)</label>
+				<p class="text-sm font-medium">Signing Key (Ed25519 seed, base64)</p>
 				<code class="block w-full rounded-md border bg-muted p-3 text-xs font-mono break-all select-all">
 					{signingKeySeed}
 				</code>

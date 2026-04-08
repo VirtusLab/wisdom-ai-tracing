@@ -42,7 +42,7 @@
 	</Card.Header>
 	<Card.Content>
 		<p class="text-sm text-muted-foreground mb-4">{description}</p>
-		<Button variant="outline" size="sm" href="https://tracevault.dev/enterprise">
+		<Button variant="outline" size="sm" href="https://tracevault.dev/compare">
 			Learn more
 		</Button>
 	</Card.Content>

@@ -22,6 +22,7 @@ pub struct FeatureFlags {
     pub encryption_at_rest: bool,
     pub full_policy_engine: bool,
     pub advanced_redaction: bool,
+    pub chat_search: bool,
 }
 
 /// The central registry of pluggable features.

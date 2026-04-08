@@ -12,4 +12,5 @@ pub enum Permission {
     CodeBrowse,
     StoryGenerate,
     StoryView,
+    ChatUse,
 }

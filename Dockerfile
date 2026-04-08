@@ -3,6 +3,10 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y pkg-config libssl-dev cmake && rm -rf /var/lib/apt/lists/*
 COPY Cargo.toml Cargo.lock ./
 COPY crates/ crates/
+# Stub enterprise crate so Cargo can resolve the optional path dependency
+RUN mkdir -p enterprise/src && \
+    echo '[package]\nname = "tracevault-enterprise"\nversion = "0.1.0"\nedition = "2021"\n\n[dependencies]\ntracevault-core = { path = "../crates/tracevault-core" }' > enterprise/Cargo.toml && \
+    echo '' > enterprise/src/lib.rs
 RUN cargo build --release -p tracevault-server
 
 FROM debian:trixie-slim

@@ -35,6 +35,7 @@ async fn main() {
             Method::GET,
             Method::POST,
             Method::PUT,
+            Method::PATCH,
             Method::DELETE,
             Method::OPTIONS,
         ])
@@ -133,6 +134,23 @@ async fn main() {
         });
     }
 
+    let embedding_service: Option<
+        std::sync::Arc<tracevault_server::service::chat_embeddings::EmbeddingService>,
+    > = if extensions.features.chat_search {
+        match tracevault_server::service::chat_embeddings::EmbeddingService::new() {
+            Ok(svc) => {
+                tracing::info!("Chat embedding service initialized");
+                Some(std::sync::Arc::new(svc))
+            }
+            Err(e) => {
+                tracing::warn!("Failed to initialize embedding service: {e}");
+                None
+            }
+        }
+    } else {
+        None
+    };
+
     let bind_addr = cfg.bind_addr();
 
     // Auth routes (strict: 10 req/min per IP)
@@ -226,6 +244,10 @@ async fn main() {
         .route(
             "/api/v1/orgs/{slug}/llm-settings",
             get(api::orgs::get_llm_settings).put(api::orgs::update_llm_settings),
+        )
+        .route(
+            "/api/v1/orgs/{slug}/chat-settings",
+            get(api::orgs::get_chat_settings).put(api::orgs::update_chat_settings),
         )
         // Org-scoped: repos
         .route(
@@ -475,6 +497,29 @@ async fn main() {
             "/api/v1/orgs/{slug}/analytics/ai-tools/users/{user_id}",
             get(api::analytics::get_ai_tools_user_detail),
         )
+        // Org-scoped: chat (enterprise)
+        .route(
+            "/api/v1/orgs/{slug}/chat/conversations",
+            get(api::chat::list_conversations).post(api::chat::create_conversation),
+        )
+        .route(
+            "/api/v1/orgs/{slug}/chat/conversations/{id}",
+            get(api::chat::get_conversation)
+                .patch(api::chat::rename_conversation)
+                .delete(api::chat::delete_conversation),
+        )
+        .route(
+            "/api/v1/orgs/{slug}/chat/conversations/{id}/messages",
+            post(api::chat::send_message),
+        )
+        .route(
+            "/api/v1/orgs/{slug}/chat/indexing/status",
+            get(api::chat_indexing::get_indexing_status),
+        )
+        .route(
+            "/api/v1/orgs/{slug}/chat/indexing/backfill",
+            post(api::chat_indexing::trigger_backfill),
+        )
         // Org-scoped: CI
         .route(
             "/api/v1/orgs/{slug}/repos/{repo_id}/ci/verify",
@@ -495,6 +540,7 @@ async fn main() {
             http_client: http_client.clone(),
             cors_origin: cfg.cors_origin.clone(),
             invite_expiry_minutes: cfg.invite_expiry_minutes,
+            embedding_service,
         });
 
     let listener = tokio::net::TcpListener::bind(&bind_addr).await.unwrap();
