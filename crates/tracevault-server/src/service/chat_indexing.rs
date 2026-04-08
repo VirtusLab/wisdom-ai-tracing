@@ -198,11 +198,9 @@ impl ChatIndexingService {
         let session_ids: Vec<(Uuid,)> = sqlx::query_as(
             "SELECT s.id FROM sessions s
              LEFT JOIN chat_indexing_status ci ON ci.session_id = s.id
-             WHERE ci.id IS NULL
-                OR ci.status != 'completed'
-                OR ci.indexed_chunk_count < (
-                    SELECT COUNT(*) FROM transcript_chunks tc WHERE tc.session_id = s.id
-                )
+             WHERE COALESCE(ci.indexed_chunk_count, 0) < (
+                 SELECT COUNT(*) FROM transcript_chunks tc WHERE tc.session_id = s.id
+             )
              ORDER BY s.started_at DESC
              LIMIT $1",
         )
