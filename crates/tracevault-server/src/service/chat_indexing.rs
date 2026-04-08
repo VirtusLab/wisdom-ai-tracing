@@ -170,7 +170,11 @@ impl ChatIndexingService {
         Ok(())
     }
 
-    async fn mark_completed(pool: &PgPool, session_id: Uuid, chunk_count: i32) -> Result<(), String> {
+    async fn mark_completed(
+        pool: &PgPool,
+        session_id: Uuid,
+        chunk_count: i32,
+    ) -> Result<(), String> {
         sqlx::query(
             "UPDATE chat_indexing_status
              SET status = 'completed', indexed_chunk_count = $2, updated_at = now()

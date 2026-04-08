@@ -72,8 +72,7 @@ pub async fn generate_summary(
     metadata: &SessionMetadataForSummary,
 ) -> Result<String, String> {
     let transcript_text = flatten_transcript(chunks);
-    let total_segments =
-        (transcript_text.len() + SEGMENT_SIZE - 1) / SEGMENT_SIZE;
+    let total_segments = (transcript_text.len() + SEGMENT_SIZE - 1) / SEGMENT_SIZE;
 
     tracing::info!(
         "Summarizing session: repo={}, user={}, transcript_len={}, chunks={}, segments={}",
@@ -88,8 +87,13 @@ pub async fn generate_summary(
     if transcript_text.len() <= SEGMENT_SIZE {
         tracing::info!("Single-pass summarization (small transcript)");
         let start = std::time::Instant::now();
-        let result = llm.generate(&build_summary_prompt(&transcript_text, metadata), 1024).await;
-        tracing::info!("Single-pass summarization completed in {:?}", start.elapsed());
+        let result = llm
+            .generate(&build_summary_prompt(&transcript_text, metadata), 1024)
+            .await;
+        tracing::info!(
+            "Single-pass summarization completed in {:?}",
+            start.elapsed()
+        );
         return result;
     }
 
@@ -100,8 +104,8 @@ pub async fn generate_summary(
     let mut segment_num = 1;
 
     while offset < transcript_text.len() {
-        let end = transcript_text
-            .floor_char_boundary((offset + SEGMENT_SIZE).min(transcript_text.len()));
+        let end =
+            transcript_text.floor_char_boundary((offset + SEGMENT_SIZE).min(transcript_text.len()));
         let segment = &transcript_text[offset..end];
 
         tracing::info!(

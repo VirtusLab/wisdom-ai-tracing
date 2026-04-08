@@ -14,3 +14,4 @@ docs/general/
 .superpowers/
 PROJECT_DESCRIPTION.md
 .tracevault/
+.fastembed_cache/
