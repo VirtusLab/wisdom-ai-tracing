@@ -1,5 +1,5 @@
 <script lang="ts">
-	import type { ChatMessage } from '$lib/types';
+	import type { ChatMessage, MentionItem } from '$lib/types';
 	import { MessageCircle, Bot, User } from '@lucide/svelte';
 	import { marked } from 'marked';
 
@@ -7,12 +7,14 @@
 		messages,
 		loading,
 		sending,
-		slug
+		slug,
+		mentions = []
 	}: {
 		messages: ChatMessage[];
 		loading: boolean;
 		sending: boolean;
 		slug: string;
+		mentions?: MentionItem[];
 	} = $props();
 
 	let container: HTMLDivElement | undefined = $state();
@@ -25,15 +27,39 @@
 		}
 	});
 
-	function renderContent(content: string, orgSlug: string): string {
-		// First render markdown to HTML
+	function mentionPillClass(type: string): string {
+		switch (type) {
+			case 'user':
+				return 'bg-primary/15 text-primary';
+			case 'repo':
+				return 'bg-emerald-500/15 text-emerald-600';
+			case 'model':
+				return 'bg-amber-500/15 text-amber-600';
+			default:
+				return 'bg-muted text-foreground';
+		}
+	}
+
+	function renderContent(content: string, orgSlug: string, mentionItems: MentionItem[]): string {
 		let html = marked.parse(content) as string;
-		// Then replace [Session #id] with links
+		// Replace [Session #id] with links
 		html = html.replace(
 			/\[Session #([^\]]+)\]/g,
 			(_match, id) =>
 				`<a href="/orgs/${orgSlug}/traces/sessions/${id}" class="inline-flex items-center gap-0.5 rounded bg-primary/10 px-1.5 py-0.5 text-xs font-medium text-primary transition-colors hover:bg-primary/20">[Session #${id}]</a>`
 		);
+		// Replace @mentions with colored pills
+		if (mentionItems.length > 0) {
+			const sorted = [...mentionItems].sort((a, b) => b.display.length - a.display.length);
+			for (const m of sorted) {
+				const escaped = m.display.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+				const regex = new RegExp(`@${escaped}(?![\\w.-])`, 'g');
+				html = html.replace(
+					regex,
+					`<span class="inline-flex items-center rounded px-1.5 py-0.5 text-xs font-medium ${mentionPillClass(m.type)}">@${m.display}</span>`
+				);
+			}
+		}
 		return html;
 	}
 
@@ -85,7 +111,7 @@
 							<span class="text-[10px] text-muted-foreground/50">{formatTime(msg.created_at)}</span>
 						</div>
 						<div class="chat-markdown">
-							{@html renderContent(msg.content, slug)}
+							{@html renderContent(msg.content, slug, mentions)}
 						</div>
 					</div>
 				</div>

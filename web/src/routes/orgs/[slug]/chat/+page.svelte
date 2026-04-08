@@ -239,6 +239,7 @@
 				loading={loadingMessages}
 				{sending}
 				{slug}
+				mentions={mentionItems}
 			/>
 
 			<ChatInput
