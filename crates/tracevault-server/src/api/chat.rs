@@ -342,12 +342,11 @@ pub async fn list_mentions(
     .fetch_all(&state.pool)
     .await?;
 
-    let repos: Vec<(Uuid, String)> = sqlx::query_as(
-        "SELECT id, name FROM repos WHERE org_id = $1 ORDER BY name",
-    )
-    .bind(auth.org_id)
-    .fetch_all(&state.pool)
-    .await?;
+    let repos: Vec<(Uuid, String)> =
+        sqlx::query_as("SELECT id, name FROM repos WHERE org_id = $1 ORDER BY name")
+            .bind(auth.org_id)
+            .fetch_all(&state.pool)
+            .await?;
 
     let models: Vec<(String,)> = sqlx::query_as(
         "SELECT DISTINCT model FROM sessions WHERE org_id = $1 AND model IS NOT NULL ORDER BY model",
@@ -360,9 +359,8 @@ pub async fn list_mentions(
         users: users
             .into_iter()
             .map(|(id, name, email)| {
-                let display = name.unwrap_or_else(|| {
-                    email.split('@').next().unwrap_or(&email).to_string()
-                });
+                let display =
+                    name.unwrap_or_else(|| email.split('@').next().unwrap_or(&email).to_string());
                 MentionUser { id, display, email }
             })
             .collect(),
