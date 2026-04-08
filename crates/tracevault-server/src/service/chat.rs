@@ -34,6 +34,13 @@ pub struct ReferencedCommit {
     pub session_id: Uuid,
 }
 
+#[derive(Default)]
+pub struct MentionOverrides {
+    pub user_id: Option<Uuid>,
+    pub repo_id: Option<Uuid>,
+    pub model: Option<String>,
+}
+
 pub struct ChatService;
 
 impl ChatService {
@@ -44,6 +51,7 @@ impl ChatService {
         org_id: Uuid,
         conversation_id: Uuid,
         user_message: &str,
+        overrides: &MentionOverrides,
     ) -> Result<ChatResponse, AppError> {
         // 1. Load conversation history (last 10 messages)
         let history = ChatMessageRepo::get_recent(pool, conversation_id, 10).await?;
@@ -51,8 +59,10 @@ impl ChatService {
         // 2. Extract filters via LLM
         let filters = Self::extract_filters(llm, user_message, &history).await;
 
-        // 3. Resolve filter values
-        let repo_id = if let Some(ref repo_name) = filters.repo {
+        // 3. Resolve filter values (mentions override LLM-extracted filters)
+        let repo_id = if let Some(id) = overrides.repo_id {
+            Some(id)
+        } else if let Some(ref repo_name) = filters.repo {
             sqlx::query_scalar::<_, Uuid>("SELECT id FROM repos WHERE org_id = $1 AND name = $2")
                 .bind(org_id)
                 .bind(repo_name)
@@ -62,7 +72,9 @@ impl ChatService {
             None
         };
 
-        let user_id = if let Some(ref user_email) = filters.user {
+        let user_id = if let Some(id) = overrides.user_id {
+            Some(id)
+        } else if let Some(ref user_email) = filters.user {
             sqlx::query_scalar::<_, Uuid>(
                 "SELECT u.id FROM users u
                  JOIN user_org_memberships m ON m.user_id = u.id
@@ -86,7 +98,7 @@ impl ChatService {
             .as_deref()
             .and_then(|s| s.parse::<DateTime<Utc>>().ok());
 
-        let model_filter = filters.model.as_deref();
+        let model_filter = overrides.model.as_deref().or(filters.model.as_deref());
 
         // 4. Embed query
         let query_embedding = embedding_service

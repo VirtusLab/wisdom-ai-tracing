@@ -16,8 +16,18 @@ use crate::AppState;
 // --- Request/Response types ---
 
 #[derive(serde::Deserialize)]
+pub struct MentionRef {
+    #[serde(rename = "type")]
+    pub mention_type: String,
+    pub id: Option<Uuid>,
+    pub display: String,
+}
+
+#[derive(serde::Deserialize)]
 pub struct SendMessageRequest {
     pub message: String,
+    #[serde(default)]
+    pub mentions: Vec<MentionRef>,
 }
 
 #[derive(serde::Deserialize)]
@@ -216,6 +226,30 @@ pub async fn send_message(
         .as_ref()
         .ok_or_else(|| AppError::Internal("Embedding service not available".into()))?;
 
+    // Build mention overrides
+    let overrides = {
+        let mut o = crate::service::chat::MentionOverrides::default();
+        for m in &req.mentions {
+            match m.mention_type.as_str() {
+                "user" => {
+                    if let Some(id) = m.id {
+                        o.user_id = Some(id);
+                    }
+                }
+                "repo" => {
+                    if let Some(id) = m.id {
+                        o.repo_id = Some(id);
+                    }
+                }
+                "model" => {
+                    o.model = Some(m.display.clone());
+                }
+                _ => {}
+            }
+        }
+        o
+    };
+
     // Call query pipeline
     let response = ChatService::query(
         &state.pool,
@@ -224,6 +258,7 @@ pub async fn send_message(
         auth.org_id,
         id,
         &req.message,
+        &overrides,
     )
     .await?;
 
