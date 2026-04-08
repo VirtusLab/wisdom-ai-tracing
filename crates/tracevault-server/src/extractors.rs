@@ -167,7 +167,7 @@ impl FromRequestParts<AppState> for OrgAuth {
             return Ok(OrgAuth {
                 user_id: Uuid::nil(),
                 org_id,
-                role: "developer".to_string(),
+                role: "admin".to_string(),
             });
         }
 
