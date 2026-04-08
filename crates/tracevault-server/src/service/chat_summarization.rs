@@ -2,6 +2,7 @@ use crate::llm::StoryLlm;
 use crate::service::chat_chunking::extract_text_from_chunk;
 
 const MAX_TRANSCRIPT_CONTEXT: usize = 60_000;
+const SEGMENT_SIZE: usize = 15_000;
 
 pub struct SessionMetadataForSummary {
     pub repo_name: String,
@@ -54,7 +55,8 @@ pub fn flatten_transcript(chunks: &[(i32, serde_json::Value)]) -> String {
         let chunk_text = extract_text_from_chunk(data);
         if text.len() + chunk_text.len() > MAX_TRANSCRIPT_CONTEXT {
             let remaining = MAX_TRANSCRIPT_CONTEXT - text.len();
-            text.push_str(&chunk_text[..remaining.min(chunk_text.len())]);
+            let end = chunk_text.floor_char_boundary(remaining.min(chunk_text.len()));
+            text.push_str(&chunk_text[..end]);
             text.push_str("\n[...truncated]");
             break;
         }
@@ -70,7 +72,47 @@ pub async fn generate_summary(
     metadata: &SessionMetadataForSummary,
 ) -> Result<String, String> {
     let transcript_text = flatten_transcript(chunks);
-    let prompt = build_summary_prompt(&transcript_text, metadata);
+
+    // Small transcript: single-pass summary
+    if transcript_text.len() <= SEGMENT_SIZE {
+        let prompt = build_summary_prompt(&transcript_text, metadata);
+        return llm.generate(&prompt, 1024).await;
+    }
+
+    // Large transcript: summarize segments, then combine
+    let mut segment_summaries = Vec::new();
+    let mut offset = 0;
+    let mut segment_num = 1;
+
+    while offset < transcript_text.len() {
+        let end = transcript_text.floor_char_boundary((offset + SEGMENT_SIZE).min(transcript_text.len()));
+        let segment = &transcript_text[offset..end];
+
+        let prompt = format!(
+            "Summarize this segment ({segment_num}) of an AI coding session transcript in 100-150 words. \
+             Focus on what was done, key decisions, and files touched.\n\nTranscript segment:\n{segment}"
+        );
+        match llm.generate(&prompt, 512).await {
+            Ok(summary) => segment_summaries.push(summary),
+            Err(e) => {
+                tracing::warn!("Segment {segment_num} summarization failed: {e}");
+            }
+        }
+
+        offset = end;
+        segment_num += 1;
+    }
+
+    if segment_summaries.is_empty() {
+        return Err("All segment summarizations failed".to_string());
+    }
+
+    // Combine segment summaries into final summary
+    let combined = segment_summaries.join("\n\n");
+    let prompt = build_summary_prompt(&format!(
+        "[Combined from {count} segment summaries]\n\n{combined}",
+        count = segment_summaries.len()
+    ), metadata);
     llm.generate(&prompt, 1024).await
 }
 
