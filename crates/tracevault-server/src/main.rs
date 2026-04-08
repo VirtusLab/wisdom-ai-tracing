@@ -499,6 +499,10 @@ async fn main() {
         )
         // Org-scoped: chat (enterprise)
         .route(
+            "/api/v1/orgs/{slug}/chat/mentions",
+            get(api::chat::list_mentions),
+        )
+        .route(
             "/api/v1/orgs/{slug}/chat/conversations",
             get(api::chat::list_conversations).post(api::chat::create_conversation),
         )
