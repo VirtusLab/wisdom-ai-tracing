@@ -33,16 +33,27 @@ impl ChatIndexingService {
         llm: &dyn StoryLlm,
         session_id: Uuid,
     ) -> Result<(), String> {
+        tracing::info!("Indexing session {session_id}: starting");
+        let start = std::time::Instant::now();
+
         // 1. Mark as processing
         Self::mark_processing(pool, session_id).await?;
 
         match Self::index_session_inner(pool, embedding_service, llm, session_id).await {
             Ok(chunk_count) => {
                 Self::mark_completed(pool, session_id, chunk_count).await?;
+                tracing::info!(
+                    "Indexing session {session_id}: completed in {:?} ({chunk_count} chunks)",
+                    start.elapsed()
+                );
                 Ok(())
             }
             Err(e) => {
                 let _ = Self::mark_failed(pool, session_id, &e).await;
+                tracing::error!(
+                    "Indexing session {session_id}: failed in {:?}: {e}",
+                    start.elapsed()
+                );
                 Err(e)
             }
         }

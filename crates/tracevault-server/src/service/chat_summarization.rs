@@ -72,30 +72,61 @@ pub async fn generate_summary(
     metadata: &SessionMetadataForSummary,
 ) -> Result<String, String> {
     let transcript_text = flatten_transcript(chunks);
+    let total_segments =
+        (transcript_text.len() + SEGMENT_SIZE - 1) / SEGMENT_SIZE;
+
+    tracing::info!(
+        "Summarizing session: repo={}, user={}, transcript_len={}, chunks={}, segments={}",
+        metadata.repo_name,
+        metadata.user_email.as_deref().unwrap_or("unknown"),
+        transcript_text.len(),
+        chunks.len(),
+        total_segments,
+    );
 
     // Small transcript: single-pass summary
     if transcript_text.len() <= SEGMENT_SIZE {
-        let prompt = build_summary_prompt(&transcript_text, metadata);
-        return llm.generate(&prompt, 1024).await;
+        tracing::info!("Single-pass summarization (small transcript)");
+        let start = std::time::Instant::now();
+        let result = llm.generate(&build_summary_prompt(&transcript_text, metadata), 1024).await;
+        tracing::info!("Single-pass summarization completed in {:?}", start.elapsed());
+        return result;
     }
 
     // Large transcript: summarize segments, then combine
+    tracing::info!("Segmented summarization: {total_segments} segments of ~{SEGMENT_SIZE} chars");
     let mut segment_summaries = Vec::new();
     let mut offset = 0;
     let mut segment_num = 1;
 
     while offset < transcript_text.len() {
-        let end = transcript_text.floor_char_boundary((offset + SEGMENT_SIZE).min(transcript_text.len()));
+        let end = transcript_text
+            .floor_char_boundary((offset + SEGMENT_SIZE).min(transcript_text.len()));
         let segment = &transcript_text[offset..end];
+
+        tracing::info!(
+            "Summarizing segment {segment_num}/{total_segments} ({} chars)",
+            segment.len()
+        );
+        let start = std::time::Instant::now();
 
         let prompt = format!(
             "Summarize this segment ({segment_num}) of an AI coding session transcript in 100-150 words. \
              Focus on what was done, key decisions, and files touched.\n\nTranscript segment:\n{segment}"
         );
         match llm.generate(&prompt, 512).await {
-            Ok(summary) => segment_summaries.push(summary),
+            Ok(summary) => {
+                tracing::info!(
+                    "Segment {segment_num}/{total_segments} completed in {:?}",
+                    start.elapsed()
+                );
+                segment_summaries.push(summary);
+            }
             Err(e) => {
-                tracing::warn!("Segment {segment_num} summarization failed: {e}");
+                tracing::warn!(
+                    "Segment {segment_num}/{total_segments} failed in {:?}: {e}",
+                    start.elapsed()
+                );
             }
         }
 
@@ -108,12 +139,22 @@ pub async fn generate_summary(
     }
 
     // Combine segment summaries into final summary
+    tracing::info!(
+        "Combining {}/{total_segments} segment summaries into final summary",
+        segment_summaries.len()
+    );
+    let start = std::time::Instant::now();
     let combined = segment_summaries.join("\n\n");
-    let prompt = build_summary_prompt(&format!(
-        "[Combined from {count} segment summaries]\n\n{combined}",
-        count = segment_summaries.len()
-    ), metadata);
-    llm.generate(&prompt, 1024).await
+    let prompt = build_summary_prompt(
+        &format!(
+            "[Combined from {count} segment summaries]\n\n{combined}",
+            count = segment_summaries.len()
+        ),
+        metadata,
+    );
+    let result = llm.generate(&prompt, 1024).await;
+    tracing::info!("Final summary completed in {:?}", start.elapsed());
+    result
 }
 
 fn format_duration_ms(ms: i64) -> String {
