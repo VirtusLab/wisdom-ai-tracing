@@ -45,7 +45,7 @@
 </script>
 
 <div class="flex h-full w-72 shrink-0 flex-col border-r border-border bg-sidebar">
-	<div class="flex items-center justify-between border-b border-border px-4 py-3">
+	<div class="flex items-center justify-between border-b border-border px-4 py-3" style="min-height: 60px;">
 		<h2 class="text-sm font-semibold text-foreground">Conversations</h2>
 		<button
 			onclick={onCreate}
@@ -85,15 +85,23 @@
 								>
 									<MessageCircle class="h-3.5 w-3.5 shrink-0 opacity-50" />
 									<span class="flex-1 truncate">{conv.title ?? 'Untitled'}</span>
-									<button
+									<span
+										role="button"
+										tabindex="-1"
 										onclick={(e) => {
 											e.stopPropagation();
 											onDelete(conv.id);
 										}}
+										onkeydown={(e) => {
+											if (e.key === 'Enter' || e.key === ' ') {
+												e.stopPropagation();
+												onDelete(conv.id);
+											}
+										}}
 										class="shrink-0 rounded p-0.5 opacity-0 transition-opacity group-hover:opacity-100 hover:bg-destructive/10 hover:text-destructive"
 									>
 										<Trash2 class="h-3 w-3" />
-									</button>
+									</span>
 								</button>
 							{/each}
 						</div>
