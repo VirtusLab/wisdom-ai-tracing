@@ -72,7 +72,7 @@ pub async fn generate_summary(
     metadata: &SessionMetadataForSummary,
 ) -> Result<String, String> {
     let transcript_text = flatten_transcript(chunks);
-    let total_segments = (transcript_text.len() + SEGMENT_SIZE - 1) / SEGMENT_SIZE;
+    let total_segments = transcript_text.len().div_ceil(SEGMENT_SIZE);
 
     tracing::info!(
         "Summarizing session: repo={}, user={}, transcript_len={}, chunks={}, segments={}",
