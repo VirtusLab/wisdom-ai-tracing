@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0](https://github.com/softwaremill/tracevault/compare/v0.6.2...v0.7.0) - 2026-04-09
+
+### Added
+
+- add chat_search feature flag, ChatUse permission, and pgvector/fastembed deps
+
 ## [0.6.1](https://github.com/softwaremill/tracevault/compare/v0.6.0...v0.6.1) - 2026-03-29
 
 ### Test
