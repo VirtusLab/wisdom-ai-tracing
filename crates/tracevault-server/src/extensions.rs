@@ -112,6 +112,37 @@ impl PermissionsProvider for CommunityPermissionsProvider {
     }
 }
 
+pub struct CommunitySsoProvider;
+
+#[async_trait]
+impl SsoProvider for CommunitySsoProvider {
+    fn is_enabled(&self) -> bool {
+        false
+    }
+
+    async fn authorization_url(
+        &self,
+        _issuer_url: &str,
+        _client_id: &str,
+        _client_secret: &str,
+        _redirect_uri: &str,
+        _state: &str,
+    ) -> Result<String, String> {
+        Err("SSO is an enterprise feature".into())
+    }
+
+    async fn exchange_code(
+        &self,
+        _issuer_url: &str,
+        _client_id: &str,
+        _client_secret: &str,
+        _redirect_uri: &str,
+        _code: &str,
+    ) -> Result<SsoUserInfo, String> {
+        Err("SSO is an enterprise feature".into())
+    }
+}
+
 // -- Adapter implementations (wrapping existing services) --
 
 pub struct FullEncryptionProvider {
@@ -226,5 +257,6 @@ pub fn community_registry() -> ExtensionRegistry {
         pricing: Arc::new(CommunityPricingProvider),
         compliance: Arc::new(CommunityComplianceProvider),
         permissions: Arc::new(CommunityPermissionsProvider),
+        sso: Arc::new(CommunitySsoProvider),
     }
 }

@@ -33,6 +33,7 @@ pub struct ExtensionRegistry {
     pub pricing: Arc<dyn PricingProvider>,
     pub compliance: Arc<dyn ComplianceProvider>,
     pub permissions: Arc<dyn PermissionsProvider>,
+    pub sso: Arc<dyn SsoProvider>,
 }
 
 impl Clone for ExtensionRegistry {
@@ -44,6 +45,7 @@ impl Clone for ExtensionRegistry {
             pricing: Arc::clone(&self.pricing),
             compliance: Arc::clone(&self.compliance),
             permissions: Arc::clone(&self.permissions),
+            sso: Arc::clone(&self.sso),
         }
     }
 }
@@ -105,4 +107,38 @@ pub trait PermissionsProvider: Send + Sync {
     fn role_permissions(&self, role: &str) -> std::collections::HashSet<Permission>;
     fn has_permission(&self, role: &str, perm: Permission) -> bool;
     fn is_valid_role(&self, role: &str) -> bool;
+}
+
+// -- SSO --
+
+#[derive(Debug, Clone)]
+pub struct SsoUserInfo {
+    pub subject: String,
+    pub email: String,
+    pub name: Option<String>,
+}
+
+#[async_trait]
+pub trait SsoProvider: Send + Sync {
+    fn is_enabled(&self) -> bool;
+
+    /// Build the OIDC authorization URL that the user's browser should be redirected to.
+    async fn authorization_url(
+        &self,
+        issuer_url: &str,
+        client_id: &str,
+        client_secret: &str,
+        redirect_uri: &str,
+        state: &str,
+    ) -> Result<String, String>;
+
+    /// Exchange an authorization code for user identity claims.
+    async fn exchange_code(
+        &self,
+        issuer_url: &str,
+        client_id: &str,
+        client_secret: &str,
+        redirect_uri: &str,
+        code: &str,
+    ) -> Result<SsoUserInfo, String>;
 }
