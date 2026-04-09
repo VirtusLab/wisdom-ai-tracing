@@ -48,7 +48,7 @@ pub fn extract_text_from_chunk(data: &Value) -> String {
                         if let Some(input) = block.get("input") {
                             let serialized = input.to_string();
                             if serialized.len() > 500 {
-                                let end = serialized.floor_char_boundary(500);
+                                let end = crate::floor_char_boundary(&serialized, 500);
                                 parts.push(serialized[..end].to_string());
                             } else {
                                 parts.push(serialized);
@@ -96,14 +96,14 @@ pub fn build_chunk_windows(
             .join("\n");
 
         let truncated = if text.len() > max_text_len {
-            let end = text.floor_char_boundary(max_text_len);
+            let end = crate::floor_char_boundary(&text, max_text_len);
             text[..end].to_string()
         } else {
             text
         };
 
         let preview = if truncated.len() > 200 {
-            let end = truncated.floor_char_boundary(200);
+            let end = crate::floor_char_boundary(&truncated, 200);
             truncated[..end].to_string()
         } else {
             truncated.clone()

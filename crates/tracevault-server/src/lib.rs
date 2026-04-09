@@ -22,6 +22,20 @@ pub mod story;
 
 pub use error::AppError;
 
+/// Stable replacement for `str::floor_char_boundary` (nightly-only).
+/// Returns the largest byte index `<= index` that is a char boundary.
+pub fn floor_char_boundary(s: &str, index: usize) -> usize {
+    if index >= s.len() {
+        s.len()
+    } else {
+        let mut i = index;
+        while i > 0 && !s.is_char_boundary(i) {
+            i -= 1;
+        }
+        i
+    }
+}
+
 #[derive(Clone)]
 pub struct AppState {
     pub pool: sqlx::PgPool,

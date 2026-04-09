@@ -55,7 +55,7 @@ pub fn flatten_transcript(chunks: &[(i32, serde_json::Value)]) -> String {
         let chunk_text = extract_text_from_chunk(data);
         if text.len() + chunk_text.len() > MAX_TRANSCRIPT_CONTEXT {
             let remaining = MAX_TRANSCRIPT_CONTEXT - text.len();
-            let end = chunk_text.floor_char_boundary(remaining.min(chunk_text.len()));
+            let end = crate::floor_char_boundary(&chunk_text, remaining.min(chunk_text.len()));
             text.push_str(&chunk_text[..end]);
             text.push_str("\n[...truncated]");
             break;
@@ -104,8 +104,10 @@ pub async fn generate_summary(
     let mut segment_num = 1;
 
     while offset < transcript_text.len() {
-        let end =
-            transcript_text.floor_char_boundary((offset + SEGMENT_SIZE).min(transcript_text.len()));
+        let end = crate::floor_char_boundary(
+            &transcript_text,
+            (offset + SEGMENT_SIZE).min(transcript_text.len()),
+        );
         let segment = &transcript_text[offset..end];
 
         tracing::info!(

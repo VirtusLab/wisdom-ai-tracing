@@ -301,7 +301,7 @@ pub async fn send_message(
             user_email: s.user_email.clone(),
             started_at: s.started_at,
             summary_snippet: if s.summary.len() > 200 {
-                s.summary[..s.summary.floor_char_boundary(200)].to_string()
+                s.summary[..crate::floor_char_boundary(&s.summary, 200)].to_string()
             } else {
                 s.summary.clone()
             },
