@@ -3,6 +3,7 @@
 	import { page } from '$app/stores';
 	import { api } from '$lib/api';
 	import { orgStore } from '$lib/stores/org';
+	import { features } from '$lib/stores/features';
 	import { Button } from '$lib/components/ui/button/index.js';
 	import { Input } from '$lib/components/ui/input/index.js';
 	import { Label } from '$lib/components/ui/label/index.js';
@@ -73,6 +74,9 @@
 		<a href="/orgs/{slug}/settings/org" class="font-semibold underline">General</a>
 		<a href="/orgs/{slug}/settings/members" class="text-muted-foreground hover:underline">Members</a>
 		<a href="/orgs/{slug}/settings/api-keys" class="text-muted-foreground hover:underline">API Keys</a>
+		{#if $features.sso}
+			<a href="/orgs/{slug}/settings/sso" class="text-muted-foreground hover:underline">SSO</a>
+		{/if}
 	</div>
 
 	{#if error}
