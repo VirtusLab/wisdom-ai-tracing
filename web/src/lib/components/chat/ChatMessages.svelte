@@ -1,17 +1,20 @@
 <script lang="ts">
-	import type { ChatMessage } from '$lib/types';
+	import type { ChatMessage, MentionItem } from '$lib/types';
 	import { MessageCircle, Bot, User } from '@lucide/svelte';
+	import { marked } from 'marked';
 
 	let {
 		messages,
 		loading,
 		sending,
-		slug
+		slug,
+		mentions = []
 	}: {
 		messages: ChatMessage[];
 		loading: boolean;
 		sending: boolean;
 		slug: string;
+		mentions?: MentionItem[];
 	} = $props();
 
 	let container: HTMLDivElement | undefined = $state();
@@ -24,25 +27,40 @@
 		}
 	});
 
-	function parseContent(content: string): { text: string; sessionId: string | null }[] {
-		const parts: { text: string; sessionId: string | null }[] = [];
-		const regex = /\[Session #([^\]]+)\]/g;
-		let lastIndex = 0;
-		let match;
+	function mentionPillClass(type: string): string {
+		switch (type) {
+			case 'user':
+				return 'bg-primary/15 text-primary';
+			case 'repo':
+				return 'bg-emerald-500/15 text-emerald-600';
+			case 'model':
+				return 'bg-amber-500/15 text-amber-600';
+			default:
+				return 'bg-muted text-foreground';
+		}
+	}
 
-		while ((match = regex.exec(content)) !== null) {
-			if (match.index > lastIndex) {
-				parts.push({ text: content.slice(lastIndex, match.index), sessionId: null });
+	function renderContent(content: string, orgSlug: string, mentionItems: MentionItem[]): string {
+		let html = marked.parse(content) as string;
+		// Replace [Session #id] with links
+		html = html.replace(
+			/\[Session #([^\]]+)\]/g,
+			(_match, id) =>
+				`<a href="/orgs/${orgSlug}/traces/sessions/${id}" class="inline-flex items-center gap-0.5 rounded bg-primary/10 px-1.5 py-0.5 text-xs font-medium text-primary transition-colors hover:bg-primary/20">[Session #${id}]</a>`
+		);
+		// Replace @mentions with colored pills
+		if (mentionItems.length > 0) {
+			const sorted = [...mentionItems].sort((a, b) => b.display.length - a.display.length);
+			for (const m of sorted) {
+				const escaped = m.display.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+				const regex = new RegExp(`@${escaped}(?![\\w.-])`, 'g');
+				html = html.replace(
+					regex,
+					`<span class="inline-flex items-center rounded px-1.5 py-0.5 text-xs font-medium ${mentionPillClass(m.type)}">@${m.display}</span>`
+				);
 			}
-			parts.push({ text: match[0], sessionId: match[1] });
-			lastIndex = regex.lastIndex;
 		}
-
-		if (lastIndex < content.length) {
-			parts.push({ text: content.slice(lastIndex), sessionId: null });
-		}
-
-		return parts.length > 0 ? parts : [{ text: content, sessionId: null }];
+		return html;
 	}
 
 	function formatTime(iso: string): string {
@@ -92,17 +110,8 @@
 							</span>
 							<span class="text-[10px] text-muted-foreground/50">{formatTime(msg.created_at)}</span>
 						</div>
-						<div class="whitespace-pre-wrap text-sm leading-relaxed text-foreground">
-							{#each parseContent(msg.content) as part}
-								{#if part.sessionId}
-									<a
-										href="/orgs/{slug}/traces/sessions/{part.sessionId}"
-										class="inline-flex items-center gap-0.5 rounded bg-primary/10 px-1.5 py-0.5 text-xs font-medium text-primary transition-colors hover:bg-primary/20"
-									>{part.text}</a>
-								{:else}
-									{part.text}
-								{/if}
-							{/each}
+						<div class="chat-markdown">
+							{@html renderContent(msg.content, slug, mentions)}
 						</div>
 					</div>
 				</div>
@@ -126,3 +135,107 @@
 		</div>
 	{/if}
 </div>
+
+<style>
+	.chat-markdown {
+		font-size: 0.875rem;
+		line-height: 1.7;
+		color: var(--foreground);
+	}
+
+	.chat-markdown :global(> :first-child) {
+		margin-top: 0;
+	}
+
+	.chat-markdown :global(p) {
+		margin-top: 0.5rem;
+		margin-bottom: 0.5rem;
+	}
+
+	.chat-markdown :global(h1),
+	.chat-markdown :global(h2),
+	.chat-markdown :global(h3),
+	.chat-markdown :global(h4) {
+		font-weight: 600;
+		margin-top: 1rem;
+		margin-bottom: 0.375rem;
+	}
+
+	.chat-markdown :global(ul),
+	.chat-markdown :global(ol) {
+		margin-top: 0.5rem;
+		margin-bottom: 0.5rem;
+		padding-left: 1.5rem;
+	}
+
+	.chat-markdown :global(ul) {
+		list-style-type: disc;
+	}
+
+	.chat-markdown :global(ol) {
+		list-style-type: decimal;
+	}
+
+	.chat-markdown :global(li) {
+		margin-top: 0.25rem;
+		margin-bottom: 0.25rem;
+	}
+
+	.chat-markdown :global(li > ul),
+	.chat-markdown :global(li > ol) {
+		margin-top: 0.125rem;
+		margin-bottom: 0.125rem;
+	}
+
+	.chat-markdown :global(strong) {
+		font-weight: 600;
+	}
+
+	.chat-markdown :global(em) {
+		font-style: italic;
+	}
+
+	.chat-markdown :global(code) {
+		font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, monospace;
+		font-size: 0.8em;
+		background: var(--muted);
+		padding: 0.125rem 0.375rem;
+		border-radius: 0.25rem;
+	}
+
+	.chat-markdown :global(pre) {
+		margin-top: 0.75rem;
+		margin-bottom: 0.75rem;
+		padding: 0.75rem 1rem;
+		background: var(--muted);
+		border-radius: 0.5rem;
+		overflow-x: auto;
+		line-height: 1.6;
+	}
+
+	.chat-markdown :global(pre code) {
+		background: none;
+		padding: 0;
+		border-radius: 0;
+		font-size: inherit;
+	}
+
+	.chat-markdown :global(blockquote) {
+		margin-top: 0.75rem;
+		margin-bottom: 0.75rem;
+		padding-left: 1rem;
+		border-left: 3px solid var(--border);
+		color: var(--muted-foreground);
+		font-style: italic;
+	}
+
+	.chat-markdown :global(a) {
+		color: var(--primary);
+		text-decoration: underline;
+		text-underline-offset: 2px;
+	}
+
+	.chat-markdown :global(a:hover) {
+		opacity: 0.8;
+	}
+</style>

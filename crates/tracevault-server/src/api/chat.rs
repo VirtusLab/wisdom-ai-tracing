@@ -16,8 +16,18 @@ use crate::AppState;
 // --- Request/Response types ---
 
 #[derive(serde::Deserialize)]
+pub struct MentionRef {
+    #[serde(rename = "type")]
+    pub mention_type: String,
+    pub id: Option<Uuid>,
+    pub display: String,
+}
+
+#[derive(serde::Deserialize)]
 pub struct SendMessageRequest {
     pub message: String,
+    #[serde(default)]
+    pub mentions: Vec<MentionRef>,
 }
 
 #[derive(serde::Deserialize)]
@@ -54,6 +64,31 @@ pub struct CommitRef {
 pub struct ConversationWithMessages {
     pub conversation: ConversationRow,
     pub messages: Vec<ChatMessageRow>,
+}
+
+#[derive(serde::Serialize)]
+pub struct MentionUser {
+    pub id: Uuid,
+    pub display: String,
+    pub email: String,
+}
+
+#[derive(serde::Serialize)]
+pub struct MentionRepo {
+    pub id: Uuid,
+    pub display: String,
+}
+
+#[derive(serde::Serialize)]
+pub struct MentionModel {
+    pub display: String,
+}
+
+#[derive(serde::Serialize)]
+pub struct MentionsResponse {
+    pub users: Vec<MentionUser>,
+    pub repos: Vec<MentionRepo>,
+    pub models: Vec<MentionModel>,
 }
 
 // --- Guards ---
@@ -191,6 +226,30 @@ pub async fn send_message(
         .as_ref()
         .ok_or_else(|| AppError::Internal("Embedding service not available".into()))?;
 
+    // Build mention overrides
+    let overrides = {
+        let mut o = crate::service::chat::MentionOverrides::default();
+        for m in &req.mentions {
+            match m.mention_type.as_str() {
+                "user" => {
+                    if let Some(id) = m.id {
+                        o.user_id = Some(id);
+                    }
+                }
+                "repo" => {
+                    if let Some(id) = m.id {
+                        o.repo_id = Some(id);
+                    }
+                }
+                "model" => {
+                    o.model = Some(m.display.clone());
+                }
+                _ => {}
+            }
+        }
+        o
+    };
+
     // Call query pipeline
     let response = ChatService::query(
         &state.pool,
@@ -199,6 +258,7 @@ pub async fn send_message(
         auth.org_id,
         id,
         &req.message,
+        &overrides,
     )
     .await?;
 
@@ -241,7 +301,7 @@ pub async fn send_message(
             user_email: s.user_email.clone(),
             started_at: s.started_at,
             summary_snippet: if s.summary.len() > 200 {
-                s.summary[..200].to_string()
+                s.summary[..s.summary.floor_char_boundary(200)].to_string()
             } else {
                 s.summary.clone()
             },
@@ -263,5 +323,54 @@ pub async fn send_message(
         filters: response.filters,
         referenced_sessions: session_refs,
         referenced_commits: commit_refs,
+    }))
+}
+
+pub async fn list_mentions(
+    State(state): State<AppState>,
+    auth: OrgAuth,
+) -> Result<Json<MentionsResponse>, AppError> {
+    check_chat_enabled(&state, &auth)?;
+
+    let users: Vec<(Uuid, Option<String>, String)> = sqlx::query_as(
+        "SELECT u.id, u.name, u.email FROM users u
+         JOIN user_org_memberships m ON m.user_id = u.id
+         WHERE m.org_id = $1
+         ORDER BY u.email",
+    )
+    .bind(auth.org_id)
+    .fetch_all(&state.pool)
+    .await?;
+
+    let repos: Vec<(Uuid, String)> =
+        sqlx::query_as("SELECT id, name FROM repos WHERE org_id = $1 ORDER BY name")
+            .bind(auth.org_id)
+            .fetch_all(&state.pool)
+            .await?;
+
+    let models: Vec<(String,)> = sqlx::query_as(
+        "SELECT DISTINCT model FROM sessions WHERE org_id = $1 AND model IS NOT NULL ORDER BY model",
+    )
+    .bind(auth.org_id)
+    .fetch_all(&state.pool)
+    .await?;
+
+    Ok(Json(MentionsResponse {
+        users: users
+            .into_iter()
+            .map(|(id, name, email)| {
+                let display =
+                    name.unwrap_or_else(|| email.split('@').next().unwrap_or(&email).to_string());
+                MentionUser { id, display, email }
+            })
+            .collect(),
+        repos: repos
+            .into_iter()
+            .map(|(id, name)| MentionRepo { id, display: name })
+            .collect(),
+        models: models
+            .into_iter()
+            .map(|(model,)| MentionModel { display: model })
+            .collect(),
     }))
 }

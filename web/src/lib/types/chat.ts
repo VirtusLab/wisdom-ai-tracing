@@ -53,3 +53,22 @@ export interface ConversationWithMessages {
 	conversation: Conversation;
 	messages: ChatMessage[];
 }
+
+export interface MentionItem {
+	type: 'user' | 'repo' | 'model';
+	id?: string;
+	display: string;
+	email?: string;
+}
+
+export interface MentionRef {
+	type: 'user' | 'repo' | 'model';
+	id?: string;
+	display: string;
+}
+
+export interface MentionsResponse {
+	users: Array<{ id: string; display: string; email: string }>;
+	repos: Array<{ id: string; display: string }>;
+	models: Array<{ display: string }>;
+}
