@@ -35,6 +35,7 @@ reqwest = { version = "0.12", features = ["json"] }
 async-trait = "0.1"
 aes-gcm = "0.10"
 dotenvy = "0.15.7"
+urlencoding = "2"
 thiserror.workspace = true
 tower_governor = "0.6"
 pgvector = { version = "0.4", features = ["sqlx"] }
