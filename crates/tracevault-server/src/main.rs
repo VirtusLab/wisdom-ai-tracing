@@ -176,6 +176,12 @@ async fn main() {
             post(api::auth::request_invitation),
         )
         .route("/api/v1/github/webhook", post(api::github::webhook))
+        .route("/api/v1/auth/sso-status/{slug}", get(api::sso::sso_status))
+        .route("/api/v1/auth/sso/{slug}", get(api::sso::sso_initiate))
+        .route(
+            "/api/v1/auth/sso/{slug}/callback",
+            get(api::sso::sso_callback),
+        )
         .route(
             "/api/v1/invite/{token}",
             get(api::invites::get_invite_details),
@@ -248,6 +254,13 @@ async fn main() {
         .route(
             "/api/v1/orgs/{slug}/chat-settings",
             get(api::orgs::get_chat_settings).put(api::orgs::update_chat_settings),
+        )
+        // Org-scoped: SSO
+        .route(
+            "/api/v1/orgs/{slug}/sso",
+            get(api::sso::get_sso_config)
+                .put(api::sso::upsert_sso_config)
+                .delete(api::sso::delete_sso_config),
         )
         // Org-scoped: repos
         .route(
