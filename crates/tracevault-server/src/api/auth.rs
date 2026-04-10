@@ -218,17 +218,73 @@ pub async fn login(
     State(state): State<AppState>,
     Json(req): Json<LoginRequest>,
 ) -> Result<Json<LoginResponse>, AppError> {
-    let row =
-        sqlx::query_as::<_, (Uuid, String)>("SELECT id, password_hash FROM users WHERE email = $1")
-            .bind(&req.email)
-            .fetch_optional(&state.pool)
-            .await?
-            .ok_or(AppError::Unauthorized)?;
+    let row = sqlx::query_as::<_, (Uuid, Option<String>)>(
+        "SELECT id, password_hash FROM users WHERE email = $1",
+    )
+    .bind(&req.email)
+    .fetch_optional(&state.pool)
+    .await?
+    .ok_or(AppError::Unauthorized)?;
 
-    let (user_id, password_hash) = row;
+    let (user_id, password_hash_opt) = row;
+
+    let password_hash = password_hash_opt.ok_or(AppError::Unauthorized)?;
 
     if !verify_password(&req.password, &password_hash) {
         return Err(AppError::Unauthorized);
+    }
+
+    // Check SSO enforcement
+    let sso_enforced_orgs = sqlx::query_as::<_, (uuid::Uuid, String)>(
+        "SELECT m.org_id, m.role FROM user_org_memberships m
+         JOIN org_sso_configs s ON m.org_id = s.org_id
+         WHERE m.user_id = $1 AND s.enforce = true",
+    )
+    .bind(user_id)
+    .fetch_all(&state.pool)
+    .await?;
+
+    if !sso_enforced_orgs.is_empty() {
+        // Check if user has any non-SSO org, or is admin/owner in an SSO org
+        let non_sso_orgs: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM user_org_memberships m
+             WHERE m.user_id = $1
+             AND NOT EXISTS (
+                 SELECT 1 FROM org_sso_configs s WHERE s.org_id = m.org_id AND s.enforce = true
+             )",
+        )
+        .bind(user_id)
+        .fetch_one(&state.pool)
+        .await?;
+
+        let is_breakglass = sso_enforced_orgs
+            .iter()
+            .any(|(_, role)| role == "owner" || role == "admin");
+
+        if non_sso_orgs == 0 && !is_breakglass {
+            return Err(AppError::Forbidden(
+                "Your organization requires SSO login. Use the SSO button on the login page."
+                    .into(),
+            ));
+        }
+
+        // Log break-glass if applicable
+        if is_breakglass && non_sso_orgs == 0 {
+            for (org_id, _) in &sso_enforced_orgs {
+                crate::audit::log(
+                    &state.pool,
+                    crate::audit::user_action(
+                        *org_id,
+                        user_id,
+                        "auth.login.breakglass",
+                        "user",
+                        Some(user_id),
+                        Some(serde_json::json!({"email": &req.email})),
+                    ),
+                )
+                .await;
+            }
+        }
     }
 
     let (raw_token, token_hash) = generate_session_token();

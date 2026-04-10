@@ -58,6 +58,9 @@
 		{ href: `/orgs/${slug}/settings/llm`, label: 'Stories LLM' },
 		...($features.chat_search
 			? [{ href: `/orgs/${slug}/settings/chat`, label: 'Chat LLM' }]
+			: []),
+		...($features.sso
+			? [{ href: `/orgs/${slug}/settings/sso`, label: 'SSO' }]
 			: [])
 	]);
 

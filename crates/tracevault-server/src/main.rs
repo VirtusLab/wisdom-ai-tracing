@@ -139,6 +139,20 @@ async fn main() {
         });
     }
 
+    // Background cleanup of expired SSO auth requests (every hour)
+    {
+        let pool = pool.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(3600));
+            loop {
+                interval.tick().await;
+                let _ = sqlx::query("DELETE FROM sso_auth_requests WHERE expires_at < NOW()")
+                    .execute(&pool)
+                    .await;
+            }
+        });
+    }
+
     let embedding_service: Option<
         std::sync::Arc<tracevault_server::service::chat_embeddings::EmbeddingService>,
     > = if extensions.features.chat_search {
@@ -181,6 +195,12 @@ async fn main() {
             post(api::auth::request_invitation),
         )
         .route("/api/v1/github/webhook", post(api::github::webhook))
+        .route("/api/v1/auth/sso-status/{slug}", get(api::sso::sso_status))
+        .route("/api/v1/auth/sso/{slug}", get(api::sso::sso_initiate))
+        .route(
+            "/api/v1/auth/sso/{slug}/callback",
+            get(api::sso::sso_callback),
+        )
         .route(
             "/api/v1/invite/{token}",
             get(api::invites::get_invite_details),
@@ -253,6 +273,13 @@ async fn main() {
         .route(
             "/api/v1/orgs/{slug}/chat-settings",
             get(api::orgs::get_chat_settings).put(api::orgs::update_chat_settings),
+        )
+        // Org-scoped: SSO
+        .route(
+            "/api/v1/orgs/{slug}/sso",
+            get(api::sso::get_sso_config)
+                .put(api::sso::upsert_sso_config)
+                .delete(api::sso::delete_sso_config),
         )
         // Org-scoped: repos
         .route(
