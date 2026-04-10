@@ -18,7 +18,7 @@
 	const featureDescriptions: Record<string, string> = {
 		compliance: 'SOX, PCI-DSS, and SR 11-7 compliance modes with chain verification and signing.',
 		audit_trail: 'Full audit trail with tamper-evident logging and detailed activity tracking.',
-		sso: 'SAML and OIDC single sign-on integration for your identity provider.',
+		sso: 'OIDC single sign-on integration for your identity provider.',
 		story_generation: 'AI-powered story generation from code context and git history.',
 		advanced_analytics: 'Cost analytics, usage breakdowns, and trend reporting across your organization.',
 		multi_org: 'Manage multiple organizations with isolated data and shared billing.',

@@ -14,7 +14,12 @@ use tracevault_server::{api, config, db, extensions, pricing_sync, repo_manager,
 #[tokio::main]
 async fn main() {
     dotenvy::dotenv().ok();
-    tracing_subscriber::fmt::init();
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+        )
+        .init();
 
     let cfg = config::ServerConfig::from_env();
     let pool = db::create_pool(&cfg.database_url)

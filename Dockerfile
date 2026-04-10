@@ -15,6 +15,5 @@ COPY --from=builder /app/target/release/tracevault-server /usr/local/bin/
 ENV PORT=3000
 ENV HOST=0.0.0.0
 ENV TRACEVAULT_REPOS_DIR=/data/repos
-ENV RUST_LOG=info
 EXPOSE 3000
 CMD ["tracevault-server"]
