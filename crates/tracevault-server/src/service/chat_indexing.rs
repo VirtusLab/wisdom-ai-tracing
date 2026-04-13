@@ -113,9 +113,19 @@ impl ChatIndexingService {
         let summary = generate_summary(llm, &chunk_pairs, &summary_metadata).await?;
 
         // 5. Embed summary
+        tracing::info!(
+            "Session {session_id}: embedding summary ({} chars)",
+            summary.len()
+        );
+        let t = std::time::Instant::now();
         let summary_embedding = embedding_service.embed_one(&summary).await?;
+        tracing::info!(
+            "Session {session_id}: summary embedded in {:?}",
+            t.elapsed()
+        );
 
         // 6. Store session embedding
+        tracing::info!("Session {session_id}: storing session embedding");
         ChatEmbeddingsRepo::upsert_session_embedding(
             pool,
             session_id,
@@ -130,11 +140,28 @@ impl ChatIndexingService {
         let chunk_refs: Vec<(i32, &serde_json::Value)> =
             chunks.iter().map(|c| (c.chunk_index, &c.data)).collect();
         let windows = build_chunk_windows(&chunk_refs, 4, 1, 2000);
+        tracing::info!(
+            "Session {session_id}: built {} chunk windows from {} transcript chunks",
+            windows.len(),
+            chunks.len()
+        );
 
         if !windows.is_empty() {
             // 8. Embed all chunks in batch
             let window_texts: Vec<String> = windows.iter().map(|w| w.text.clone()).collect();
+            let total_chars: usize = window_texts.iter().map(|t| t.len()).sum();
+            tracing::info!(
+                "Session {session_id}: embedding {} windows ({} total chars)",
+                window_texts.len(),
+                total_chars
+            );
+            let t = std::time::Instant::now();
             let window_embeddings = embedding_service.embed(window_texts).await?;
+            tracing::info!(
+                "Session {session_id}: {} windows embedded in {:?}",
+                window_embeddings.len(),
+                t.elapsed()
+            );
 
             // 9. Store chunk embeddings
             let chunk_data: Vec<(i32, i32, String, Vec<f32>)> = windows
@@ -143,6 +170,10 @@ impl ChatIndexingService {
                 .map(|(w, emb)| (w.chunk_start, w.chunk_end, w.content_preview.clone(), emb))
                 .collect();
 
+            tracing::info!(
+                "Session {session_id}: storing {} chunk embeddings",
+                chunk_data.len()
+            );
             ChatEmbeddingsRepo::replace_chunk_embeddings(
                 pool,
                 session_id,
