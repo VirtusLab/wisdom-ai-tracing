@@ -8,6 +8,13 @@ use tokio::sync::Mutex;
 /// Version string used to detect when re-indexing is needed.
 pub const EMBEDDING_MODEL_VERSION: &str = "bge-small-en-v1.5-v1";
 
+/// Batch size for embedding inference. fastembed defaults to 256, which with
+/// BGE-small (512 token seq) can spike past 4 GiB in ONNX attention
+/// activations. 8 keeps per-call peak memory well under a gig at the cost of
+/// more iterations — acceptable for backfill/indexing workloads.
+#[cfg(feature = "enterprise")]
+const EMBED_BATCH_SIZE: usize = 8;
+
 /// Thread-safe wrapper around fastembed's TextEmbedding.
 /// fastembed is sync and CPU-bound, so we wrap in a Mutex and
 /// use spawn_blocking to avoid starving the async runtime.
@@ -43,7 +50,7 @@ impl EmbeddingService {
         tokio::task::spawn_blocking(move || {
             let model = model.blocking_lock();
             model
-                .embed(texts, None)
+                .embed(texts, Some(EMBED_BATCH_SIZE))
                 .map_err(|e| format!("Embedding failed: {e}"))
         })
         .await
