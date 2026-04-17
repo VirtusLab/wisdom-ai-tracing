@@ -166,7 +166,7 @@ impl ChatIndexingService {
             // 9. Store chunk embeddings
             let chunk_data: Vec<(i32, i32, String, Vec<f32>)> = windows
                 .iter()
-                .zip(window_embeddings.into_iter())
+                .zip(window_embeddings)
                 .map(|(w, emb)| (w.chunk_start, w.chunk_end, w.content_preview.clone(), emb))
                 .collect();
 
