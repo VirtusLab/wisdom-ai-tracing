@@ -6,5 +6,13 @@ export default defineConfig({
 	plugins: [tailwindcss(), sveltekit()],
 	define: {
 		__BUILD_TIME__: JSON.stringify(new Date().toISOString())
+	},
+	server: {
+		proxy: {
+			'/api': {
+				target: 'http://localhost:3000',
+				changeOrigin: true
+			}
+		}
 	}
 });

@@ -8,20 +8,27 @@
 	import { Input } from '$lib/components/ui/input/index.js';
 	import { Label } from '$lib/components/ui/label/index.js';
 	import * as Alert from '$lib/components/ui/alert/index.js';
+	import * as Select from '$lib/components/ui/select/index.js';
 	import { BUILD_TIME } from '$lib/build-info';
+
+	interface PublicOrg {
+		name: string;
+		display_name: string | null;
+		sso_enabled: boolean;
+		sso_enforce: boolean;
+	}
 
 	let email = $state('');
 	let password = $state('');
 	let error = $state('');
 	let loading = $state(false);
 	let ready = $state(false);
+	let showPasswordForm = $state(false);
 
-	// SSO state
-	let orgSlug = $state('');
-	let ssoEnabled = $state(false);
-	let ssoEnforce = $state(false);
-	let ssoChecking = $state(false);
-	let ssoCheckTimeout: ReturnType<typeof setTimeout> | null = null;
+	let orgs = $state<PublicOrg[]>([]);
+	let selectedSlug = $state('');
+
+	let selectedOrg = $derived(orgs.find((o) => o.name === selectedSlug));
 
 	onMount(async () => {
 		const params = new URLSearchParams(window.location.search);
@@ -39,37 +46,22 @@
 		} catch {
 			// If features endpoint fails, show login anyway
 		}
+
+		try {
+			orgs = await api.get<PublicOrg[]>('/api/v1/orgs/public');
+			if (orgs.length === 1) {
+				selectedSlug = orgs[0].name;
+			}
+		} catch {
+			// If orgs endpoint fails, fall back to password login
+			showPasswordForm = true;
+		}
+
 		ready = true;
 	});
 
-	function onOrgInput() {
-		const val = orgSlug.trim().toLowerCase();
-		if (ssoCheckTimeout) clearTimeout(ssoCheckTimeout);
-		ssoEnabled = false;
-		ssoEnforce = false;
-		if (val.length < 2) return;
-		ssoChecking = true;
-		ssoCheckTimeout = setTimeout(() => checkSsoStatus(val), 500);
-	}
-
-	async function checkSsoStatus(slug: string) {
-		try {
-			const resp = await api.get<{ sso_enabled: boolean; enforce: boolean }>(
-				`/api/v1/auth/sso-status/${encodeURIComponent(slug)}`
-			);
-			ssoEnabled = resp.sso_enabled;
-			ssoEnforce = resp.enforce;
-		} catch {
-			ssoEnabled = false;
-			ssoEnforce = false;
-		} finally {
-			ssoChecking = false;
-		}
-	}
-
 	function handleSsoLogin() {
-		const slug = orgSlug.trim().toLowerCase();
-		window.location.href = `/api/v1/auth/sso/${encodeURIComponent(slug)}`;
+		window.location.href = `/api/v1/auth/sso/${encodeURIComponent(selectedSlug)}`;
 	}
 
 	async function handleSubmit(e: Event) {
@@ -93,6 +85,10 @@
 			loading = false;
 		}
 	}
+
+	function orgLabel(org: PublicOrg): string {
+		return org.display_name || org.name;
+	}
 </script>
 
 <svelte:head>
@@ -112,7 +108,7 @@
 			<Card.Root>
 			<Card.Header>
 				<Card.Title class="text-2xl">Log in to TraceVault</Card.Title>
-				<Card.Description>Enter your credentials to continue.</Card.Description>
+				<Card.Description>Select your organization to continue.</Card.Description>
 			</Card.Header>
 			<Card.Content>
 				{#if error}
@@ -122,45 +118,33 @@
 					</Alert.Root>
 				{/if}
 
-				<!-- Organization field for SSO -->
 				<div class="grid gap-2 mb-4">
 					<Label for="org">Organization</Label>
-					<Input
-						id="org"
-						type="text"
-						bind:value={orgSlug}
-						oninput={onOrgInput}
-						placeholder="your-org-slug"
-					/>
-					{#if ssoChecking}
-						<p class="text-xs text-muted-foreground">Checking SSO...</p>
-					{/if}
+					<Select.Root type="single" value={selectedSlug} onValueChange={(v) => { if (v) { selectedSlug = v; showPasswordForm = false; } }}>
+						<Select.Trigger id="org">
+							{selectedOrg ? orgLabel(selectedOrg) : 'Select organization...'}
+						</Select.Trigger>
+						<Select.Content>
+							{#each orgs as org}
+								<Select.Item value={org.name}>{orgLabel(org)}</Select.Item>
+							{/each}
+						</Select.Content>
+					</Select.Root>
 				</div>
 
-				{#if ssoEnabled}
-					<div class="mb-4">
-						<Button class="w-full" onclick={handleSsoLogin}>
-							Sign in with SSO
-						</Button>
-					</div>
-				{/if}
+				{#if selectedOrg?.sso_enabled && !showPasswordForm}
+					<Button class="w-full" onclick={handleSsoLogin}>
+						Sign in with SSO
+					</Button>
 
-				{#if ssoEnabled && ssoEnforce}
-					<p class="text-xs text-muted-foreground text-center">
-						This organization requires SSO login.
-					</p>
-				{:else}
-					{#if ssoEnabled}
-						<div class="relative my-4">
-							<div class="absolute inset-0 flex items-center">
-								<span class="w-full border-t"></span>
-							</div>
-							<div class="relative flex justify-center text-xs uppercase">
-								<span class="bg-card px-2 text-muted-foreground">or</span>
-							</div>
-						</div>
+					{#if !selectedOrg.sso_enforce}
+						<p class="mt-4 text-center text-sm text-muted-foreground">
+							<button class="underline hover:text-foreground" onclick={() => showPasswordForm = true}>
+								Sign in with password instead
+							</button>
+						</p>
 					{/if}
-
+				{:else if !selectedOrg?.sso_enabled || showPasswordForm}
 					<form onsubmit={handleSubmit} class="grid gap-4">
 						<div class="grid gap-2">
 							<Label for="email">Email</Label>
@@ -174,6 +158,14 @@
 							{loading ? 'Logging in...' : 'Log in'}
 						</Button>
 					</form>
+
+					{#if selectedOrg?.sso_enabled}
+						<p class="mt-4 text-center text-sm text-muted-foreground">
+							<button class="underline hover:text-foreground" onclick={() => showPasswordForm = false}>
+								Sign in with SSO instead
+							</button>
+						</p>
+					{/if}
 				{/if}
 			</Card.Content>
 			<Card.Footer class="flex-col items-center gap-2">

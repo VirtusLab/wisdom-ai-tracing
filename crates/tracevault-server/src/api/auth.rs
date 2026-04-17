@@ -538,20 +538,32 @@ pub async fn list_my_orgs(
 pub struct PublicOrg {
     pub name: String,
     pub display_name: Option<String>,
+    pub sso_enabled: bool,
+    pub sso_enforce: bool,
 }
 
 pub async fn list_public_orgs(
     State(state): State<AppState>,
 ) -> Result<Json<Vec<PublicOrg>>, AppError> {
-    let rows = sqlx::query_as::<_, (String, Option<String>)>(
-        "SELECT name, display_name FROM orgs ORDER BY name",
+    let rows = sqlx::query_as::<_, (String, Option<String>, bool, bool)>(
+        "SELECT o.name, o.display_name,
+                (s.org_id IS NOT NULL) AS sso_enabled,
+                COALESCE(s.enforce, false) AS sso_enforce
+         FROM orgs o
+         LEFT JOIN org_sso_configs s ON s.org_id = o.id
+         ORDER BY o.name",
     )
     .fetch_all(&state.pool)
     .await?;
 
     Ok(Json(
         rows.into_iter()
-            .map(|(name, display_name)| PublicOrg { name, display_name })
+            .map(|(name, display_name, sso_enabled, sso_enforce)| PublicOrg {
+                name,
+                display_name,
+                sso_enabled,
+                sso_enforce,
+            })
             .collect(),
     ))
 }
