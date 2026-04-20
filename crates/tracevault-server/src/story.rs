@@ -492,7 +492,7 @@ pub async fn gather_function_sessions(
     }
 
     let mut sessions: Vec<FunctionSessionRef> = session_map.into_values().collect();
-    sessions.sort_by(|a, b| b.started_at.cmp(&a.started_at));
+    sessions.sort_by_key(|s| std::cmp::Reverse(s.started_at));
 
     Ok(FunctionSessions {
         function_name: scope.name.clone(),
