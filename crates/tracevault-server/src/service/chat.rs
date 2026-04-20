@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use chrono::{DateTime, Utc};
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -259,25 +261,51 @@ Respond with ONLY the JSON object, no markdown, no explanation."#
         }
 
         let rows: Vec<(String, Option<String>, Uuid)> = sqlx::query_as(
-            "SELECT c.commit_sha, c.message, ca.session_id
+            "SELECT DISTINCT c.commit_sha, c.message, ca.session_id
              FROM commit_attributions ca
              JOIN commits c ON c.id = ca.commit_id
-             WHERE ca.session_id = ANY($1)
-             GROUP BY c.commit_sha, c.message, ca.session_id
-             ORDER BY c.commit_sha",
+             WHERE ca.session_id = ANY($1)",
         )
         .bind(session_ids)
         .fetch_all(pool)
         .await?;
 
-        Ok(rows
+        // Rank sessions by position in the input (which comes from embedding
+        // search ordered by relevance); lower index = more relevant.
+        let rank: HashMap<Uuid, usize> = session_ids
+            .iter()
+            .enumerate()
+            .map(|(i, id)| (*id, i))
+            .collect();
+
+        // Dedupe by commit_sha, keeping the attribution linked to the
+        // highest-ranked (most relevant) session.
+        let mut best: HashMap<String, (usize, Option<String>, Uuid)> = HashMap::new();
+        for (sha, message, session_id) in rows {
+            let r = rank.get(&session_id).copied().unwrap_or(usize::MAX);
+            match best.get(&sha) {
+                Some((existing, _, _)) if *existing <= r => {}
+                _ => {
+                    best.insert(sha, (r, message, session_id));
+                }
+            }
+        }
+
+        let mut commits: Vec<(usize, ReferencedCommit)> = best
             .into_iter()
-            .map(|(sha, message, session_id)| ReferencedCommit {
-                sha,
-                message: message.unwrap_or_default(),
-                session_id,
+            .map(|(sha, (r, message, session_id))| {
+                (
+                    r,
+                    ReferencedCommit {
+                        sha,
+                        message: message.unwrap_or_default(),
+                        session_id,
+                    },
+                )
             })
-            .collect())
+            .collect();
+        commits.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.sha.cmp(&b.1.sha)));
+        Ok(commits.into_iter().map(|(_, c)| c).collect())
     }
 
     async fn generate_response(
