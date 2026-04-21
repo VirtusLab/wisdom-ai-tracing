@@ -16,6 +16,9 @@ pub enum AppError {
     #[error("Conflict: {0}")]
     Conflict(String),
 
+    #[error("Conflict ({code}): {message}")]
+    ConflictCode { code: &'static str, message: String },
+
     #[error("Bad request: {0}")]
     BadRequest(String),
 
@@ -34,18 +37,22 @@ pub enum AppError {
 
 impl IntoResponse for AppError {
     fn into_response(self) -> Response {
-        let (status, message) = match &self {
-            AppError::NotFound(msg) => (StatusCode::NOT_FOUND, msg.clone()),
-            AppError::Forbidden(msg) => (StatusCode::FORBIDDEN, msg.clone()),
-            AppError::Conflict(msg) => (StatusCode::CONFLICT, msg.clone()),
-            AppError::BadRequest(msg) => (StatusCode::BAD_REQUEST, msg.clone()),
-            AppError::Unauthorized => (StatusCode::UNAUTHORIZED, "Unauthorized".into()),
-            AppError::Internal(msg) => (StatusCode::INTERNAL_SERVER_ERROR, msg.clone()),
+        let (status, message, code) = match &self {
+            AppError::NotFound(msg) => (StatusCode::NOT_FOUND, msg.clone(), None),
+            AppError::Forbidden(msg) => (StatusCode::FORBIDDEN, msg.clone(), None),
+            AppError::Conflict(msg) => (StatusCode::CONFLICT, msg.clone(), None),
+            AppError::ConflictCode { code, message } => {
+                (StatusCode::CONFLICT, message.clone(), Some(*code))
+            }
+            AppError::BadRequest(msg) => (StatusCode::BAD_REQUEST, msg.clone(), None),
+            AppError::Unauthorized => (StatusCode::UNAUTHORIZED, "Unauthorized".into(), None),
+            AppError::Internal(msg) => (StatusCode::INTERNAL_SERVER_ERROR, msg.clone(), None),
             AppError::Sqlx(e) => {
                 tracing::error!("Database error: {e}");
                 (
                     StatusCode::INTERNAL_SERVER_ERROR,
                     "Internal server error".into(),
+                    None,
                 )
             }
             AppError::Git(e) => {
@@ -53,10 +60,15 @@ impl IntoResponse for AppError {
                 (
                     StatusCode::INTERNAL_SERVER_ERROR,
                     "Internal server error".into(),
+                    None,
                 )
             }
         };
-        (status, Json(json!({ "error": message }))).into_response()
+        let body = match code {
+            Some(code) => json!({ "error": message, "code": code }),
+            None => json!({ "error": message }),
+        };
+        (status, Json(body)).into_response()
     }
 }
 
@@ -115,6 +127,22 @@ mod tests {
     fn conflict_is_409() {
         let resp = AppError::Conflict("x".into()).into_response();
         assert_eq!(resp.status(), StatusCode::CONFLICT);
+    }
+
+    #[test]
+    fn conflict_code_emits_code_in_body() {
+        let err = AppError::ConflictCode {
+            code: "account_exists",
+            message: "m".into(),
+        };
+        let resp = err.into_response();
+        assert_eq!(resp.status(), StatusCode::CONFLICT);
+        let body = tokio::runtime::Runtime::new().unwrap().block_on(async {
+            let bytes = axum::body::to_bytes(resp.into_body(), 1024).await.unwrap();
+            String::from_utf8(bytes.to_vec()).unwrap()
+        });
+        assert!(body.contains("\"code\":\"account_exists\""));
+        assert!(body.contains("\"error\":\"m\""));
     }
 
     #[test]

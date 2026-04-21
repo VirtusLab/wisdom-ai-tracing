@@ -3,6 +3,17 @@ import { goto } from '$app/navigation';
 
 const BASE_URL = import.meta.env.PUBLIC_API_URL || '';
 
+export class ApiError extends Error {
+	status: number;
+	code?: string;
+	constructor(message: string, status: number, code?: string) {
+		super(message);
+		this.name = 'ApiError';
+		this.status = status;
+		this.code = code;
+	}
+}
+
 async function request<T>(
 	path: string,
 	options: RequestInit = {}
@@ -26,19 +37,21 @@ async function request<T>(
 	if (resp.status === 401 && browser) {
 		localStorage.removeItem('tracevault_token');
 		goto('/auth/login');
-		throw new Error('Unauthorized');
+		throw new ApiError('Unauthorized', 401);
 	}
 
 	if (!resp.ok) {
 		const body = await resp.text();
 		let message = body || `HTTP ${resp.status}`;
+		let code: string | undefined;
 		try {
 			const parsed = JSON.parse(body);
 			if (parsed.error) message = parsed.error;
+			if (typeof parsed.code === 'string') code = parsed.code;
 		} catch {
 			// not JSON, use raw body
 		}
-		throw new Error(message);
+		throw new ApiError(message, resp.status, code);
 	}
 
 	if (resp.status === 204 || resp.headers.get('content-length') === '0') {
