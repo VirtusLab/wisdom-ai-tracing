@@ -5,6 +5,7 @@ pub mod hooks;
 pub mod permissions;
 pub mod policy;
 pub mod policy_engine;
+pub mod policy_eval;
 pub mod redact;
 pub mod session;
 pub mod software;

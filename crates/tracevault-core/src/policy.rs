@@ -43,11 +43,8 @@ pub enum PolicyCondition {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PolicyAction {
-    BlockMerge,
     BlockPush,
     Warn,
-    RequireReview,
-    Notify,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

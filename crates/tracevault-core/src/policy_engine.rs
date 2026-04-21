@@ -104,7 +104,7 @@ fn eval_required_tool_call(trace: &TraceRecord, required: &[String]) -> (EvalRes
     let used: Vec<_> = trace.session.tools_used.iter().map(|t| &t.name).collect();
     let missing: Vec<_> = required
         .iter()
-        .filter(|r| !used.iter().any(|u| u.contains(r.as_str())))
+        .filter(|r| !used.iter().any(|u| u.as_str() == r.as_str()))
         .collect();
 
     if missing.is_empty() {
@@ -158,7 +158,7 @@ fn eval_conditional_tool_call(
         .session
         .tools_used
         .iter()
-        .filter(|t| t.name.contains(tool_name))
+        .filter(|t| t.name == tool_name)
         .count();
 
     if count >= min {
@@ -214,7 +214,7 @@ fn default_policies() -> Vec<PolicyRule> {
                     "google/gemini".into(),
                 ],
             },
-            action: PolicyAction::BlockMerge,
+            action: PolicyAction::BlockPush,
             severity: PolicySeverity::High,
             enabled: true,
         },
@@ -231,7 +231,7 @@ fn default_policies() -> Vec<PolicyRule> {
                     "crypto".into(),
                 ],
             },
-            action: PolicyAction::RequireReview,
+            action: PolicyAction::Warn,
             severity: PolicySeverity::High,
             enabled: true,
         },
