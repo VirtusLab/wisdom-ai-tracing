@@ -2,7 +2,7 @@
 	import { onMount } from 'svelte';
 	import { page } from '$app/stores';
 	import { goto } from '$app/navigation';
-	import { api } from '$lib/api';
+	import { api, ApiError } from '$lib/api';
 	import { auth } from '$lib/stores/auth';
 	import { Button } from '$lib/components/ui/button/index.js';
 	import * as Card from '$lib/components/ui/card/index.js';
@@ -70,6 +70,10 @@
 			await auth.init();
 			goto(`/orgs/${invite!.org_slug}/repos`);
 		} catch (err) {
+			if (err instanceof ApiError && err.code === 'account_exists') {
+				goto(`/auth/login?redirect=/invite/${token}`);
+				return;
+			}
 			submitError = err instanceof Error ? err.message : 'Failed to create account';
 		} finally {
 			submitLoading = false;

@@ -319,9 +319,10 @@ pub async fn accept_invite_new_user(
         .await?;
 
     if existing.is_some() {
-        return Err(AppError::Conflict(
-            "Account already exists. Log in to accept this invite.".into(),
-        ));
+        return Err(AppError::ConflictCode {
+            code: "account_exists",
+            message: "Account already exists. Log in to accept this invite.".into(),
+        });
     }
 
     if let Err(reason) = crate::password_policy::validate(&req.password) {

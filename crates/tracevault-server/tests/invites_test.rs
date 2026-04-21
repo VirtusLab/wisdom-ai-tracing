@@ -174,6 +174,120 @@ async fn accept_invite_creates_membership(pool: sqlx::PgPool) {
 }
 
 #[sqlx::test(migrations = "./migrations")]
+async fn new_user_accept_detects_existing_account(pool: sqlx::PgPool) {
+    // Scenario for issue #94: invite issued for an email that already has an account.
+    // The new-user accept path must detect this via its users-by-email lookup so the
+    // handler can return an account_exists signal instead of blindly inserting.
+    let org_id = common::seed_org(&pool).await;
+    let admin_id = common::seed_user(&pool).await;
+    let email = format!("prior-{}@example.com", uuid::Uuid::new_v4());
+
+    let password_hash = tracevault_server::auth::hash_password("oldpassword123").unwrap();
+    let existing_user_id: uuid::Uuid = sqlx::query_scalar(
+        "INSERT INTO users (email, password_hash, name) VALUES ($1, $2, $3) RETURNING id",
+    )
+    .bind(&email)
+    .bind(&password_hash)
+    .bind("Prior User")
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+
+    let (_, token_hash) = generate_invite_token();
+    let expires_at = chrono::Utc::now() + chrono::Duration::hours(24);
+    common::seed_invite(
+        &pool,
+        org_id,
+        &email,
+        "developer",
+        admin_id,
+        &token_hash,
+        expires_at,
+    )
+    .await;
+
+    let found: Option<(uuid::Uuid,)> = sqlx::query_as("SELECT id FROM users WHERE email = $1")
+        .bind(&email)
+        .fetch_optional(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        found.map(|(id,)| id),
+        Some(existing_user_id),
+        "handler's existence check must locate the prior account"
+    );
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn existing_user_can_accept_invite_to_second_org(pool: sqlx::PgPool) {
+    // Multi-org scenario: a user is already a member of org A, then gets invited
+    // to org B. The existing-user accept flow must add membership in B without
+    // touching their membership in A.
+    let email = format!("multi-{}@example.com", uuid::Uuid::new_v4());
+    let password_hash = tracevault_server::auth::hash_password("pw-that-works").unwrap();
+    let user_id: uuid::Uuid = sqlx::query_scalar(
+        "INSERT INTO users (email, password_hash, name) VALUES ($1, $2, $3) RETURNING id",
+    )
+    .bind(&email)
+    .bind(&password_hash)
+    .bind("Multi Org User")
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+
+    let org_a = common::seed_org(&pool).await;
+    let org_b = common::seed_org(&pool).await;
+    common::seed_membership(&pool, user_id, org_a, "developer").await;
+
+    let admin_b = common::seed_user(&pool).await;
+    common::seed_membership(&pool, admin_b, org_b, "admin").await;
+    let (_, token_hash) = generate_invite_token();
+    let expires_at = chrono::Utc::now() + chrono::Duration::hours(24);
+    let invite_id = common::seed_invite(
+        &pool,
+        org_b,
+        &email,
+        "auditor",
+        admin_b,
+        &token_hash,
+        expires_at,
+    )
+    .await;
+
+    let inserted = sqlx::query(
+        "INSERT INTO user_org_memberships (user_id, org_id, role) VALUES ($1, $2, $3)
+         ON CONFLICT (user_id, org_id) DO NOTHING",
+    )
+    .bind(user_id)
+    .bind(org_b)
+    .bind("auditor")
+    .execute(&pool)
+    .await
+    .unwrap();
+    assert_eq!(inserted.rows_affected(), 1);
+
+    sqlx::query("UPDATE org_invites SET status = 'accepted' WHERE id = $1")
+        .bind(invite_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    let memberships: Vec<(uuid::Uuid, String)> =
+        sqlx::query_as("SELECT org_id, role FROM user_org_memberships WHERE user_id = $1")
+            .bind(user_id)
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+    assert_eq!(memberships.len(), 2);
+    assert!(memberships
+        .iter()
+        .any(|(o, r)| *o == org_a && r == "developer"));
+    assert!(memberships
+        .iter()
+        .any(|(o, r)| *o == org_b && r == "auditor"));
+}
+
+#[sqlx::test(migrations = "./migrations")]
 async fn duplicate_invite_revokes_previous(pool: sqlx::PgPool) {
     let org_id = common::seed_org(&pool).await;
     let user_id = common::seed_user(&pool).await;
