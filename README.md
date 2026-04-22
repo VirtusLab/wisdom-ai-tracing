@@ -192,8 +192,9 @@ This creates a `.tracevault/` directory and installs a pre-push hook. The hook r
 ```sh
 tracevault sync       # sync repo metadata with server
 tracevault check      # evaluate policies against server rules (blocks push on failure)
-tracevault push       # upload traces to server
 ```
+
+Session and commit data is streamed to the server continuously via the Claude Code hooks (`tracevault stream`) and the git post-commit hook (`tracevault commit-push`), so there is no separate upload step.
 
 The command also installs the Claude Code hook configuration in `.claude/settings.json`. Each hook runs `tracevault stream --event <type>`, which records the event locally and pushes it to the server in real time:
 
@@ -228,7 +229,7 @@ The command also installs the Claude Code hook configuration in `.claude/setting
 }
 ```
 
-### 7. Authenticate and push traces
+### 7. Authenticate
 
 ```sh
 # Log in to a TraceVault server.
@@ -238,11 +239,11 @@ The command also installs the Claude Code hook configuration in `.claude/setting
 # force that behaviour with `--no-browser` or `TRACEVAULT_NO_BROWSER=1`.
 tracevault login --server-url https://your-server.example.com
 
-# Push traces to the server:
-tracevault push
-
 # Check policies before pushing (also runs automatically via pre-push hook):
 tracevault check
+
+# Retry any events that failed to stream in real time (network blip, server down):
+tracevault flush
 
 # View local session stats:
 tracevault stats
@@ -277,7 +278,7 @@ tracevault login --server-url https://your-tracevault-server.example.com
 tracevault init
 ```
 
-That's it. From this point on, every Claude Code session in this repo is automatically traced — tool calls, file edits, token usage, and model info are captured and streamed to the TraceVault server. When you `git push`, the pre-push hook evaluates policies and uploads traces.
+That's it. From this point on, every Claude Code session in this repo is automatically traced — tool calls, file edits, token usage, and model info are captured and streamed to the TraceVault server as they happen. When you `git push`, the pre-push hook evaluates policies and blocks the push if any rule fails.
 
 ## Keys & Secrets
 
@@ -337,7 +338,6 @@ export DATABASE_URL=postgres://user:password@host:5432/tracevault?sslmode=requir
 | `tracevault stream --event <type>` | Handle a Claude Code hook event (reads JSON from stdin) and stream it to the server |
 | `tracevault sync` | Sync repo metadata with the server |
 | `tracevault check` | Evaluate policies against server rules, exit non-zero if blocked |
-| `tracevault push` | Push collected traces to the server |
 | `tracevault stats` | Show local session statistics |
 | `tracevault verify` | Verify commits are registered and sealed on the server (`--commits` or `--range`) |
 | `tracevault status` | Show current session status (not yet implemented) |
