@@ -81,7 +81,6 @@
 	let newMinCount = $state('1');
 	let newFilePatterns = $state('');
 	let newAction = $state('block_push');
-	let newSeverity = $state('medium');
 
 	// For RequiredToolCall type
 	let newToolNames = $state('');
@@ -184,8 +183,7 @@
 				name: newName,
 				description: newDescription || undefined,
 				condition: buildCondition(),
-				action: newAction,
-				severity: newSeverity
+				action: newAction
 			});
 			createOpen = false;
 			resetCreateForm();
@@ -206,7 +204,6 @@
 		newFilePatterns = '';
 		newToolNames = '';
 		newAction = 'block_push';
-		newSeverity = 'medium';
 		createError = '';
 	}
 
@@ -385,29 +382,15 @@
 							</div>
 						{/if}
 
-						<div class="grid grid-cols-2 gap-4">
-							<div class="grid gap-2">
-								<Label>Action</Label>
-								<Select.Root type="single" value={newAction} onValueChange={(v) => { if (v) newAction = v; }}>
-									<Select.Trigger>{newAction === 'block_push' ? 'Block Push' : 'Warn'}</Select.Trigger>
-									<Select.Content>
-										<Select.Item value="block_push">Block Push</Select.Item>
-										<Select.Item value="warn">Warn</Select.Item>
-									</Select.Content>
-								</Select.Root>
-							</div>
-							<div class="grid gap-2">
-								<Label>Severity</Label>
-								<Select.Root type="single" value={newSeverity} onValueChange={(v) => { if (v) newSeverity = v; }}>
-									<Select.Trigger>{newSeverity}</Select.Trigger>
-									<Select.Content>
-										<Select.Item value="critical">critical</Select.Item>
-										<Select.Item value="high">high</Select.Item>
-										<Select.Item value="medium">medium</Select.Item>
-										<Select.Item value="low">low</Select.Item>
-									</Select.Content>
-								</Select.Root>
-							</div>
+						<div class="grid gap-2">
+							<Label>Action</Label>
+							<Select.Root type="single" value={newAction} onValueChange={(v) => { if (v) newAction = v; }}>
+								<Select.Trigger>{newAction === 'block_push' ? 'Block Push' : 'Warn'}</Select.Trigger>
+								<Select.Content>
+									<Select.Item value="block_push">Block Push</Select.Item>
+									<Select.Item value="warn">Warn</Select.Item>
+								</Select.Content>
+							</Select.Root>
 						</div>
 
 						<Dialog.Footer>
@@ -436,7 +419,6 @@
 							<Table.Head class="text-xs">Name</Table.Head>
 							<Table.Head class="text-xs">Condition</Table.Head>
 							<Table.Head class="text-xs">Action</Table.Head>
-							<Table.Head class="text-xs">Severity</Table.Head>
 							<Table.Head class="text-xs">Scope</Table.Head>
 							<Table.Head class="text-xs">Enabled</Table.Head>
 							<Table.Head class="text-xs"></Table.Head>
@@ -453,9 +435,6 @@
 									{:else}
 										<span class="rounded-full px-2 py-0.5 text-[10px]" style="background: rgba(246,177,68,0.12); color: #f6b144; border: 1px solid rgba(246,177,68,0.25)">Warn</span>
 									{/if}
-								</Table.Cell>
-								<Table.Cell class="text-xs">
-									<span class="rounded-full px-2 py-0.5 text-[10px]" style="background: rgba(79,110,247,0.12); color: #4f6ef7; border: 1px solid rgba(79,110,247,0.25)">{policy.severity}</span>
 								</Table.Cell>
 								<Table.Cell class="text-xs">
 									<span class="rounded-full px-2 py-0.5 text-[10px]" style="background: rgba(167,139,250,0.12); color: #a78bfa; border: 1px solid rgba(167,139,250,0.25)">{policy.repo_id ? 'repo' : 'org'}</span>

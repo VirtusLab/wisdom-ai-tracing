@@ -5,7 +5,8 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::api::policies::{evaluate_condition, EvalOutcome};
+use tracevault_core::policy_eval::{evaluate_condition, EvalOutcome};
+
 use crate::error::AppError;
 use crate::extractors::OrgAuth;
 use crate::repo::policies::PolicyRepo;

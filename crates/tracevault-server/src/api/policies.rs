@@ -8,8 +8,18 @@ use uuid::Uuid;
 
 use crate::error::AppError;
 use crate::extractors::OrgAuth;
+use crate::permissions::{has_permission, Permission};
 use crate::repo::policies::PolicyRepo;
 use crate::AppState;
+
+fn require_policy_manage(role: &str) -> Result<(), AppError> {
+    if !has_permission(role, Permission::PolicyManage) {
+        return Err(AppError::Forbidden(
+            "PolicyManage permission required (owner, admin, or policy_admin)".into(),
+        ));
+    }
+    Ok(())
+}
 
 #[derive(Debug, Serialize)]
 pub struct PolicyResponse {
@@ -88,10 +98,14 @@ pub async fn create_repo_policy(
     Path((_slug, repo_id)): Path<(String, Uuid)>,
     Json(req): Json<CreatePolicyRequest>,
 ) -> Result<(StatusCode, Json<PolicyResponse>), AppError> {
+    require_policy_manage(&auth.role)?;
+
     // Verify repo belongs to org
     if !PolicyRepo::repo_belongs_to_org(&state.pool, repo_id, auth.org_id).await? {
         return Err(AppError::NotFound("Repo not found".into()));
     }
+
+    validate_action(&req.action)?;
 
     let description = req.description.as_deref().unwrap_or("");
     let severity = req.severity.as_deref().unwrap_or("medium");
@@ -149,6 +163,12 @@ pub async fn update_policy(
     Path((_slug, id)): Path<(String, Uuid)>,
     Json(req): Json<UpdatePolicyRequest>,
 ) -> Result<Json<PolicyResponse>, AppError> {
+    require_policy_manage(&auth.role)?;
+
+    if let Some(action) = &req.action {
+        validate_action(action)?;
+    }
+
     let row = PolicyRepo::update(
         &state.pool,
         id,
@@ -202,6 +222,8 @@ pub async fn delete_policy(
     auth: OrgAuth,
     Path((_slug, id)): Path<(String, Uuid)>,
 ) -> Result<StatusCode, AppError> {
+    require_policy_manage(&auth.role)?;
+
     let rows_affected = PolicyRepo::delete(&state.pool, id, auth.org_id).await?;
 
     if rows_affected == 0 {
@@ -296,7 +318,11 @@ pub async fn check_policies(
     let mut has_block_failure = false;
 
     for (name, condition, action, severity) in &rows {
-        let check_result = evaluate_condition(condition, &all_tool_calls, &all_files);
+        let check_result = tracevault_core::policy_eval::evaluate_condition(
+            condition,
+            &all_tool_calls,
+            &all_files,
+        );
         let result_str = if check_result.passed { "pass" } else { "fail" };
 
         if !check_result.passed && action == "block_push" {
@@ -334,205 +360,16 @@ pub async fn check_policies(
     }))
 }
 
-pub(crate) struct EvalOutcome {
-    pub passed: bool,
-    pub details: String,
-}
+/// Actions the enforcement engine actually handles. Keep in sync with
+/// `PolicyAction` in tracevault-core.
+const VALID_ACTIONS: &[&str] = &["block_push", "warn"];
 
-pub(crate) fn evaluate_condition(
-    condition: &serde_json::Value,
-    tool_calls: &std::collections::HashMap<String, i64>,
-    files_modified: &[String],
-) -> EvalOutcome {
-    let cond_type = condition.get("type").and_then(|v| v.as_str()).unwrap_or("");
-
-    match cond_type {
-        "RequiredToolCall" => {
-            let tool_names = condition
-                .get("tool_names")
-                .and_then(|v| v.as_array())
-                .map(|arr| {
-                    arr.iter()
-                        .filter_map(|v| v.as_str().map(String::from))
-                        .collect::<Vec<_>>()
-                })
-                .unwrap_or_default();
-
-            let missing: Vec<_> = tool_names
-                .iter()
-                .filter(|name| !tool_calls.keys().any(|k| k.contains(name.as_str())))
-                .collect();
-
-            if missing.is_empty() {
-                EvalOutcome {
-                    passed: true,
-                    details: "All required tools were used".into(),
-                }
-            } else {
-                EvalOutcome {
-                    passed: false,
-                    details: format!(
-                        "Missing required tools: {}",
-                        missing
-                            .iter()
-                            .map(|s| s.as_str())
-                            .collect::<Vec<_>>()
-                            .join(", ")
-                    ),
-                }
-            }
-        }
-        "ConditionalToolCall" => {
-            let tool_name = condition
-                .get("tool_name")
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
-            let min_count = condition
-                .get("min_count")
-                .and_then(|v| v.as_u64())
-                .unwrap_or(1) as i64;
-            let file_patterns = condition
-                .get("when_files_match")
-                .and_then(|v| v.as_array())
-                .map(|arr| {
-                    arr.iter()
-                        .filter_map(|v| v.as_str().map(String::from))
-                        .collect::<Vec<_>>()
-                });
-
-            // Check if file patterns apply
-            let patterns_match = match &file_patterns {
-                None => true, // No patterns = always applies
-                Some(patterns) if patterns.is_empty() => true,
-                Some(patterns) => files_modified.iter().any(|file| {
-                    patterns
-                        .iter()
-                        .any(|pattern| glob_match::glob_match(pattern, file))
-                }),
-            };
-
-            if !patterns_match {
-                return EvalOutcome {
-                    passed: true,
-                    details: "Rule skipped: no modified files match patterns".into(),
-                };
-            }
-
-            // Find the tool call count (supports substring matching like existing code)
-            let actual_count: i64 = tool_calls
-                .iter()
-                .filter(|(k, _)| k.contains(tool_name))
-                .map(|(_, v)| v)
-                .sum();
-
-            if actual_count >= min_count {
-                EvalOutcome {
-                    passed: true,
-                    details: format!(
-                        "Tool '{}' called {} time(s) (required >= {})",
-                        tool_name, actual_count, min_count
-                    ),
-                }
-            } else {
-                EvalOutcome {
-                    passed: false,
-                    details: format!(
-                        "Tool '{}' called {} time(s) (required >= {})",
-                        tool_name, actual_count, min_count
-                    ),
-                }
-            }
-        }
-        "AiPercentageThreshold" => {
-            // Not evaluable from session data alone -- pass by default
-            EvalOutcome {
-                passed: true,
-                details: "AI percentage not evaluated in check (requires attribution data)".into(),
-            }
-        }
-        "TokenBudget" => {
-            // Not evaluable from check request -- pass by default
-            EvalOutcome {
-                passed: true,
-                details: "Token budget not evaluated in check (requires token data)".into(),
-            }
-        }
-        _ => EvalOutcome {
-            passed: true,
-            details: format!("Unknown condition type '{}', skipped", cond_type),
-        },
+fn validate_action(action: &str) -> Result<(), AppError> {
+    if !VALID_ACTIONS.contains(&action) {
+        return Err(AppError::BadRequest(format!(
+            "action must be one of: {}",
+            VALID_ACTIONS.join(", ")
+        )));
     }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::collections::HashMap;
-
-    #[test]
-    fn required_tool_call_all_present() {
-        let cond = serde_json::json!({"type": "RequiredToolCall", "tool_names": ["Read", "Write"]});
-        let mut tools = HashMap::new();
-        tools.insert("Read".to_string(), 5_i64);
-        tools.insert("Write".to_string(), 3_i64);
-        assert!(evaluate_condition(&cond, &tools, &[]).passed);
-    }
-
-    #[test]
-    fn required_tool_call_missing() {
-        let cond = serde_json::json!({"type": "RequiredToolCall", "tool_names": ["Lint"]});
-        assert!(!evaluate_condition(&cond, &HashMap::new(), &[]).passed);
-    }
-
-    #[test]
-    fn conditional_tool_call_file_matches_count_met() {
-        let cond = serde_json::json!({
-            "type": "ConditionalToolCall",
-            "tool_name": "security_scan",
-            "min_count": 1,
-            "when_files_match": ["**/*.rs"]
-        });
-        let mut tools = HashMap::new();
-        tools.insert("security_scan".to_string(), 2_i64);
-        let files = vec!["src/main.rs".to_string()];
-        assert!(evaluate_condition(&cond, &tools, &files).passed);
-    }
-
-    #[test]
-    fn conditional_tool_call_count_not_met() {
-        let cond = serde_json::json!({
-            "type": "ConditionalToolCall",
-            "tool_name": "security_scan",
-            "min_count": 5,
-            "when_files_match": ["**/*.rs"]
-        });
-        let mut tools = HashMap::new();
-        tools.insert("security_scan".to_string(), 1_i64);
-        let files = vec!["src/main.rs".to_string()];
-        assert!(!evaluate_condition(&cond, &tools, &files).passed);
-    }
-
-    #[test]
-    fn conditional_tool_call_no_file_match_passes() {
-        let cond = serde_json::json!({
-            "type": "ConditionalToolCall",
-            "tool_name": "security_scan",
-            "min_count": 1,
-            "when_files_match": ["*.py"]
-        });
-        let files = vec!["src/main.rs".to_string()];
-        assert!(evaluate_condition(&cond, &HashMap::new(), &files).passed);
-    }
-
-    #[test]
-    fn ai_percentage_threshold_passes() {
-        let cond = serde_json::json!({"type": "AiPercentageThreshold", "threshold": 80.0});
-        assert!(evaluate_condition(&cond, &HashMap::new(), &[]).passed);
-    }
-
-    #[test]
-    fn unknown_condition_passes() {
-        let cond = serde_json::json!({"type": "FutureCondition"});
-        assert!(evaluate_condition(&cond, &HashMap::new(), &[]).passed);
-    }
+    Ok(())
 }
