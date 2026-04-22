@@ -181,9 +181,7 @@ async fn main() {
             "/api/v1/auth/device/{token}/status",
             get(api::auth::device_status),
         )
-        .layer(GovernorLayer {
-            config: Arc::new(auth_rate_limit),
-        });
+        .layer(GovernorLayer::new(auth_rate_limit));
 
     // Public routes (moderate: 60 req/min per IP)
     let public_routes = Router::new()
@@ -209,9 +207,7 @@ async fn main() {
             "/api/v1/invite/{token}/accept",
             post(api::invites::accept_invite_new_user),
         )
-        .layer(GovernorLayer {
-            config: Arc::new(public_rate_limit),
-        });
+        .layer(GovernorLayer::new(public_rate_limit));
 
     // Authenticated routes (no rate limiting)
     let authenticated_routes = Router::new()

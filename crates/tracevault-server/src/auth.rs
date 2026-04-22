@@ -133,4 +133,33 @@ mod tests {
         assert_eq!(hash.len(), 64);
         assert_eq!(sha256_hex(&raw), hash);
     }
+
+    #[test]
+    fn generated_tokens_are_unique() {
+        // Pins that the OsRng-backed `random_bytes_32` doesn't collide across
+        // calls — collisions here would let an attacker predict session
+        // tokens. Trivially improbable but the test catches a broken RNG
+        // wiring (e.g. a fixed seed leaking in via an upgrade).
+        let (a, _) = generate_session_token();
+        let (b, _) = generate_session_token();
+        assert_ne!(a, b);
+
+        let (c, _) = generate_api_key();
+        let (d, _) = generate_api_key();
+        assert_ne!(c, d);
+
+        assert_ne!(generate_device_token(), generate_device_token());
+    }
+
+    #[test]
+    fn argon2_salts_are_unique() {
+        // Same password hashed twice must produce different PHC strings,
+        // because `SaltString::generate(&mut OsRng)` must produce fresh salt.
+        let pw = test_password();
+        let h1 = hash_password(&pw).unwrap();
+        let h2 = hash_password(&pw).unwrap();
+        assert_ne!(h1, h2);
+        assert!(verify_password(&pw, &h1));
+        assert!(verify_password(&pw, &h2));
+    }
 }

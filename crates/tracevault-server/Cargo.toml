@@ -22,21 +22,21 @@ chrono.workspace = true
 sqlx = { version = "0.8", features = ["runtime-tokio", "postgres", "uuid", "chrono", "json"] }
 tower-http = { version = "0.6", features = ["cors", "trace"] }
 argon2 = "0.5"
-sha2 = "0.10"
-hmac = "0.12"
+sha2 = "0.11"
+hmac = "0.13"
 hex = "0.4"
 http = "1"
 ed25519-dalek = { version = "2", features = ["rand_core"] }
 rand = "0.8"
 base64 = "0.22"
 git2 = "0.20"
-reqwest = { version = "0.12", features = ["json"] }
+reqwest = { version = "0.13", features = ["json"] }
 async-trait = "0.1"
 aes-gcm = "0.10"
 dotenvy = "0.15.7"
 urlencoding = "2"
 thiserror.workspace = true
-tower_governor = "0.6"
+tower_governor = "0.8"
 pgvector = { version = "0.4", features = ["sqlx"] }
 fastembed = { version = "4", optional = true }
 
@@ -46,6 +46,8 @@ optional = true
 
 [dev-dependencies]
 sqlx = { version = "0.8", features = ["runtime-tokio", "postgres", "uuid", "chrono", "json", "migrate"] }
+wiremock = "0.6"
+tower = { version = "0.5", features = ["util"] }
 
 [features]
 default = []

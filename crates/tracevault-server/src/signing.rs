@@ -146,4 +146,23 @@ mod tests {
         assert!(svc.verify("test_hash", &sig));
         assert!(!svc.verify("wrong_hash", &sig));
     }
+
+    #[test]
+    fn ephemeral_keys_are_distinct() {
+        // Two ephemeral services must produce different keypairs — pins that
+        // the RNG-backed `SigningKey::generate` path isn't returning a
+        // constant or reusing state across calls.
+        let a = SigningService::new(None);
+        let b = SigningService::new(None);
+        assert_ne!(a.public_key_b64(), b.public_key_b64());
+    }
+
+    #[test]
+    fn ephemeral_sign_verify_roundtrip() {
+        // Cover the RNG path end-to-end: generate, sign, verify with the
+        // same service (no seed involved).
+        let svc = SigningService::new(None);
+        let sig = svc.sign("payload");
+        assert!(svc.verify("payload", &sig));
+    }
 }
