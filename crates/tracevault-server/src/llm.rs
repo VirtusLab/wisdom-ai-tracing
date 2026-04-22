@@ -129,3 +129,110 @@ pub fn create_llm_from_params(
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use wiremock::matchers::{body_partial_json, header, method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    #[tokio::test]
+    async fn anthropic_success_sends_expected_request_and_parses_response() {
+        let server = MockServer::start().await;
+
+        Mock::given(method("POST"))
+            .and(path("/v1/messages"))
+            .and(header("x-api-key", "sk-test"))
+            .and(header("anthropic-version", "2023-06-01"))
+            .and(header("content-type", "application/json"))
+            .and(body_partial_json(serde_json::json!({
+                "model": "claude-sonnet-4",
+                "max_tokens": 100,
+                "messages": [{"role": "user", "content": "hi"}]
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "content": [{"type": "text", "text": "hello from claude"}]
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let llm = AnthropicLlm::new(
+            "sk-test".into(),
+            "claude-sonnet-4".into(),
+            Some(server.uri()),
+        );
+        let out = llm.generate("hi", 100).await.unwrap();
+        assert_eq!(out, "hello from claude");
+    }
+
+    #[tokio::test]
+    async fn anthropic_non_2xx_returns_err_or_parse_err() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/messages"))
+            .respond_with(ResponseTemplate::new(500).set_body_string("boom"))
+            .mount(&server)
+            .await;
+
+        let llm = AnthropicLlm::new("k".into(), "m".into(), Some(server.uri()));
+        // Current implementation parses JSON even on non-2xx and then looks
+        // for the text field; either a reqwest error or a "Unexpected
+        // response" error is acceptable — we just need it to surface.
+        let err = llm.generate("hi", 10).await.unwrap_err();
+        assert!(!err.is_empty());
+    }
+
+    #[tokio::test]
+    async fn openai_success_sends_bearer_auth_and_parses_choices() {
+        let server = MockServer::start().await;
+
+        Mock::given(method("POST"))
+            .and(path("/v1/chat/completions"))
+            .and(header("authorization", "Bearer sk-openai"))
+            .and(header("content-type", "application/json"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "choices": [{"message": {"content": "hello from gpt"}}]
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let llm = OpenAiLlm::new("sk-openai".into(), "gpt-4o".into(), Some(server.uri()));
+        let out = llm.generate("hi", 50).await.unwrap();
+        assert_eq!(out, "hello from gpt");
+    }
+
+    #[tokio::test]
+    async fn openai_malformed_body_returns_err() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/chat/completions"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "choices": []  // no message content
+            })))
+            .mount(&server)
+            .await;
+
+        let llm = OpenAiLlm::new("k".into(), "m".into(), Some(server.uri()));
+        let err = llm.generate("hi", 10).await.unwrap_err();
+        assert!(err.contains("Unexpected response"));
+    }
+
+    #[test]
+    fn create_llm_unknown_provider_returns_none() {
+        let r = create_llm_from_params("made-up", "k".into(), None, None);
+        assert!(r.is_none());
+    }
+
+    #[test]
+    fn create_llm_defaults_model_per_provider() {
+        let a = create_llm_from_params("anthropic", "k".into(), None, None).unwrap();
+        assert_eq!(a.provider_name(), "anthropic");
+        assert!(a.model_name().starts_with("claude"));
+
+        let o = create_llm_from_params("openai", "k".into(), None, None).unwrap();
+        assert_eq!(o.provider_name(), "openai");
+        assert_eq!(o.model_name(), "gpt-4o");
+    }
+}

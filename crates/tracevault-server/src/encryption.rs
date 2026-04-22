@@ -113,4 +113,16 @@ mod tests {
         let bad_nonce = B64.encode([0u8; 12]);
         assert!(decrypt(&ct, &bad_nonce, &key).is_err());
     }
+
+    #[test]
+    fn nonce_is_unique_across_encrypts() {
+        // AES-GCM nonce reuse under the same key catastrophically breaks
+        // confidentiality and authenticity. This test pins that `OsRng`
+        // produces a fresh nonce per encrypt call.
+        let key = B64.encode([7u8; 32]);
+        let (ct1, nonce1) = encrypt("same plaintext", &key).unwrap();
+        let (ct2, nonce2) = encrypt("same plaintext", &key).unwrap();
+        assert_ne!(nonce1, nonce2, "nonce must not repeat");
+        assert_ne!(ct1, ct2, "ciphertext of equal plaintexts must differ");
+    }
 }

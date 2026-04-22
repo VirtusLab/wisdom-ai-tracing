@@ -46,6 +46,8 @@ optional = true
 
 [dev-dependencies]
 sqlx = { version = "0.8", features = ["runtime-tokio", "postgres", "uuid", "chrono", "json", "migrate"] }
+wiremock = "0.6"
+tower = { version = "0.5", features = ["util"] }
 
 [features]
 default = []
