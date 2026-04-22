@@ -19,6 +19,23 @@ fn git_repo_name(project_root: &Path) -> String {
         .unwrap_or_else(|| "unknown".into())
 }
 
+fn git_head_sha(project_root: &Path) -> Option<String> {
+    let out = Command::new("git")
+        .args(["rev-parse", "HEAD"])
+        .current_dir(project_root)
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let sha = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    if sha.is_empty() {
+        None
+    } else {
+        Some(sha)
+    }
+}
+
 fn collect_session_data(session_dir: &Path) -> Option<SessionCheckData> {
     let session_id = session_dir.file_name()?.to_string_lossy().to_string();
 
@@ -173,8 +190,16 @@ pub async fn check_policies(project_root: &Path) -> Result<(), Box<dyn std::erro
 
     println!("Checking {} session(s) against policies...", sessions.len());
 
+    let commit_sha = git_head_sha(project_root);
     let result = client
-        .check_policies(&org_slug, &repo.id, CheckPoliciesRequest { sessions })
+        .check_policies(
+            &org_slug,
+            &repo.id,
+            CheckPoliciesRequest {
+                sessions,
+                commit_sha,
+            },
+        )
         .await?;
 
     // Print results

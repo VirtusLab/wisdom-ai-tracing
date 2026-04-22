@@ -404,6 +404,10 @@ async fn main() {
             post(api::policies::check_policies),
         )
         .route(
+            "/api/v1/orgs/{slug}/repos/{repo_id}/policy-evaluations",
+            get(api::policies::list_policy_evaluations),
+        )
+        .route(
             "/api/v1/orgs/{slug}/policies/{id}",
             put(api::policies::update_policy).delete(api::policies::delete_policy),
         )

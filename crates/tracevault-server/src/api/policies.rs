@@ -1,15 +1,16 @@
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::StatusCode,
     Json,
 };
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::error::AppError;
 use crate::extractors::OrgAuth;
 use crate::permissions::{has_permission, Permission};
-use crate::repo::policies::PolicyRepo;
+use crate::repo::policies::{PolicyEvaluationFilter, PolicyRepo};
 use crate::AppState;
 
 fn require_policy_manage(role: &str) -> Result<(), AppError> {
@@ -251,12 +252,15 @@ pub async fn delete_policy(
 #[derive(Debug, Deserialize)]
 pub struct CheckRequest {
     pub sessions: Vec<SessionCheckData>,
+    /// HEAD commit SHA at the time of the check, if available. Optional for
+    /// backwards compatibility with older CLIs.
+    #[serde(default)]
+    pub commit_sha: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct SessionCheckData {
-    #[serde(rename = "session_id")]
-    pub _session_id: String,
+    pub session_id: String,
     pub tool_calls: Option<serde_json::Value>, // {"tool_name": count}
     pub files_modified: Option<Vec<String>>,
     #[serde(rename = "total_tool_calls")]
@@ -314,19 +318,52 @@ pub async fn check_policies(
         }
     }
 
+    // Pick a representative session id for the activity log — if sessions
+    // collapse across a push, storing each against the first one is fine
+    // and still lets users filter by session.
+    let session_id_for_log = req.sessions.first().map(|s| s.session_id.as_str());
+    let actor_for_log = if auth.user_id.is_nil() {
+        None
+    } else {
+        Some(auth.user_id)
+    };
+
     let mut results = Vec::new();
     let mut has_block_failure = false;
 
-    for (name, condition, action, severity) in &rows {
+    for (policy_id, name, condition, action, severity) in &rows {
         let check_result = tracevault_core::policy_eval::evaluate_condition(
             condition,
             &all_tool_calls,
             &all_files,
         );
-        let result_str = if check_result.passed { "pass" } else { "fail" };
+        let result_str = classify_result(&check_result);
 
         if !check_result.passed && action == "block_push" {
             has_block_failure = true;
+        }
+
+        if let Err(e) = PolicyRepo::insert_evaluation(
+            &state.pool,
+            auth.org_id,
+            repo_id,
+            *policy_id,
+            name,
+            session_id_for_log,
+            req.commit_sha.as_deref(),
+            result_str,
+            action,
+            &check_result.details,
+            "cli_check",
+            actor_for_log,
+        )
+        .await
+        {
+            tracing::warn!(
+                policy_id = %policy_id,
+                error = %e,
+                "failed to record policy evaluation"
+            );
         }
 
         results.push(CheckResult {
@@ -358,6 +395,95 @@ pub async fn check_policies(
         results,
         blocked: has_block_failure,
     }))
+}
+
+// --- Policy Evaluation Activity (list) ---
+
+#[derive(Debug, Deserialize)]
+pub struct ListEvaluationsQuery {
+    pub policy_id: Option<Uuid>,
+    pub result: Option<String>,
+    pub source: Option<String>,
+    pub since: Option<DateTime<Utc>>,
+    pub limit: Option<i64>,
+    pub offset: Option<i64>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct PolicyEvaluationResponse {
+    pub id: Uuid,
+    pub policy_id: Option<Uuid>,
+    pub policy_name: String,
+    pub session_id: Option<String>,
+    pub commit_sha: Option<String>,
+    pub result: String,
+    pub action: String,
+    pub details: String,
+    pub source: String,
+    pub actor_id: Option<Uuid>,
+    pub evaluated_at: DateTime<Utc>,
+}
+
+/// GET /api/v1/orgs/{slug}/repos/{repo_id}/policy-evaluations
+/// List recent policy evaluations for this repo. Open to any org member —
+/// this is operational visibility, not a mutation.
+pub async fn list_policy_evaluations(
+    State(state): State<AppState>,
+    auth: OrgAuth,
+    Path((_slug, repo_id)): Path<(String, Uuid)>,
+    Query(q): Query<ListEvaluationsQuery>,
+) -> Result<Json<Vec<PolicyEvaluationResponse>>, AppError> {
+    if !PolicyRepo::repo_belongs_to_org(&state.pool, repo_id, auth.org_id).await? {
+        return Err(AppError::NotFound("Repo not found".into()));
+    }
+
+    // Bound the page size. 500 is plenty for a single dashboard query and
+    // keeps a mis-clicked "limit=100000" from grinding the DB.
+    let limit = q.limit.unwrap_or(100).clamp(1, 500);
+    let offset = q.offset.unwrap_or(0).max(0);
+
+    let filter = PolicyEvaluationFilter {
+        policy_id: q.policy_id,
+        result: q.result,
+        source: q.source,
+        since: q.since,
+        limit,
+        offset,
+    };
+
+    let rows = PolicyRepo::list_evaluations(&state.pool, auth.org_id, repo_id, &filter).await?;
+
+    Ok(Json(
+        rows.into_iter()
+            .map(|r| PolicyEvaluationResponse {
+                id: r.id,
+                policy_id: r.policy_id,
+                policy_name: r.policy_name,
+                session_id: r.session_id,
+                commit_sha: r.commit_sha,
+                result: r.result,
+                action: r.action,
+                details: r.details,
+                source: r.source,
+                actor_id: r.actor_id,
+                evaluated_at: r.evaluated_at,
+            })
+            .collect(),
+    ))
+}
+
+/// Map an EvalOutcome into the stored result string. Today evaluate_condition
+/// only exposes pass/fail, but "skip" is already a concept inside the
+/// evaluator (rule skipped when no files matched) — surface it here so the
+/// activity log can distinguish "rule didn't apply" from "rule passed".
+fn classify_result(outcome: &tracevault_core::policy_eval::EvalOutcome) -> &'static str {
+    if !outcome.passed {
+        "fail"
+    } else if outcome.details.starts_with("Rule skipped") {
+        "skip"
+    } else {
+        "pass"
+    }
 }
 
 /// Actions the enforcement engine actually handles. Keep in sync with
