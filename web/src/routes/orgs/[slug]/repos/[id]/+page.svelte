@@ -69,9 +69,27 @@
 		evaluated_at: string;
 	}
 
+	interface PolicyStat {
+		policy_id: string;
+		policy_name: string;
+		enabled: boolean;
+		action: string;
+		total: number;
+		pass_count: number;
+		fail_count: number;
+		skip_count: number;
+		warn_count: number;
+		last_evaluated_at: string | null;
+		first_evaluated_at: string | null;
+		since: string;
+	}
+
 	let commits: CommitListItem[] = $state([]);
 	let policies: Policy[] = $state([]);
 	let evaluations: PolicyEvaluation[] = $state([]);
+	let stats: PolicyStat[] = $state([]);
+	let statsLoading = $state(true);
+	let statsError = $state('');
 	let repo = $state<Repo | null>(null);
 	let repoName = $state('');
 	let loading = $state(true);
@@ -111,9 +129,68 @@
 		await Promise.all([
 			loadRepo().then(() => loadCommits()),
 			loadPolicies(),
-			loadEvaluations()
+			loadEvaluations(),
+			loadStats()
 		]);
 	});
+
+	async function loadStats() {
+		statsLoading = true;
+		statsError = '';
+		try {
+			stats = await api.get<PolicyStat[]>(
+				`/api/v1/orgs/${slug}/repos/${repoId}/policy-stats`
+			);
+		} catch (err) {
+			statsError = err instanceof Error ? err.message : 'Failed to load policy stats';
+		} finally {
+			statsLoading = false;
+		}
+	}
+
+	// Derive a status label client-side. Keeps the server endpoint pure
+	// (raw counts only); tuning heuristics here is cheap.
+	function ruleStatus(s: PolicyStat): { label: string; style: string; hint: string } {
+		if (!s.enabled) {
+			return {
+				label: 'disabled',
+				style: 'background: rgba(148,163,184,0.12); color: #94a3b8; border: 1px solid rgba(148,163,184,0.25)',
+				hint: 'Rule is disabled; it is not evaluated.'
+			};
+		}
+		if (s.total === 0) {
+			return {
+				label: 'silent',
+				style: 'background: rgba(148,163,184,0.12); color: #94a3b8; border: 1px solid rgba(148,163,184,0.25)',
+				hint: 'No evaluations in the window. The condition may be misconfigured (typo in tool name, unreachable file pattern) or no pushes yet.'
+			};
+		}
+		const failRate = s.fail_count / s.total;
+		if (failRate >= 0.5) {
+			return {
+				label: 'noisy',
+				style: 'background: rgba(240,101,101,0.12); color: #f06565; border: 1px solid rgba(240,101,101,0.25)',
+				hint: `Fails on ${Math.round(failRate * 100)}% of evaluations. Consider loosening the rule or training the team.`
+			};
+		}
+		if (s.fail_count === 0 && s.pass_count > 0 && s.skip_count === 0) {
+			return {
+				label: 'always-pass',
+				style: 'background: rgba(246,177,68,0.10); color: #f6b144; border: 1px solid rgba(246,177,68,0.25)',
+				hint: 'Never failed — the rule may be tautological and not providing enforcement value.'
+			};
+		}
+		return {
+			label: 'active',
+			style: 'background: rgba(34,197,94,0.12); color: #22c55e; border: 1px solid rgba(34,197,94,0.25)',
+			hint: 'Rule is evaluating regularly and showing a mix of outcomes.'
+		};
+	}
+
+	function passRate(s: PolicyStat): string {
+		if (s.total === 0) return '-';
+		return `${Math.round((s.pass_count / s.total) * 100)}%`;
+	}
 
 	async function loadRepo() {
 		try {
@@ -512,6 +589,60 @@
 											Delete
 										</Button>
 									{/if}
+								</Table.Cell>
+							</Table.Row>
+						{/each}
+					</Table.Body>
+				</Table.Root>
+			{/if}
+		</div>
+	</div>
+
+	<!-- Rule Health Section -->
+	<div class="border-border overflow-hidden rounded-lg border">
+		<div class="bg-muted/30 flex items-center justify-between px-4 py-3">
+			<span class="text-sm font-semibold">Rule Health <span class="text-muted-foreground text-xs font-normal">(last 30 days)</span></span>
+			<Button size="sm" variant="outline" onclick={loadStats}>Refresh</Button>
+		</div>
+		<div class="p-4">
+			{#if statsLoading}
+				<div class="text-muted-foreground flex items-center justify-center gap-2 py-8 text-sm">
+					<span class="inline-block h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent"></span>
+					Loading...
+				</div>
+			{:else if statsError}
+				<p class="text-destructive">{statsError}</p>
+			{:else if stats.length === 0}
+				<p class="text-muted-foreground text-sm">No rules defined for this repo yet.</p>
+			{:else}
+				<Table.Root>
+					<Table.Header>
+						<Table.Row>
+							<Table.Head class="text-xs">Rule</Table.Head>
+							<Table.Head class="text-xs">Status</Table.Head>
+							<Table.Head class="text-xs text-right">Total</Table.Head>
+							<Table.Head class="text-xs text-right">Pass rate</Table.Head>
+							<Table.Head class="text-xs text-right">Fails</Table.Head>
+							<Table.Head class="text-xs text-right">Skips</Table.Head>
+							<Table.Head class="text-xs">Last seen</Table.Head>
+						</Table.Row>
+					</Table.Header>
+					<Table.Body>
+						{#each stats as s}
+							{@const st = ruleStatus(s)}
+							<Table.Row class="hover:bg-muted/40 transition-colors">
+								<Table.Cell class="text-xs font-medium">{s.policy_name}</Table.Cell>
+								<Table.Cell class="text-xs">
+									<span class="rounded-full px-2 py-0.5 text-[10px]" style={st.style} title={st.hint}>
+										{st.label}
+									</span>
+								</Table.Cell>
+								<Table.Cell class="text-xs text-right font-mono">{s.total}</Table.Cell>
+								<Table.Cell class="text-xs text-right font-mono">{passRate(s)}</Table.Cell>
+								<Table.Cell class="text-xs text-right font-mono">{s.fail_count || '-'}</Table.Cell>
+								<Table.Cell class="text-xs text-right font-mono">{s.skip_count || '-'}</Table.Cell>
+								<Table.Cell class="text-xs whitespace-nowrap text-muted-foreground">
+									{s.last_evaluated_at ? formatDate(s.last_evaluated_at) : 'never'}
 								</Table.Cell>
 							</Table.Row>
 						{/each}

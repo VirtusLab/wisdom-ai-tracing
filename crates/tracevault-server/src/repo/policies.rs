@@ -4,6 +4,11 @@ use uuid::Uuid;
 
 use crate::error::AppError;
 
+/// How long policy_evaluations rows are kept before the nightly sweep
+/// drops them. Matches the default `since` window on the stats endpoint
+/// times three so dashboards never show a partial window.
+pub const POLICY_EVAL_RETENTION_DAYS: i64 = 90;
+
 pub struct PolicyRow {
     pub id: Uuid,
     pub org_id: Uuid,
@@ -31,6 +36,21 @@ pub struct PolicyEvaluationRow {
     pub source: String,
     pub actor_id: Option<Uuid>,
     pub evaluated_at: DateTime<Utc>,
+}
+
+#[derive(Debug)]
+pub struct PolicyStatsRow {
+    pub policy_id: Uuid,
+    pub policy_name: String,
+    pub enabled: bool,
+    pub action: String,
+    pub total: i64,
+    pub pass_count: i64,
+    pub fail_count: i64,
+    pub skip_count: i64,
+    pub warn_count: i64,
+    pub last_evaluated_at: Option<DateTime<Utc>>,
+    pub first_evaluated_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Default)]
@@ -237,6 +257,88 @@ impl PolicyRepo {
         .await?;
 
         Ok(rows)
+    }
+
+    /// Aggregated per-rule stats for a repo over a time window. LEFT JOINs
+    /// from policies so rules with zero evaluations still appear (useful for
+    /// surfacing "silent" rules — no hits at all means the condition may
+    /// be misconfigured).
+    pub async fn policy_stats(
+        pool: &PgPool,
+        org_id: Uuid,
+        repo_id: Uuid,
+        since: DateTime<Utc>,
+    ) -> Result<Vec<PolicyStatsRow>, AppError> {
+        let rows = sqlx::query_as::<
+            _,
+            (
+                Uuid,
+                String,
+                bool,
+                String,
+                i64,
+                i64,
+                i64,
+                i64,
+                i64,
+                Option<DateTime<Utc>>,
+                Option<DateTime<Utc>>,
+            ),
+        >(
+            "SELECT
+                 p.id,
+                 p.name,
+                 p.enabled,
+                 p.action,
+                 COUNT(pe.id)                                       AS total,
+                 COUNT(*) FILTER (WHERE pe.result = 'pass')         AS pass_count,
+                 COUNT(*) FILTER (WHERE pe.result = 'fail')         AS fail_count,
+                 COUNT(*) FILTER (WHERE pe.result = 'skip')         AS skip_count,
+                 COUNT(*) FILTER (WHERE pe.result = 'warn')         AS warn_count,
+                 MAX(pe.evaluated_at)                               AS last_evaluated_at,
+                 MIN(pe.evaluated_at)                               AS first_evaluated_at
+             FROM policies p
+             LEFT JOIN policy_evaluations pe
+               ON pe.policy_id = p.id AND pe.evaluated_at >= $3
+             WHERE p.org_id = $1 AND (p.repo_id = $2 OR p.repo_id IS NULL)
+             GROUP BY p.id, p.name, p.enabled, p.action
+             ORDER BY total DESC, p.name",
+        )
+        .bind(org_id)
+        .bind(repo_id)
+        .bind(since)
+        .fetch_all(pool)
+        .await?;
+
+        Ok(rows
+            .into_iter()
+            .map(|r| PolicyStatsRow {
+                policy_id: r.0,
+                policy_name: r.1,
+                enabled: r.2,
+                action: r.3,
+                total: r.4,
+                pass_count: r.5,
+                fail_count: r.6,
+                skip_count: r.7,
+                warn_count: r.8,
+                last_evaluated_at: r.9,
+                first_evaluated_at: r.10,
+            })
+            .collect())
+    }
+
+    /// Delete evaluation rows older than `cutoff`. Returns rows affected.
+    /// Called from the daily retention sweep.
+    pub async fn purge_evaluations_older_than(
+        pool: &PgPool,
+        cutoff: DateTime<Utc>,
+    ) -> Result<u64, sqlx::Error> {
+        let result = sqlx::query("DELETE FROM policy_evaluations WHERE evaluated_at < $1")
+            .bind(cutoff)
+            .execute(pool)
+            .await?;
+        Ok(result.rows_affected())
     }
 
     /// List recent policy evaluations for a repo with optional filters.

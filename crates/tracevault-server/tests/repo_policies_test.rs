@@ -317,3 +317,210 @@ async fn evaluation_row_survives_policy_delete(pool: sqlx::PgPool) {
     assert!(rows[0].policy_id.is_none());
     assert_eq!(rows[0].policy_name, "will-be-deleted");
 }
+
+#[sqlx::test(migrations = "./migrations")]
+async fn stats_aggregate_and_include_silent_rules(pool: sqlx::PgPool) {
+    use chrono::Utc;
+
+    let org_id = common::seed_org(&pool).await;
+    let repo_id = common::seed_repo(&pool, org_id).await;
+
+    // Rule A: has a mix of results.
+    let (rule_a, _, _) = PolicyRepo::create(
+        &pool,
+        org_id,
+        repo_id,
+        "has-evals",
+        "",
+        &json!({"type": "TraceCompleteness"}),
+        "warn",
+        "medium",
+        true,
+    )
+    .await
+    .unwrap();
+
+    // Rule B: zero evaluations — must still appear in stats ("silent rule").
+    PolicyRepo::create(
+        &pool,
+        org_id,
+        repo_id,
+        "silent",
+        "",
+        &json!({"type": "TraceCompleteness"}),
+        "warn",
+        "low",
+        true,
+    )
+    .await
+    .unwrap();
+
+    for result in ["pass", "pass", "pass", "fail", "skip"] {
+        PolicyRepo::insert_evaluation(
+            &pool,
+            org_id,
+            repo_id,
+            rule_a,
+            "has-evals",
+            None,
+            None,
+            result,
+            "warn",
+            "",
+            "cli_check",
+            None,
+        )
+        .await
+        .unwrap();
+    }
+
+    let since = Utc::now() - chrono::Duration::days(30);
+    let stats = PolicyRepo::policy_stats(&pool, org_id, repo_id, since)
+        .await
+        .unwrap();
+
+    // Both rules appear, ordered by total DESC then name.
+    assert_eq!(stats.len(), 2);
+    let a = stats.iter().find(|s| s.policy_name == "has-evals").unwrap();
+    assert_eq!(a.total, 5);
+    assert_eq!(a.pass_count, 3);
+    assert_eq!(a.fail_count, 1);
+    assert_eq!(a.skip_count, 1);
+    assert!(a.last_evaluated_at.is_some());
+
+    let b = stats.iter().find(|s| s.policy_name == "silent").unwrap();
+    assert_eq!(b.total, 0);
+    assert!(b.last_evaluated_at.is_none());
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn stats_respects_since_cutoff(pool: sqlx::PgPool) {
+    use chrono::Utc;
+
+    let org_id = common::seed_org(&pool).await;
+    let repo_id = common::seed_repo(&pool, org_id).await;
+
+    let (rule_id, _, _) = PolicyRepo::create(
+        &pool,
+        org_id,
+        repo_id,
+        "r",
+        "",
+        &json!({"type": "TraceCompleteness"}),
+        "warn",
+        "medium",
+        true,
+    )
+    .await
+    .unwrap();
+
+    // One old row (45d ago), one recent.
+    sqlx::query(
+        "INSERT INTO policy_evaluations
+           (org_id, repo_id, policy_id, policy_name, result, action, source, evaluated_at)
+         VALUES ($1, $2, $3, 'r', 'pass', 'warn', 'cli_check', NOW() - INTERVAL '45 days')",
+    )
+    .bind(org_id)
+    .bind(repo_id)
+    .bind(rule_id)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    PolicyRepo::insert_evaluation(
+        &pool,
+        org_id,
+        repo_id,
+        rule_id,
+        "r",
+        None,
+        None,
+        "fail",
+        "warn",
+        "",
+        "cli_check",
+        None,
+    )
+    .await
+    .unwrap();
+
+    let thirty_days_ago = Utc::now() - chrono::Duration::days(30);
+    let stats = PolicyRepo::policy_stats(&pool, org_id, repo_id, thirty_days_ago)
+        .await
+        .unwrap();
+
+    // Only the recent fail should count.
+    let s = stats.iter().find(|s| s.policy_name == "r").unwrap();
+    assert_eq!(s.total, 1);
+    assert_eq!(s.fail_count, 1);
+    assert_eq!(s.pass_count, 0);
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn purge_evaluations_drops_old_rows(pool: sqlx::PgPool) {
+    use chrono::Utc;
+
+    let org_id = common::seed_org(&pool).await;
+    let repo_id = common::seed_repo(&pool, org_id).await;
+
+    let (rule_id, _, _) = PolicyRepo::create(
+        &pool,
+        org_id,
+        repo_id,
+        "r",
+        "",
+        &json!({"type": "TraceCompleteness"}),
+        "warn",
+        "medium",
+        true,
+    )
+    .await
+    .unwrap();
+
+    // Seed 3 old rows (older than cutoff) + 2 recent.
+    for _ in 0..3 {
+        sqlx::query(
+            "INSERT INTO policy_evaluations
+               (org_id, repo_id, policy_id, policy_name, result, action, source, evaluated_at)
+             VALUES ($1, $2, $3, 'r', 'pass', 'warn', 'cli_check', NOW() - INTERVAL '100 days')",
+        )
+        .bind(org_id)
+        .bind(repo_id)
+        .bind(rule_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    }
+    for _ in 0..2 {
+        PolicyRepo::insert_evaluation(
+            &pool,
+            org_id,
+            repo_id,
+            rule_id,
+            "r",
+            None,
+            None,
+            "pass",
+            "warn",
+            "",
+            "cli_check",
+            None,
+        )
+        .await
+        .unwrap();
+    }
+
+    let cutoff = Utc::now() - chrono::Duration::days(90);
+    let purged = PolicyRepo::purge_evaluations_older_than(&pool, cutoff)
+        .await
+        .unwrap();
+    assert_eq!(purged, 3);
+
+    let remaining: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM policy_evaluations WHERE repo_id = $1")
+            .bind(repo_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(remaining, 2);
+}
