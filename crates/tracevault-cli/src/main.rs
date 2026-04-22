@@ -18,11 +18,6 @@ enum Cli {
     },
     /// Show current session status
     Status,
-    /// Handle Claude Code hook event (reads JSON from stdin)
-    Hook {
-        #[arg(long)]
-        event: String,
-    },
     /// Stream hook events to server in real-time.
     /// Installed into .claude/settings.json by `tracevault init` and invoked
     /// by Claude Code on every tool event — not intended to be run manually.
@@ -44,6 +39,10 @@ enum Cli {
         /// TraceVault server URL
         #[arg(long)]
         server_url: String,
+        /// Do not try to open a browser; just print the URL.
+        /// Useful inside Docker / CI / SSH without X11.
+        #[arg(long)]
+        no_browser: bool,
     },
     /// Log out from the TraceVault server
     Logout,
@@ -80,11 +79,11 @@ async fn main() {
                 Err(e) => eprintln!("Error: {e}"),
             }
         }
-        Cli::Status => println!("tracevault status - not yet implemented"),
-        Cli::Hook { event: _ } => {
+        Cli::Status => {
             let cwd = env::current_dir().expect("Cannot determine current directory");
-            if let Err(e) = commands::hook::handle_hook_from_stdin(&cwd) {
-                eprintln!("Hook error: {e}");
+            let code = commands::status::run_status(&cwd).await;
+            if code != 0 {
+                std::process::exit(code);
             }
         }
         Cli::Stream { event } => {
@@ -119,8 +118,11 @@ async fn main() {
                 eprintln!("Stats error: {e}");
             }
         }
-        Cli::Login { server_url } => {
-            if let Err(e) = commands::login::login(&server_url).await {
+        Cli::Login {
+            server_url,
+            no_browser,
+        } => {
+            if let Err(e) = commands::login::login(&server_url, no_browser).await {
                 eprintln!("Login error: {e}");
             }
         }
