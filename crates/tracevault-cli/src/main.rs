@@ -41,6 +41,10 @@ enum Cli {
         /// TraceVault server URL
         #[arg(long)]
         server_url: String,
+        /// Do not try to open a browser; just print the URL.
+        /// Useful inside Docker / CI / SSH without X11.
+        #[arg(long)]
+        no_browser: bool,
     },
     /// Log out from the TraceVault server
     Logout,
@@ -113,8 +117,11 @@ async fn main() {
                 eprintln!("Stats error: {e}");
             }
         }
-        Cli::Login { server_url } => {
-            if let Err(e) = commands::login::login(&server_url).await {
+        Cli::Login {
+            server_url,
+            no_browser,
+        } => {
+            if let Err(e) = commands::login::login(&server_url, no_browser).await {
                 eprintln!("Login error: {e}");
             }
         }
