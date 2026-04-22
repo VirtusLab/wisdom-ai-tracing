@@ -4,7 +4,6 @@
 
 use axum::{routing::get, Router};
 use http::{Request, StatusCode};
-use std::sync::Arc;
 use tower::util::ServiceExt;
 use tower_governor::{
     governor::GovernorConfigBuilder, key_extractor::SmartIpKeyExtractor, GovernorLayer,
@@ -23,9 +22,7 @@ fn build_router() -> Router {
 
     Router::new()
         .route("/ping", get(|| async { "pong" }))
-        .layer(GovernorLayer {
-            config: Arc::new(config),
-        })
+        .layer(GovernorLayer::new(config))
 }
 
 fn req_with_ip(ip: &str) -> Request<axum::body::Body> {

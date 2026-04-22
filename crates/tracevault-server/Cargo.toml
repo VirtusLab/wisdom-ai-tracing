@@ -36,7 +36,7 @@ aes-gcm = "0.10"
 dotenvy = "0.15.7"
 urlencoding = "2"
 thiserror.workspace = true
-tower_governor = "0.6"
+tower_governor = "0.8"
 pgvector = { version = "0.4", features = ["sqlx"] }
 fastembed = { version = "4", optional = true }
 
