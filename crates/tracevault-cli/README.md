@@ -13,8 +13,8 @@ cargo install tracevault-cli
 ```sh
 tracevault init        # Initialize in a repo
 tracevault status      # Show tracing status
-tracevault check       # Run attribution checks
-tracevault push        # Push traces to server
+tracevault check       # Evaluate policies before push
+tracevault flush       # Retry any events that failed to stream live
 ```
 
 ## License

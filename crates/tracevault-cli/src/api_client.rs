@@ -9,42 +9,6 @@ pub struct ApiClient {
 }
 
 #[derive(Serialize)]
-pub struct PushTraceRequest {
-    pub repo_name: String,
-    pub commit_sha: String,
-    pub branch: Option<String>,
-    pub author: String,
-    pub model: Option<String>,
-    pub tool: Option<String>,
-    pub session_id: Option<String>,
-    pub total_tokens: Option<i64>,
-    pub input_tokens: Option<i64>,
-    pub output_tokens: Option<i64>,
-    pub estimated_cost_usd: Option<f64>,
-    pub api_calls: Option<i32>,
-    pub session_data: Option<serde_json::Value>,
-    pub transcript: Option<serde_json::Value>,
-    pub diff_data: Option<serde_json::Value>,
-    pub model_usage: Option<serde_json::Value>,
-    pub duration_ms: Option<i64>,
-    pub started_at: Option<String>,
-    pub ended_at: Option<String>,
-    pub user_messages: Option<i32>,
-    pub assistant_messages: Option<i32>,
-    pub tool_calls: Option<serde_json::Value>,
-    pub total_tool_calls: Option<i32>,
-    pub cache_read_tokens: Option<i64>,
-    pub cache_write_tokens: Option<i64>,
-    pub compactions: Option<i32>,
-    pub compaction_tokens_saved: Option<i64>,
-}
-
-#[derive(Deserialize)]
-pub struct PushTraceResponse {
-    pub commit_id: uuid::Uuid,
-}
-
-#[derive(Serialize)]
 pub struct RegisterRepoRequest {
     pub repo_name: String,
     pub github_url: Option<String>,
@@ -144,30 +108,6 @@ impl ApiClient {
             api_key: api_key.map(String::from),
             client: reqwest::Client::new(),
         }
-    }
-
-    pub async fn push_trace(
-        &self,
-        org_slug: &str,
-        req: PushTraceRequest,
-    ) -> Result<PushTraceResponse, Box<dyn Error>> {
-        let mut builder = self
-            .client
-            .post(format!("{}/api/v1/orgs/{}/traces", self.base_url, org_slug));
-
-        if let Some(key) = &self.api_key {
-            builder = builder.header("Authorization", format!("Bearer {key}"));
-        }
-
-        let resp = builder.json(&req).send().await?;
-
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let body = resp.text().await.unwrap_or_default();
-            return Err(format!("Server returned {status}: {body}").into());
-        }
-
-        Ok(resp.json().await?)
     }
 
     pub async fn register_repo(

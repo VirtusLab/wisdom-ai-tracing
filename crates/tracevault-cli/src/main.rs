@@ -30,8 +30,6 @@ enum Cli {
     },
     /// Check session policies before pushing
     Check,
-    /// Push collected traces to the TraceVault server
-    Push,
     /// Sync repo remote URL with the TraceVault server
     Sync,
     /// Show local session statistics
@@ -91,13 +89,6 @@ async fn main() {
             let cwd = env::current_dir().expect("Cannot determine current directory");
             if let Err(e) = commands::check::check_policies(&cwd).await {
                 eprintln!("Check error: {e}");
-                std::process::exit(1);
-            }
-        }
-        Cli::Push => {
-            let cwd = env::current_dir().expect("Cannot determine current directory");
-            if let Err(e) = commands::push::push_traces(&cwd).await {
-                eprintln!("Push error: {e}");
                 std::process::exit(1);
             }
         }
