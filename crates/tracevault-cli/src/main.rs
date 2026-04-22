@@ -78,7 +78,13 @@ async fn main() {
                 Err(e) => eprintln!("Error: {e}"),
             }
         }
-        Cli::Status => println!("tracevault status - not yet implemented"),
+        Cli::Status => {
+            let cwd = env::current_dir().expect("Cannot determine current directory");
+            let code = commands::status::run_status(&cwd).await;
+            if code != 0 {
+                std::process::exit(code);
+            }
+        }
         Cli::Hook { event: _ } => {
             let cwd = env::current_dir().expect("Cannot determine current directory");
             if let Err(e) = commands::hook::handle_hook_from_stdin(&cwd) {
