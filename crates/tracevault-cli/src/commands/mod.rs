@@ -1,11 +1,11 @@
 pub mod check;
 pub mod commit_push;
 pub mod flush;
-pub mod hook;
 pub mod init;
 pub mod login;
 pub mod logout;
 pub mod stats;
+pub mod status;
 pub mod stream;
 pub mod sync;
 pub mod verify;
