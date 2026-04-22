@@ -100,7 +100,41 @@ pub struct CheckResultItem {
 pub struct RepoListItem {
     pub id: uuid::Uuid,
     pub name: String,
+    #[serde(default)]
+    pub github_url: Option<String>,
+    #[serde(default)]
+    pub clone_status: Option<String>,
 }
+
+#[derive(Debug, Deserialize)]
+pub struct MeResponse {
+    #[allow(dead_code)]
+    pub user_id: uuid::Uuid,
+    pub email: String,
+    pub name: Option<String>,
+}
+
+#[derive(Debug)]
+pub enum GetMeError {
+    /// 401 — token is missing or invalid.
+    Unauthorized,
+    /// Transport-level failure (DNS, TCP, TLS, timeout).
+    Network(String),
+    /// HTTP ≥ 400 other than 401, or malformed JSON.
+    Server(String),
+}
+
+impl std::fmt::Display for GetMeError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Unauthorized => write!(f, "unauthorized (token invalid or expired)"),
+            Self::Network(m) => write!(f, "network error: {m}"),
+            Self::Server(m) => write!(f, "server error: {m}"),
+        }
+    }
+}
+
+impl std::error::Error for GetMeError {}
 
 #[derive(Debug, Serialize)]
 pub struct CiVerifyRequest {
@@ -243,6 +277,34 @@ impl ApiClient {
             return Err(format!("Server returned {status}: {body}").into());
         }
         Ok(())
+    }
+
+    /// GET /api/v1/auth/me — validates the bearer token and returns user
+    /// identity. Used by `tracevault status` to distinguish "logged out",
+    /// "expired token", and "server unreachable".
+    pub async fn get_me(&self) -> Result<MeResponse, GetMeError> {
+        let mut builder = self.client.get(format!("{}/api/v1/auth/me", self.base_url));
+        if let Some(key) = &self.api_key {
+            builder = builder.header("Authorization", format!("Bearer {key}"));
+        }
+
+        let resp = builder
+            .send()
+            .await
+            .map_err(|e| GetMeError::Network(e.to_string()))?;
+
+        let status = resp.status();
+        if status == reqwest::StatusCode::UNAUTHORIZED {
+            return Err(GetMeError::Unauthorized);
+        }
+        if !status.is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            return Err(GetMeError::Server(format!("{status}: {body}")));
+        }
+
+        resp.json::<MeResponse>()
+            .await
+            .map_err(|e| GetMeError::Server(e.to_string()))
     }
 
     pub async fn list_repos(&self, org_slug: &str) -> Result<Vec<RepoListItem>, Box<dyn Error>> {
