@@ -89,7 +89,7 @@ pub fn extract_file_change(
             let content = tool_input.get("content")?.as_str()?;
             let mut hasher = Sha256::new();
             hasher.update(content.as_bytes());
-            let hash = format!("{:x}", hasher.finalize());
+            let hash = hex::encode(hasher.finalize());
             let diff = content
                 .lines()
                 .map(|l| format!("+{l}"))
