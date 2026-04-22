@@ -1,7 +1,6 @@
 pub mod check;
 pub mod commit_push;
 pub mod flush;
-pub mod hook;
 pub mod init;
 pub mod login;
 pub mod logout;

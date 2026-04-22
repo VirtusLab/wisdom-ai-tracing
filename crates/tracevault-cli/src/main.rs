@@ -18,11 +18,6 @@ enum Cli {
     },
     /// Show current session status
     Status,
-    /// Handle Claude Code hook event (reads JSON from stdin)
-    Hook {
-        #[arg(long)]
-        event: String,
-    },
     /// Stream hook events to server in real-time
     Stream {
         #[arg(long)]
@@ -75,12 +70,6 @@ async fn main() {
             }
         }
         Cli::Status => println!("tracevault status - not yet implemented"),
-        Cli::Hook { event: _ } => {
-            let cwd = env::current_dir().expect("Cannot determine current directory");
-            if let Err(e) = commands::hook::handle_hook_from_stdin(&cwd) {
-                eprintln!("Hook error: {e}");
-            }
-        }
         Cli::Stream { event } => {
             let cwd = env::current_dir().expect("Cannot determine current directory");
             if let Err(e) = commands::stream::run_stream(&cwd, &event).await {
