@@ -4856,7 +4856,7 @@ dependencies = [
 
 [[package]]
 name = "tracevault-cli"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "chrono",
  "clap",
@@ -4875,7 +4875,7 @@ dependencies = [
 
 [[package]]
 name = "tracevault-core"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "async-trait",
  "chrono",
@@ -4921,7 +4921,7 @@ dependencies = [
 
 [[package]]
 name = "tracevault-server"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "aes-gcm",
  "argon2",

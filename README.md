@@ -195,7 +195,7 @@ tracevault check      # evaluate policies against server rules (blocks push on f
 tracevault push       # upload traces to server
 ```
 
-The command also installs the Claude Code hook configuration in `.claude/settings.json`:
+The command also installs the Claude Code hook configuration in `.claude/settings.json`. Each hook runs `tracevault stream --event <type>`, which records the event locally and pushes it to the server in real time:
 
 ```json
 {
@@ -206,7 +206,7 @@ The command also installs the Claude Code hook configuration in `.claude/setting
         "hooks": [
           {
             "type": "command",
-            "command": "tracevault hook --event pre-tool-use",
+            "command": "tracevault stream --event pre-tool-use",
             "timeout": 5
           }
         ]
@@ -218,7 +218,7 @@ The command also installs the Claude Code hook configuration in `.claude/setting
         "hooks": [
           {
             "type": "command",
-            "command": "tracevault hook --event post-tool-use",
+            "command": "tracevault stream --event post-tool-use",
             "timeout": 5
           }
         ]
@@ -231,7 +231,11 @@ The command also installs the Claude Code hook configuration in `.claude/setting
 ### 7. Authenticate and push traces
 
 ```sh
-# Log in to a TraceVault server (opens browser for device auth):
+# Log in to a TraceVault server.
+# Prints an auth URL and attempts to open it in your default browser.
+# In Docker/CI/SSH-without-X11 the browser open is skipped automatically —
+# copy the printed URL into a browser on your workstation. You can also
+# force that behaviour with `--no-browser` or `TRACEVAULT_NO_BROWSER=1`.
 tracevault login --server-url https://your-server.example.com
 
 # Push traces to the server:
@@ -328,9 +332,9 @@ export DATABASE_URL=postgres://user:password@host:5432/tracevault?sslmode=requir
 | Command | Description |
 |---------|-------------|
 | `tracevault init [--server-url URL]` | Initialize TraceVault in current repo, install pre-push hook and Claude Code hooks |
-| `tracevault login --server-url URL` | Authenticate via device auth flow (opens browser) |
+| `tracevault login --server-url URL [--no-browser]` | Authenticate via device auth flow. Prints the URL and opens a browser when possible; `--no-browser` (or a headless env) skips the auto-open. |
 | `tracevault logout` | Clear local credentials |
-| `tracevault hook --event <type>` | Handle a Claude Code hook event (reads JSON from stdin) |
+| `tracevault stream --event <type>` | Handle a Claude Code hook event (reads JSON from stdin) and stream it to the server |
 | `tracevault sync` | Sync repo metadata with the server |
 | `tracevault check` | Evaluate policies against server rules, exit non-zero if blocked |
 | `tracevault push` | Push collected traces to the server |
