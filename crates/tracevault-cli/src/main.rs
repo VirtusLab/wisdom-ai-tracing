@@ -23,7 +23,10 @@ enum Cli {
         #[arg(long)]
         event: String,
     },
-    /// Stream hook events to server in real-time
+    /// Stream hook events to server in real-time.
+    /// Installed into .claude/settings.json by `tracevault init` and invoked
+    /// by Claude Code on every tool event — not intended to be run manually.
+    #[command(hide = true)]
     Stream {
         #[arg(long)]
         event: String,
@@ -44,7 +47,10 @@ enum Cli {
     },
     /// Log out from the TraceVault server
     Logout,
-    /// Push commit metadata to server (called from post-commit hook)
+    /// Push commit metadata to the server.
+    /// Installed into .git/hooks/post-commit by `tracevault init` and
+    /// invoked by git after every commit — not intended to be run manually.
+    #[command(hide = true)]
     CommitPush,
     /// Force-sync all pending events to server
     Flush,
