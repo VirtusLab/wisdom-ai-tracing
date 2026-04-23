@@ -4,7 +4,6 @@ use axum::{
 };
 use http::Method;
 use std::net::SocketAddr;
-use std::sync::Arc;
 use tower_governor::{governor::GovernorConfigBuilder, GovernorLayer};
 use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
@@ -648,9 +647,10 @@ fn build_extensions(cfg: &config::ServerConfig) -> extensions::ExtensionRegistry
     #[cfg(not(feature = "enterprise"))]
     {
         let mut ext = extensions::community_registry();
-        ext.pricing = Arc::new(extensions::FullPricingProvider);
+        ext.pricing = std::sync::Arc::new(extensions::FullPricingProvider);
         if let Some(ref key) = cfg.encryption_key {
-            ext.encryption = Arc::new(extensions::FullEncryptionProvider::new(key.clone()));
+            ext.encryption =
+                std::sync::Arc::new(extensions::FullEncryptionProvider::new(key.clone()));
         }
         ext
     }
