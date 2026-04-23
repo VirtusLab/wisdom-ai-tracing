@@ -412,32 +412,47 @@ fn session_checks(project_root: &Path) -> Vec<Check> {
     let sessions_dir = project_root.join(".tracevault/sessions");
     if !sessions_dir.exists() {
         return vec![Check::skip(
-            "Unpushed sessions",
+            "Pending events",
             "no .tracevault/sessions/ yet (no captures recorded)",
         )];
     }
 
-    let mut total = 0usize;
-    let mut unpushed = 0usize;
+    let mut total_sessions = 0usize;
+    let mut sessions_with_pending = 0usize;
+    let mut pending_event_count = 0usize;
+
     if let Ok(read) = fs::read_dir(&sessions_dir) {
         for entry in read.flatten() {
             if !entry.file_type().map(|ft| ft.is_dir()).unwrap_or(false) {
                 continue;
             }
-            total += 1;
-            if !entry.path().join(".pushed").exists() {
-                unpushed += 1;
+            total_sessions += 1;
+            let pending_path = entry.path().join("pending.jsonl");
+            if pending_path.exists() {
+                let count = fs::read_to_string(&pending_path)
+                    .unwrap_or_default()
+                    .lines()
+                    .filter(|l| !l.trim().is_empty())
+                    .count();
+                if count > 0 {
+                    sessions_with_pending += 1;
+                    pending_event_count += count;
+                }
             }
         }
     }
 
-    let detail = format!("{unpushed} pending / {total} total");
-    vec![if unpushed == 0 {
-        Check::ok("Unpushed sessions", detail)
+    vec![if sessions_with_pending == 0 {
+        Check::ok(
+            "Pending events",
+            format!("{total_sessions} session(s), all synced"),
+        )
     } else {
         Check::warn(
-            "Unpushed sessions",
-            format!("{detail} — will be pushed on next `tracevault push` or pre-push hook"),
+            "Pending events",
+            format!(
+                "{pending_event_count} event(s) in {sessions_with_pending}/{total_sessions} session(s) — run `tracevault flush`"
+            ),
         )
     }]
 }

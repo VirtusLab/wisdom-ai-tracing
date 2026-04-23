@@ -39,25 +39,45 @@ pub async fn run_flush(project_root: &Path) -> Result<(), Box<dyn std::error::Er
             continue;
         }
 
+        let event_total = events.len();
         let mut failed_events: Vec<StreamEventRequest> = Vec::new();
 
-        for event in events {
+        for (i, mut event) in events.into_iter().enumerate() {
+            eprint!(
+                "\r  Session {} — event {}/{} ...",
+                &event.session_id[..8],
+                i + 1,
+                event_total
+            );
+            event.truncate_large_fields();
             match client.stream_event(&org_slug, &repo_id, &event).await {
                 Ok(_) => {
                     total_sent += 1;
                 }
                 Err(e) => {
-                    eprintln!(
-                        "Warning: failed to send event (session {}): {e}",
-                        event.session_id
-                    );
-                    failed_events.push(event);
-                    total_failed += 1;
+                    eprintln!();
+                    let err_str = e.to_string();
+                    if err_str.contains("413") {
+                        // Payload too large even after truncation — drop it.
+                        eprintln!(
+                            "  Warning: dropped event (session {}) — still too large after truncation",
+                            event.session_id
+                        );
+                        total_failed += 1;
+                    } else {
+                        eprintln!(
+                            "  Warning: failed to send event (session {}): {e}",
+                            event.session_id
+                        );
+                        failed_events.push(event);
+                        total_failed += 1;
+                    }
                 }
             }
         }
+        eprintln!();
 
-        // Re-enqueue failed events
+        // Re-enqueue transiently failed events (not 413s)
         if !failed_events.is_empty() {
             append_pending(&pending_path, &failed_events)?;
         }
