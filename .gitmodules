@@ -1,6 +1,8 @@
 [submodule "enterprise"]
 	path = enterprise
 	url = git@github.com:softwaremill/tracevault-enterprise.git
+	update = none
 [submodule "website"]
 	path = website
-	url = git@github.com:softwaremill/tracevault-website.git
+	url = https://github.com/softwaremill/tracevault-website.git
+	update = none

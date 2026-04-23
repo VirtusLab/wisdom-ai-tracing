@@ -79,6 +79,26 @@ pub fn is_file_modifying_tool(tool_name: &str) -> bool {
     matches!(tool_name, "Write" | "Edit" | "Bash")
 }
 
+impl StreamEventRequest {
+    /// Drop optional fields largest-first until the serialized payload is
+    /// under 512 KB. Prevents 413 errors on both real-time sends and flush.
+    pub fn truncate_large_fields(&mut self) {
+        const MAX_BYTES: usize = 512 * 1024;
+        if serde_json::to_string(self).map(|s| s.len()).unwrap_or(0) <= MAX_BYTES {
+            return;
+        }
+        self.transcript_lines = None;
+        if serde_json::to_string(self).map(|s| s.len()).unwrap_or(0) <= MAX_BYTES {
+            return;
+        }
+        self.tool_response = None;
+        if serde_json::to_string(self).map(|s| s.len()).unwrap_or(0) <= MAX_BYTES {
+            return;
+        }
+        self.tool_input = None;
+    }
+}
+
 pub fn extract_file_change(
     tool_name: &str,
     tool_input: &serde_json::Value,

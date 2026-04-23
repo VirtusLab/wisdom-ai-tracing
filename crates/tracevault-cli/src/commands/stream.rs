@@ -114,7 +114,7 @@ pub async fn run_stream(
         _ => StreamEventType::ToolUse,
     };
 
-    let req = StreamEventRequest {
+    let mut req = StreamEventRequest {
         protocol_version: 1,
         tool: Some("claude-code".to_string()),
         event_type: stream_event_type,
@@ -135,6 +135,8 @@ pub async fn run_stream(
         cwd: Some(hook_event.cwd.clone()),
         final_stats: None,
     };
+
+    req.truncate_large_fields();
 
     // 6. Resolve credentials
     let (server_url, token) = crate::api_client::resolve_credentials(project_root);

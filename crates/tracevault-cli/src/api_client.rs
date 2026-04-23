@@ -142,7 +142,10 @@ impl ApiClient {
         Self {
             base_url: base_url.trim_end_matches('/').to_string(),
             api_key: api_key.map(String::from),
-            client: reqwest::Client::new(),
+            client: reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(60))
+                .build()
+                .unwrap_or_default(),
         }
     }
 
