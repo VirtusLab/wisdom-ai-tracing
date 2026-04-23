@@ -214,17 +214,51 @@ pub async fn verify_commits(
             vec![]
         };
 
-        // Evaluate each policy
+        // Evaluate each policy and log a row per rule.
         let mut policy_results = Vec::new();
         let mut all_policies_passed = true;
+        let actor_for_log = if auth.user_id.is_nil() {
+            None
+        } else {
+            Some(auth.user_id)
+        };
 
-        for (name, condition, action, severity) in &policies {
+        for (policy_id, name, condition, action, severity) in &policies {
             let EvalOutcome { passed, details } =
                 evaluate_condition(condition, &all_tool_calls, &all_files);
-            let result_str = if passed { "pass" } else { "fail" };
+            let result_str = if !passed {
+                "fail"
+            } else if details.starts_with("Rule skipped") {
+                "skip"
+            } else {
+                "pass"
+            };
 
             if !passed {
                 all_policies_passed = false;
+            }
+
+            if let Err(e) = PolicyRepo::insert_evaluation(
+                &state.pool,
+                auth.org_id,
+                repo_id,
+                *policy_id,
+                name,
+                None,
+                Some(commit_sha),
+                result_str,
+                action,
+                &details,
+                "ci_verify",
+                actor_for_log,
+            )
+            .await
+            {
+                tracing::warn!(
+                    policy_id = %policy_id,
+                    error = %e,
+                    "failed to record policy evaluation (ci_verify)"
+                );
             }
 
             policy_results.push(PolicyResult {

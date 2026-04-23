@@ -34,6 +34,8 @@ pub struct DeviceStatusResponse {
 #[derive(Debug, Serialize)]
 pub struct CheckPoliciesRequest {
     pub sessions: Vec<SessionCheckData>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub commit_sha: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
