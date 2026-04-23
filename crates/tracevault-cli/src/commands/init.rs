@@ -48,6 +48,9 @@ pub async fn init_in_directory(
     fs::create_dir_all(config_dir.join("sessions"))?;
     fs::create_dir_all(config_dir.join("cache"))?;
 
+    // Keep all tracevault files local — update root .gitignore
+    update_root_gitignore(project_root)?;
+
     // Register repo on server if authenticated, server URL known, and git remote available
     let remote_url = git_remote_url(project_root);
     if remote_url.is_none() {
@@ -67,12 +70,6 @@ pub async fn init_in_directory(
     fs::write(
         TracevaultConfig::config_path(project_root),
         config.to_toml(),
-    )?;
-
-    // Create .tracevault/.gitignore
-    fs::write(
-        config_dir.join(".gitignore"),
-        "sessions/\ncache/\n*.local.toml\n",
     )?;
 
     // Install Claude Code hooks into .claude/settings.json
@@ -132,6 +129,37 @@ pub async fn init_in_directory(
     }
 
     Ok(())
+}
+
+fn update_root_gitignore(project_root: &Path) -> Result<(), io::Error> {
+    let path = project_root.join(".gitignore");
+    let existing = if path.exists() {
+        fs::read_to_string(&path)?
+    } else {
+        String::new()
+    };
+
+    let needed: Vec<&str> = [".tracevault/", ".claude/settings.json"]
+        .iter()
+        .copied()
+        .filter(|entry| !existing.lines().any(|line| line.trim() == *entry))
+        .collect();
+
+    if needed.is_empty() {
+        return Ok(());
+    }
+
+    let mut content = existing;
+    if !content.is_empty() && !content.ends_with('\n') {
+        content.push('\n');
+    }
+    content.push_str("\n# TraceVault — local only, do not commit\n");
+    for entry in needed {
+        content.push_str(entry);
+        content.push('\n');
+    }
+
+    fs::write(path, content)
 }
 
 fn git_repo_name(project_root: &Path) -> String {

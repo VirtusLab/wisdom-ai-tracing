@@ -67,8 +67,15 @@ async fn main() {
             match commands::init::init_in_directory(&cwd, server_url.as_deref()).await {
                 Ok(()) => {
                     println!("TraceVault initialized in {}", cwd.display());
-                    println!("Claude Code hooks installed in .claude/settings.json");
-                    println!("Git pre-push hook installed");
+                    println!("Claude Code hooks installed (.claude/settings.json)");
+                    println!("Git hooks installed (pre-push, post-commit)");
+                    println!("Added .tracevault/ and .claude/settings.json to .gitignore");
+                    println!(
+                        "Nothing needs to be committed — all TraceVault files are local only."
+                    );
+                    println!(
+                        "Other contributors run `tracevault init` to set up their own local hooks."
+                    );
                 }
                 Err(e) => eprintln!("Error: {e}"),
             }

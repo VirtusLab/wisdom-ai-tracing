@@ -43,7 +43,10 @@ async fn init_creates_directory_structure() {
     assert!(tmp.path().join(".tracevault").exists());
     assert!(tmp.path().join(".tracevault/sessions").exists());
     assert!(tmp.path().join(".tracevault/cache").exists());
-    assert!(tmp.path().join(".tracevault/.gitignore").exists());
+
+    let gitignore = fs::read_to_string(tmp.path().join(".gitignore")).unwrap();
+    assert!(gitignore.contains(".tracevault/"));
+    assert!(gitignore.contains(".claude/settings.json"));
 }
 
 #[tokio::test]
