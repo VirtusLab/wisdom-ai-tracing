@@ -10,7 +10,7 @@ use uuid::Uuid;
 use crate::error::AppError;
 use crate::extractors::OrgAuth;
 use crate::permissions::{has_permission, Permission};
-use crate::repo::policies::{PolicyEvaluationFilter, PolicyRepo};
+use crate::repo::policies::{PolicyEvaluationFilter, PolicyRepo, PolicyStatsRow};
 use crate::AppState;
 
 fn require_policy_manage(role: &str) -> Result<(), AppError> {
@@ -467,6 +467,70 @@ pub async fn list_policy_evaluations(
                 source: r.source,
                 actor_id: r.actor_id,
                 evaluated_at: r.evaluated_at,
+            })
+            .collect(),
+    ))
+}
+
+// --- Policy Stats (analytics) ---
+
+#[derive(Debug, Deserialize)]
+pub struct StatsQuery {
+    /// Count only evaluations since this cutoff. Defaults to 30 days ago.
+    pub since: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct PolicyStatsResponse {
+    pub policy_id: Uuid,
+    pub policy_name: String,
+    pub enabled: bool,
+    pub action: String,
+    pub total: i64,
+    pub pass_count: i64,
+    pub fail_count: i64,
+    pub skip_count: i64,
+    pub warn_count: i64,
+    pub last_evaluated_at: Option<DateTime<Utc>>,
+    pub first_evaluated_at: Option<DateTime<Utc>>,
+    /// Window start used by the server. Echoed back so the client can label
+    /// the dashboard ("last 30 days") without guessing.
+    pub since: DateTime<Utc>,
+}
+
+/// GET /api/v1/orgs/{slug}/repos/{repo_id}/policy-stats
+pub async fn policy_stats(
+    State(state): State<AppState>,
+    auth: OrgAuth,
+    Path((_slug, repo_id)): Path<(String, Uuid)>,
+    Query(q): Query<StatsQuery>,
+) -> Result<Json<Vec<PolicyStatsResponse>>, AppError> {
+    if !PolicyRepo::repo_belongs_to_org(&state.pool, repo_id, auth.org_id).await? {
+        return Err(AppError::NotFound("Repo not found".into()));
+    }
+
+    let since = q
+        .since
+        .unwrap_or_else(|| Utc::now() - chrono::Duration::days(30));
+
+    let rows: Vec<PolicyStatsRow> =
+        PolicyRepo::policy_stats(&state.pool, auth.org_id, repo_id, since).await?;
+
+    Ok(Json(
+        rows.into_iter()
+            .map(|r| PolicyStatsResponse {
+                policy_id: r.policy_id,
+                policy_name: r.policy_name,
+                enabled: r.enabled,
+                action: r.action,
+                total: r.total,
+                pass_count: r.pass_count,
+                fail_count: r.fail_count,
+                skip_count: r.skip_count,
+                warn_count: r.warn_count,
+                last_evaluated_at: r.last_evaluated_at,
+                first_evaluated_at: r.first_evaluated_at,
+                since,
             })
             .collect(),
     ))

@@ -153,6 +153,37 @@ async fn main() {
         });
     }
 
+    // Daily retention sweep for policy_evaluations. The table gets a row
+    // per (rule × push) so it grows linearly with push volume × rule count —
+    // 90 days keeps dashboards meaningful without unbounded growth. Bump
+    // the constant (POLICY_EVAL_RETENTION_DAYS in repo/policies.rs) if you
+    // need longer history.
+    {
+        let pool = pool.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(86400));
+            interval.tick().await; // skip immediate tick
+            loop {
+                interval.tick().await;
+                let cutoff = chrono::Utc::now()
+                    - chrono::Duration::days(
+                        tracevault_server::repo::policies::POLICY_EVAL_RETENTION_DAYS,
+                    );
+                match tracevault_server::repo::policies::PolicyRepo::purge_evaluations_older_than(
+                    &pool, cutoff,
+                )
+                .await
+                {
+                    Ok(n) if n > 0 => {
+                        tracing::info!("Purged {n} policy_evaluations rows older than {cutoff}")
+                    }
+                    Ok(_) => {}
+                    Err(e) => tracing::warn!("policy_evaluations retention sweep failed: {e}"),
+                }
+            }
+        });
+    }
+
     let embedding_service: Option<
         std::sync::Arc<tracevault_server::service::chat_embeddings::EmbeddingService>,
     > = if extensions.features.chat_search {
@@ -406,6 +437,10 @@ async fn main() {
         .route(
             "/api/v1/orgs/{slug}/repos/{repo_id}/policy-evaluations",
             get(api::policies::list_policy_evaluations),
+        )
+        .route(
+            "/api/v1/orgs/{slug}/repos/{repo_id}/policy-stats",
+            get(api::policies::policy_stats),
         )
         .route(
             "/api/v1/orgs/{slug}/policies/{id}",
