@@ -32,19 +32,10 @@ fn is_headless() -> bool {
 }
 
 fn print_url_banner(url: &str) {
-    // Make the URL impossible to miss. Plain ASCII so it renders the same
-    // in every terminal, including dumb ones.
-    let bar = "─".repeat(70);
     println!();
-    println!("┌{bar}┐");
-    println!(
-        "│ Open this URL in a browser to finish logging in:{:>20} │",
-        ""
-    );
-    println!("│{:^70}│", "");
-    println!("│ {url:<68} │");
-    println!("│{:^70}│", "");
-    println!("└{bar}┘");
+    println!("  Open this URL in a browser to finish logging in:");
+    println!();
+    println!("  {url}");
     println!();
 }
 
