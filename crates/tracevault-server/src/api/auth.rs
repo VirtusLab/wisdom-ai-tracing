@@ -49,6 +49,18 @@ pub async fn register(
     State(state): State<AppState>,
     Json(req): Json<RegisterRequest>,
 ) -> Result<(StatusCode, Json<RegisterResponse>), AppError> {
+    // Public registration is only allowed to bootstrap the first user.
+    // Once any user exists, further orgs must be created via POST /api/v1/orgs
+    // by an authenticated user.
+    let (user_count,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM users")
+        .fetch_one(&state.pool)
+        .await?;
+    if user_count > 0 {
+        return Err(AppError::Forbidden(
+            "Public registration is disabled. Ask an administrator for an invite.".into(),
+        ));
+    }
+
     if let Err(reason) = crate::password_policy::validate(&req.password) {
         return Err(AppError::BadRequest(reason.into()));
     }
