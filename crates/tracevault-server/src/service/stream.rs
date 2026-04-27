@@ -1,8 +1,5 @@
 use tracevault_core::software::extract_software;
-use tracevault_core::streaming::{
-    extract_file_change, is_file_modifying_tool, StreamEventRequest, StreamEventResponse,
-    StreamEventType,
-};
+use tracevault_core::streaming::{StreamEventRequest, StreamEventResponse, StreamEventType};
 use uuid::Uuid;
 
 use crate::error::AppError;
@@ -36,6 +33,9 @@ impl StreamService {
         } else {
             Some("claude-code".to_string())
         };
+
+        let agent_name = tool.as_deref().unwrap_or("claude-code");
+        let adapter = state.agent_registry.get(agent_name);
 
         // 3. Upsert session
         let session_db_id = SessionRepo::upsert(
@@ -84,33 +84,58 @@ impl StreamService {
                         continue;
                     }
 
-                    // Extract token usage from assistant messages
-                    if let Some(msg) = line.get("message") {
-                        if let Some(usage) = msg.get("usage") {
-                            batch_input += usage
-                                .get("input_tokens")
-                                .and_then(|v| v.as_i64())
-                                .unwrap_or(0);
-                            batch_output += usage
-                                .get("output_tokens")
-                                .and_then(|v| v.as_i64())
-                                .unwrap_or(0);
-                            batch_cache_read += usage
-                                .get("cache_read_input_tokens")
-                                .and_then(|v| v.as_i64())
-                                .unwrap_or(0);
-                            batch_cache_write += usage
-                                .get("cache_creation_input_tokens")
-                                .and_then(|v| v.as_i64())
-                                .unwrap_or(0);
-                        }
-                        if detected_model.is_none() {
-                            detected_model =
-                                msg.get("model").and_then(|v| v.as_str()).map(String::from);
+                    // Extract file changes from transcript chunks (e.g. Codex apply_patch).
+                    // Each adapter decides which chunk types contain file modifications.
+                    let transcript_file_changes =
+                        adapter.extract_file_changes_from_transcript(line);
+                    for change in transcript_file_changes {
+                        let tool_name = line
+                            .get("payload")
+                            .and_then(|p| p.get("name"))
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("unknown");
+                        let event_id = EventRepo::insert_tool_event(
+                            &state.pool,
+                            &crate::repo::events::InsertToolEvent {
+                                session_id: session_db_id,
+                                event_index: chunk_index,
+                                tool_name: Some(tool_name.to_string()),
+                                tool_input: line.get("payload").cloned(),
+                                tool_response: None,
+                                tool_is_error: None,
+                                timestamp: Some(req.timestamp),
+                            },
+                        )
+                        .await?;
+                        if let Some(eid) = event_id {
+                            EventRepo::insert_file_change(
+                                &state.pool,
+                                &InsertFileChange {
+                                    session_id: session_db_id,
+                                    event_id: eid,
+                                    file_path: change.file_path,
+                                    change_type: change.change_type,
+                                    diff_text: change.diff_text,
+                                    content_hash: change.content_hash,
+                                    timestamp: Some(req.timestamp),
+                                },
+                            )
+                            .await?;
                         }
                         if let Some(id) = msg.get("id").and_then(|v| v.as_str()) {
                             message_ids.push(id.to_string());
                         }
+                    }
+
+                    // Extract token usage via adapter
+                    if let Some(usage) = adapter.extract_token_usage(line) {
+                        batch_input += usage.input_tokens;
+                        batch_output += usage.output_tokens;
+                        batch_cache_read += usage.cache_read_tokens;
+                        batch_cache_write += usage.cache_write_tokens;
+                    }
+                    if detected_model.is_none() {
+                        detected_model = adapter.extract_model(line);
                     }
                 }
 
@@ -137,7 +162,7 @@ impl StreamService {
                     || batch_output > 0
                     || batch_cache_read > 0
                     || batch_cache_write > 0;
-                if has_tokens {
+                if has_tokens || detected_model.is_some() {
                     let model_name = detected_model.as_deref().unwrap_or("unknown");
                     // input_tokens from the API includes cache_read and cache_write,
                     // subtract to get fresh (non-cached) input only
@@ -182,7 +207,7 @@ impl StreamService {
                 }
 
                 let tool_name = req.tool_name.as_deref().unwrap_or("");
-                let store_response = is_file_modifying_tool(tool_name);
+                let store_response = adapter.is_file_modifying(tool_name);
 
                 let inserted_id = EventRepo::insert_tool_event(
                     &state.pool,
@@ -209,9 +234,10 @@ impl StreamService {
                     event_db_id = Some(eid);
 
                     // Extract file changes for file-modifying tools
-                    if is_file_modifying_tool(tool_name) {
+                    if adapter.is_file_modifying(tool_name) {
                         if let Some(ref tool_input) = req.tool_input {
-                            if let Some(change) = extract_file_change(tool_name, tool_input) {
+                            let file_changes = adapter.extract_file_changes(tool_name, tool_input);
+                            for change in file_changes {
                                 EventRepo::insert_file_change(
                                     &state.pool,
                                     &InsertFileChange {

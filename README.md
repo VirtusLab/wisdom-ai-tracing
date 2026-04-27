@@ -6,6 +6,8 @@
 
 AI code governance platform for enterprises. Captures what AI coding agents do in your repos — which files they touch, how many tokens they burn, what tools they call, what percentage of code is AI-generated — then enforces policies and produces tamper-evident audit trails for regulatory compliance.
 
+Supports **Claude Code**, **Codex CLI**, and is extensible to other agents via the AgentAdapter architecture.
+
 Built for financial institutions and regulated industries where AI-generated code needs the same audit rigor as human-written code.
 
 [Learn more at VirtusLab](https://virtuslab.com/services/tracevault)
@@ -67,7 +69,7 @@ See exactly what AI wrote, line by line. The code browser overlays AI attributio
 Three Rust crates in a Cargo workspace:
 
 - **tracevault-core** — domain types, policy engine (7 condition types), attribution engine (tree-sitter based), secret redactor
-- **tracevault-cli** — CLI binary that hooks into Claude Code, captures traces locally, checks policies, pushes to server
+- **tracevault-cli** — CLI binary that hooks into Claude Code and Codex CLI, captures traces locally, checks policies, pushes to server
 - **tracevault-server** — axum HTTP server backed by PostgreSQL with Ed25519 signing, audit logging, RBAC, code browser
 
 Plus a SvelteKit web dashboard and a GitHub Action for CI verification.
@@ -360,6 +362,19 @@ Actions: **Block push** (exit non-zero, prevents `git push`) or **Warn** (logs b
 
 Scope: **Session** (evaluate all tool calls in the session) or **Verification phase** (evaluate only tools called after `tracevault verify-start`).
 
+## Using with Codex CLI
+
+[Codex CLI](https://github.com/openai/codex) (OpenAI's coding agent) is also supported. Initialize with the `--agent codex` flag to install Codex hooks:
+
+```sh
+npm install -g @openai/codex
+cd /path/to/your/repo
+tracevault login --server-url https://your-tracevault-server.example.com
+tracevault init --agent codex
+```
+
+This installs hooks in `.codex/hooks.json` in addition to the Claude Code hooks. Codex sessions are traced including transcript parsing, token usage, and file changes via `apply_patch`. The session detail view shows a Codex badge to distinguish agent types.
+
 ## Keys & Secrets
 
 ### Encryption key (`TRACEVAULT_ENCRYPTION_KEY`)
@@ -412,10 +427,10 @@ export DATABASE_URL=postgres://user:password@host:5432/tracevault?sslmode=requir
 
 | Command | Description |
 |---------|-------------|
-| `tracevault init [--server-url URL] [--claude-settings shared\|local]` | Initialize Visdom Trace in current repo, install pre-push hook and Claude Code hooks. `--claude-settings` chooses between `.claude/settings.json` (default) and `.claude/settings.local.json`; prompts interactively if omitted on a TTY |
+| `tracevault init [--server-url URL] [--claude-settings shared\|local] [--agent <name>]...` | Initialize Visdom Trace in current repo, install pre-push hook and agent hooks (Claude Code by default, repeat `--agent` to add others e.g. `codex`). `--claude-settings` chooses between `.claude/settings.json` (default) and `.claude/settings.local.json`; prompts interactively if omitted on a TTY |
 | `tracevault login --server-url URL [--no-browser]` | Authenticate via device auth flow. Prints the URL and opens a browser when possible; `--no-browser` (or a headless env) skips the auto-open. |
 | `tracevault logout` | Clear local credentials |
-| `tracevault stream --event <type>` | Handle a Claude Code hook event (reads JSON from stdin) and stream it to the server |
+| `tracevault stream --event <type> [--agent <name>]` | Handle an agent hook event (reads JSON from stdin) and stream it to the server (`--agent`: `claude-code` (default), `codex`) |
 | `tracevault sync` | Sync repo metadata with the server |
 | `tracevault check` | Evaluate policies against server rules, exit non-zero if blocked |
 | `tracevault verify-start [--session-id ID]` | Open a verification phase. Call this when work is complete and you are ready to run pre-push validation tools. Verification-phase-scoped policies only evaluate tools called after this point. Calling it again invalidates the previous phase. |

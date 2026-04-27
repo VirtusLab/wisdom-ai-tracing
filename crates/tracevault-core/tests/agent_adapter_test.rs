@@ -1,0 +1,417 @@
+use serde_json::json;
+use tracevault_core::agent_adapter::AgentAdapterRegistry;
+use tracevault_core::streaming::StreamEventType;
+
+#[test]
+fn registry_unknown_agent_returns_default() {
+    let registry = AgentAdapterRegistry::new();
+    let adapter = registry.get("unknown-agent");
+    assert_eq!(adapter.name(), "default");
+}
+
+#[test]
+fn default_adapter_extract_token_usage_returns_none() {
+    let registry = AgentAdapterRegistry::new();
+    let adapter = registry.get("nope");
+    let chunk =
+        serde_json::json!({"type": "assistant", "message": {"usage": {"input_tokens": 100}}});
+    assert!(adapter.extract_token_usage(&chunk).is_none());
+}
+
+#[test]
+fn registry_dispatches_to_claude_code() {
+    let registry = AgentAdapterRegistry::new();
+    let adapter = registry.get("claude-code");
+    assert_eq!(adapter.name(), "claude-code");
+}
+
+#[test]
+fn claude_code_map_event_types() {
+    let registry = AgentAdapterRegistry::new();
+    let adapter = registry.get("claude-code");
+    assert!(matches!(
+        adapter.map_event_type("SessionStart"),
+        StreamEventType::SessionStart
+    ));
+    assert!(matches!(
+        adapter.map_event_type("Notification"),
+        StreamEventType::SessionStart
+    ));
+    assert!(matches!(
+        adapter.map_event_type("Stop"),
+        StreamEventType::SessionEnd
+    ));
+    assert!(matches!(
+        adapter.map_event_type("PostToolUse"),
+        StreamEventType::ToolUse
+    ));
+}
+
+#[test]
+fn claude_code_extract_file_change_write() {
+    let registry = AgentAdapterRegistry::new();
+    let adapter = registry.get("claude-code");
+    let input = json!({"file_path": "src/main.rs", "content": "fn main() {}"});
+    let changes = adapter.extract_file_changes("Write", &input);
+    assert_eq!(changes.len(), 1);
+    assert_eq!(changes[0].file_path, "src/main.rs");
+    assert_eq!(changes[0].change_type, "create");
+    assert!(changes[0].content_hash.is_some());
+}
+
+#[test]
+fn claude_code_extract_file_change_edit() {
+    let registry = AgentAdapterRegistry::new();
+    let adapter = registry.get("claude-code");
+    let input = json!({"file_path": "src/lib.rs", "old_string": "old", "new_string": "new"});
+    let changes = adapter.extract_file_changes("Edit", &input);
+    assert_eq!(changes.len(), 1);
+    assert_eq!(changes[0].change_type, "edit");
+}
+
+#[test]
+fn claude_code_read_returns_empty() {
+    let registry = AgentAdapterRegistry::new();
+    let adapter = registry.get("claude-code");
+    let input = json!({"file_path": "src/lib.rs"});
+    assert!(adapter.extract_file_changes("Read", &input).is_empty());
+}
+
+#[test]
+fn claude_code_is_file_modifying() {
+    let registry = AgentAdapterRegistry::new();
+    let adapter = registry.get("claude-code");
+    assert!(adapter.is_file_modifying("Write"));
+    assert!(adapter.is_file_modifying("Edit"));
+    assert!(adapter.is_file_modifying("Bash"));
+    assert!(!adapter.is_file_modifying("Read"));
+}
+
+#[test]
+fn claude_code_extract_token_usage() {
+    let registry = AgentAdapterRegistry::new();
+    let adapter = registry.get("claude-code");
+    let chunk = json!({
+        "type": "assistant",
+        "message": {
+            "usage": {
+                "input_tokens": 1000,
+                "output_tokens": 200,
+                "cache_read_input_tokens": 500,
+                "cache_creation_input_tokens": 100
+            }
+        }
+    });
+    let usage = adapter.extract_token_usage(&chunk).unwrap();
+    assert_eq!(usage.input_tokens, 1000);
+    assert_eq!(usage.output_tokens, 200);
+    assert_eq!(usage.cache_read_tokens, 500);
+    assert_eq!(usage.cache_write_tokens, 100);
+}
+
+#[test]
+fn claude_code_extract_model() {
+    let registry = AgentAdapterRegistry::new();
+    let adapter = registry.get("claude-code");
+    let chunk = json!({"type": "assistant", "message": {"model": "claude-opus-4-6"}});
+    assert_eq!(
+        adapter.extract_model(&chunk).as_deref(),
+        Some("claude-opus-4-6")
+    );
+}
+
+#[test]
+fn claude_code_parse_assistant_record() {
+    let registry = AgentAdapterRegistry::new();
+    let adapter = registry.get("claude-code");
+    let chunk = json!({
+        "type": "assistant",
+        "timestamp": "2026-03-23T13:17:16Z",
+        "message": {
+            "model": "claude-opus-4-6",
+            "content": [
+                {"type": "text", "text": "Hello world"},
+                {"type": "tool_use", "name": "Write", "input": {}}
+            ],
+            "usage": {
+                "input_tokens": 100, "output_tokens": 50,
+                "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0
+            }
+        }
+    });
+    let record = adapter.parse_transcript_record(&chunk).unwrap();
+    assert_eq!(record.record_type, "assistant");
+    assert_eq!(record.model.as_deref(), Some("claude-opus-4-6"));
+    assert!(record.text.as_ref().unwrap().contains("Hello world"));
+    assert!(record.content_types.contains(&"text".to_string()));
+    assert!(record.content_types.contains(&"tool_use".to_string()));
+    assert_eq!(record.tool_name.as_deref(), Some("Write"));
+    assert_eq!(record.raw_input_tokens, Some(100));
+}
+
+#[test]
+fn claude_code_parse_user_record() {
+    let registry = AgentAdapterRegistry::new();
+    let adapter = registry.get("claude-code");
+    let chunk = json!({"type": "user", "timestamp": "2026-03-23T13:17:00Z", "message": {"content": "Fix the bug"}});
+    let record = adapter.parse_transcript_record(&chunk).unwrap();
+    assert_eq!(record.record_type, "user");
+    assert_eq!(record.text.as_deref(), Some("Fix the bug"));
+}
+
+#[test]
+fn claude_code_parse_user_tool_result() {
+    let registry = AgentAdapterRegistry::new();
+    let adapter = registry.get("claude-code");
+    let chunk = json!({"type": "user", "toolUseResult": {"file": {"filePath": "src/main.rs"}}});
+    let record = adapter.parse_transcript_record(&chunk).unwrap();
+    assert_eq!(record.tool_name.as_deref(), Some("Read: src/main.rs"));
+}
+
+#[test]
+fn claude_code_parse_progress_record() {
+    let registry = AgentAdapterRegistry::new();
+    let adapter = registry.get("claude-code");
+    let chunk =
+        json!({"type": "progress", "data": {"hookName": "tracevault", "hookEvent": "PostToolUse"}});
+    let record = adapter.parse_transcript_record(&chunk).unwrap();
+    assert_eq!(record.record_type, "progress");
+    assert_eq!(record.text.as_deref(), Some("PostToolUse: tracevault"));
+}
+
+#[test]
+fn claude_code_parse_system_record() {
+    let registry = AgentAdapterRegistry::new();
+    let adapter = registry.get("claude-code");
+    let chunk = json!({"type": "system", "subtype": "turn_duration", "durationMs": 5000.0});
+    let record = adapter.parse_transcript_record(&chunk).unwrap();
+    assert_eq!(record.record_type, "system");
+    assert!(record.text.as_ref().unwrap().contains("5.0s"));
+}
+
+#[test]
+fn codex_map_event_types() {
+    let registry = AgentAdapterRegistry::new();
+    let adapter = registry.get("codex");
+    assert!(matches!(
+        adapter.map_event_type("SessionStart"),
+        StreamEventType::SessionStart
+    ));
+    assert!(matches!(
+        adapter.map_event_type("Stop"),
+        StreamEventType::SessionEnd
+    ));
+    assert!(matches!(
+        adapter.map_event_type("PostToolUse"),
+        StreamEventType::ToolUse
+    ));
+}
+
+#[test]
+fn codex_extract_token_usage() {
+    let registry = AgentAdapterRegistry::new();
+    let adapter = registry.get("codex");
+    let chunk = json!({"type": "event_msg", "payload": {"type": "token_count", "info": {"last_token_usage": {"input_tokens": 2000, "output_tokens": 300, "cached_input_tokens": 1500}}}});
+    let usage = adapter.extract_token_usage(&chunk).unwrap();
+    assert_eq!(usage.input_tokens, 2000);
+    assert_eq!(usage.output_tokens, 300);
+    assert_eq!(usage.cache_read_tokens, 1500);
+    assert_eq!(usage.cache_write_tokens, 0);
+}
+
+#[test]
+fn codex_extract_token_usage_non_token_chunk_returns_none() {
+    let registry = AgentAdapterRegistry::new();
+    let adapter = registry.get("codex");
+    let chunk = json!({"type": "event_msg", "payload": {"type": "agent_message"}});
+    assert!(adapter.extract_token_usage(&chunk).is_none());
+}
+
+#[test]
+fn codex_extract_model() {
+    let registry = AgentAdapterRegistry::new();
+    let adapter = registry.get("codex");
+    let chunk = json!({"type": "turn_context", "payload": {"model": "codex-mini-latest"}});
+    assert_eq!(
+        adapter.extract_model(&chunk).as_deref(),
+        Some("codex-mini-latest")
+    );
+}
+
+#[test]
+fn codex_extract_model_non_turn_context_returns_none() {
+    let registry = AgentAdapterRegistry::new();
+    let adapter = registry.get("codex");
+    let chunk = json!({"type": "event_msg", "payload": {"type": "agent_message"}});
+    assert!(adapter.extract_model(&chunk).is_none());
+}
+
+#[test]
+fn codex_parse_agent_message() {
+    let registry = AgentAdapterRegistry::new();
+    let adapter = registry.get("codex");
+    let chunk = json!({"type": "event_msg", "payload": {"type": "agent_message", "content": "I'll fix that bug now."}});
+    let record = adapter.parse_transcript_record(&chunk).unwrap();
+    assert_eq!(record.record_type, "assistant");
+    assert_eq!(record.text.as_deref(), Some("I'll fix that bug now."));
+}
+
+#[test]
+fn codex_parse_user_message() {
+    let registry = AgentAdapterRegistry::new();
+    let adapter = registry.get("codex");
+    let chunk = json!({"type": "event_msg", "payload": {"type": "user_message", "content": "Fix the login bug"}});
+    let record = adapter.parse_transcript_record(&chunk).unwrap();
+    assert_eq!(record.record_type, "user");
+    assert_eq!(record.text.as_deref(), Some("Fix the login bug"));
+}
+
+#[test]
+fn codex_parse_shell_call() {
+    let registry = AgentAdapterRegistry::new();
+    let adapter = registry.get("codex");
+    let chunk = json!({"type": "response_item", "payload": {"type": "local_shell_call", "command": "cargo test", "output": "test result: ok. 5 passed"}});
+    let record = adapter.parse_transcript_record(&chunk).unwrap();
+    assert_eq!(record.record_type, "assistant");
+    assert_eq!(record.tool_name.as_deref(), Some("Bash"));
+    assert!(record.text.as_ref().unwrap().contains("cargo test"));
+}
+
+#[test]
+fn codex_parse_token_count_returns_none_for_display() {
+    let registry = AgentAdapterRegistry::new();
+    let adapter = registry.get("codex");
+    let chunk = json!({"type": "event_msg", "payload": {"type": "token_count", "info": {"last_token_usage": {"input_tokens": 100, "output_tokens": 50}}}});
+    assert!(adapter.parse_transcript_record(&chunk).is_none());
+}
+
+// Codex file changes are extracted from transcript, not hook events.
+// These tests use parse_codex_patch directly.
+
+#[test]
+fn codex_patch_parse_add_file() {
+    let changes = tracevault_core::agent_adapter::codex::parse_codex_patch(
+        "*** Begin Patch\n*** Add File: src/new.rs\n+fn main() {}\n*** End Patch\n",
+    );
+    assert_eq!(changes.len(), 1);
+    assert_eq!(changes[0].file_path, "src/new.rs");
+    assert_eq!(changes[0].change_type, "create");
+    assert!(changes[0].content_hash.is_some());
+}
+
+#[test]
+fn codex_patch_parse_update_file() {
+    let changes = tracevault_core::agent_adapter::codex::parse_codex_patch(
+        "*** Begin Patch\n*** Update File: src/lib.rs\n@@ fn old()\n-fn old()\n+fn new_func()\n*** End Patch\n",
+    );
+    assert_eq!(changes.len(), 1);
+    assert_eq!(changes[0].file_path, "src/lib.rs");
+    assert_eq!(changes[0].change_type, "edit");
+    assert!(changes[0].diff_text.is_some());
+}
+
+#[test]
+fn codex_patch_parse_delete_file() {
+    let changes = tracevault_core::agent_adapter::codex::parse_codex_patch(
+        "*** Begin Patch\n*** Delete File: src/old.rs\n*** End Patch\n",
+    );
+    assert_eq!(changes.len(), 1);
+    assert_eq!(changes[0].file_path, "src/old.rs");
+    assert_eq!(changes[0].change_type, "delete");
+}
+
+#[test]
+fn codex_hook_extract_file_changes_returns_empty() {
+    // Codex does not extract file changes from hook events
+    let registry = AgentAdapterRegistry::new();
+    let adapter = registry.get("codex");
+    let input = json!({"command": "cargo build"});
+    assert!(adapter.extract_file_changes("Bash", &input).is_empty());
+}
+
+#[test]
+fn codex_is_file_modifying_always_false() {
+    // Codex file changes come from transcript, not hook events
+    let registry = AgentAdapterRegistry::new();
+    let adapter = registry.get("codex");
+    assert!(!adapter.is_file_modifying("Bash"));
+    assert!(!adapter.is_file_modifying("Read"));
+    assert!(!adapter.is_file_modifying("apply_patch"));
+}
+
+#[test]
+fn codex_extract_file_changes_from_transcript_apply_patch() {
+    let registry = AgentAdapterRegistry::new();
+    let adapter = registry.get("codex");
+    let chunk = json!({
+        "type": "response_item",
+        "payload": {
+            "type": "custom_tool_call",
+            "name": "apply_patch",
+            "input": "*** Begin Patch\n*** Update File: src/main.rs\n@@ fn old()\n-fn old()\n+fn new_func()\n*** End Patch\n"
+        }
+    });
+    let changes = adapter.extract_file_changes_from_transcript(&chunk);
+    assert_eq!(changes.len(), 1);
+    assert_eq!(changes[0].file_path, "src/main.rs");
+    assert_eq!(changes[0].change_type, "edit");
+}
+
+#[test]
+fn codex_extract_file_changes_from_transcript_non_patch_returns_empty() {
+    let registry = AgentAdapterRegistry::new();
+    let adapter = registry.get("codex");
+    let chunk = json!({
+        "type": "response_item",
+        "payload": {"type": "message", "role": "assistant", "content": []}
+    });
+    assert!(adapter
+        .extract_file_changes_from_transcript(&chunk)
+        .is_empty());
+}
+
+#[test]
+fn codex_reasoning_record_returns_none() {
+    let registry = AgentAdapterRegistry::new();
+    let adapter = registry.get("codex");
+    let chunk = json!({
+        "type": "response_item",
+        "payload": {
+            "type": "reasoning",
+            "content": null,
+            "summary": [],
+            "encrypted_content": "gAAAAA..."
+        }
+    });
+    assert!(adapter.parse_transcript_record(&chunk).is_none());
+}
+
+#[test]
+fn codex_custom_tool_call_display() {
+    let registry = AgentAdapterRegistry::new();
+    let adapter = registry.get("codex");
+    let chunk = json!({
+        "type": "response_item",
+        "timestamp": "2026-04-03T17:52:42Z",
+        "payload": {
+            "type": "custom_tool_call",
+            "name": "apply_patch",
+            "input": "*** Begin Patch\n*** Update File: README.md\n@@\n old line\n+new line\n*** End Patch"
+        }
+    });
+    let record = adapter.parse_transcript_record(&chunk).unwrap();
+    assert_eq!(record.record_type, "assistant");
+    assert_eq!(record.tool_name.as_deref(), Some("apply_patch"));
+    assert!(record.text.as_ref().unwrap().contains("Update File"));
+}
+
+#[test]
+fn claude_code_extract_file_changes_from_transcript_returns_empty() {
+    // Claude Code file changes come from hook events, not transcript
+    let registry = AgentAdapterRegistry::new();
+    let adapter = registry.get("claude-code");
+    let chunk = json!({"type": "assistant", "message": {"content": []}});
+    assert!(adapter
+        .extract_file_changes_from_transcript(&chunk)
+        .is_empty());
+}

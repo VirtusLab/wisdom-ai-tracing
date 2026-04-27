@@ -34,6 +34,13 @@ impl HookResponse {
             suppress_output: Some(true),
         }
     }
+
+    pub fn empty() -> Self {
+        Self {
+            r#continue: None,
+            suppress_output: None,
+        }
+    }
 }
 
 #[derive(Debug, Error)]

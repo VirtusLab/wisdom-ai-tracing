@@ -15,6 +15,7 @@
 	import { formatDateTime } from '$lib/utils/date';
 	import * as Table from '$lib/components/ui/table/index.js';
 	import StatusBadge from '$lib/components/StatusBadge.svelte';
+	import AgentBadge from '$lib/components/AgentBadge.svelte';
 	import LoadingState from '$lib/components/LoadingState.svelte';
 	import ErrorState from '$lib/components/ErrorState.svelte';
 	import SessionTranscript from '$lib/components/session-detail/SessionTranscript.svelte';
@@ -215,6 +216,7 @@
 			<span class="text-muted-foreground/40">/</span>
 			<span class="font-mono text-sm font-semibold">{session.session_id.slice(0, 8)}</span>
 			<StatusBadge {status} />
+			<AgentBadge tool={session.tool} />
 		</div>
 
 		<!-- Session metadata -->

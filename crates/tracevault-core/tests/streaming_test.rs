@@ -61,50 +61,6 @@ fn test_event_uuid_defaults_to_none_for_legacy_payloads() {
 }
 
 #[test]
-fn test_extract_file_change_from_edit() {
-    let tool_input = json!({
-        "file_path": "/repo/src/lib.rs",
-        "old_string": "fn old() {}",
-        "new_string": "fn new_func() {}"
-    });
-    let change = extract_file_change("Edit", &tool_input);
-    assert!(change.is_some());
-    let c = change.unwrap();
-    assert_eq!(c.file_path, "/repo/src/lib.rs");
-    assert_eq!(c.change_type, "edit");
-    assert!(c.diff_text.is_some());
-}
-
-#[test]
-fn test_extract_file_change_from_write() {
-    let tool_input = json!({
-        "file_path": "/repo/src/new_file.rs",
-        "content": "fn main() {}"
-    });
-    let change = extract_file_change("Write", &tool_input);
-    assert!(change.is_some());
-    let c = change.unwrap();
-    assert_eq!(c.file_path, "/repo/src/new_file.rs");
-    assert_eq!(c.change_type, "create");
-    assert!(c.content_hash.is_some());
-}
-
-#[test]
-fn test_extract_file_change_from_read_returns_none() {
-    let tool_input = json!({"file_path": "/repo/src/lib.rs"});
-    assert!(extract_file_change("Read", &tool_input).is_none());
-}
-
-#[test]
-fn test_is_file_modifying_tool() {
-    assert!(is_file_modifying_tool("Write"));
-    assert!(is_file_modifying_tool("Edit"));
-    assert!(is_file_modifying_tool("Bash"));
-    assert!(!is_file_modifying_tool("Read"));
-    assert!(!is_file_modifying_tool("Grep"));
-}
-
-#[test]
 fn test_commit_push_request_serialization() {
     let req = CommitPushRequest {
         commit_sha: "abc123".to_string(),
@@ -117,22 +73,4 @@ fn test_commit_push_request_serialization() {
     let json_str = serde_json::to_string(&req).unwrap();
     let parsed: CommitPushRequest = serde_json::from_str(&json_str).unwrap();
     assert_eq!(parsed.commit_sha, "abc123");
-}
-
-#[test]
-fn extract_file_change_write_missing_content() {
-    let input = json!({"file_path": "/tmp/test.rs"});
-    assert!(extract_file_change("Write", &input).is_none());
-}
-
-#[test]
-fn extract_file_change_edit_missing_old_string() {
-    let input = json!({"file_path": "/tmp/test.rs", "new_string": "new"});
-    assert!(extract_file_change("Edit", &input).is_none());
-}
-
-#[test]
-fn extract_file_change_write_missing_file_path() {
-    let input = json!({"content": "hello"});
-    assert!(extract_file_change("Write", &input).is_none());
 }

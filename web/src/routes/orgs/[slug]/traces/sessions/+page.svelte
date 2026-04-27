@@ -7,6 +7,7 @@
 	import * as Table from '$lib/components/ui/table/index.js';
 	import * as Popover from '$lib/components/ui/popover/index.js';
 	import StatusBadge from '$lib/components/StatusBadge.svelte';
+	import AgentBadge from '$lib/components/AgentBadge.svelte';
 	import LoadingState from '$lib/components/LoadingState.svelte';
 	import ErrorState from '$lib/components/ErrorState.svelte';
 	import EmptyState from '$lib/components/EmptyState.svelte';
@@ -343,7 +344,12 @@
 				<Table.Body>
 					{#each filteredSessions as s (s.id)}
 						<Table.Row class="hover:bg-muted/40 transition-colors">
-							<Table.Cell><StatusBadge status={sessionStatus(s.status, s.updated_at)} /></Table.Cell>
+							<Table.Cell>
+								<div class="flex items-center gap-1.5">
+									<StatusBadge status={sessionStatus(s.status, s.updated_at)} />
+									<AgentBadge tool={s.tool} />
+								</div>
+							</Table.Cell>
 							<Table.Cell>
 								<a href="/orgs/{slug}/traces/sessions/{s.id}" class="font-mono text-sm underline">
 									{String(s.session_id).slice(0, 8)}

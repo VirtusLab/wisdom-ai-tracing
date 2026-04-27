@@ -1,3 +1,4 @@
+pub mod agent_adapter;
 pub mod agent_policies;
 pub mod bash_command;
 pub mod code_nav;

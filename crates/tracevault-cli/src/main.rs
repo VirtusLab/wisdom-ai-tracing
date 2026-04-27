@@ -25,6 +25,9 @@ enum Cli {
         /// .gitignore separately or you want to commit the Claude settings files.
         #[arg(long)]
         no_gitignore: bool,
+        /// Additional AI agents to install hooks for (e.g. codex, gemini)
+        #[arg(long = "agent")]
+        agents: Vec<String>,
     },
     /// Show current session status
     Status,
@@ -35,6 +38,9 @@ enum Cli {
     Stream {
         #[arg(long)]
         event: String,
+        /// AI coding agent name (claude-code, codex)
+        #[arg(long, default_value = "claude-code")]
+        agent: String,
     },
     /// Check session policies before pushing
     Check,
@@ -116,6 +122,7 @@ async fn main() {
             server_url,
             claude_settings,
             no_gitignore,
+            agents,
         } => {
             let cwd = env::current_dir().expect("Cannot determine current directory");
             match commands::init::init_in_directory(
@@ -123,6 +130,11 @@ async fn main() {
                 server_url.as_deref(),
                 claude_settings,
                 no_gitignore,
+                if agents.is_empty() {
+                    None
+                } else {
+                    Some(&agents)
+                },
             )
             .await
             {
@@ -130,6 +142,9 @@ async fn main() {
                     let entry = target.gitignore_entry();
                     println!("TraceVault initialized in {}", cwd.display());
                     println!("Claude Code hooks installed ({entry})");
+                    for agent in &agents {
+                        println!("{agent} hooks installed");
+                    }
                     println!("Git hooks installed (pre-push, post-commit)");
                     println!("Added .tracevault/ and {entry} to .gitignore");
                     println!(
@@ -149,8 +164,8 @@ async fn main() {
                 std::process::exit(code);
             }
         }
-        Cli::Stream { event } => {
-            if let Err(e) = commands::stream::run_stream(&event).await {
+        Cli::Stream { event, agent } => {
+            if let Err(e) = commands::stream::run_stream(&event, &agent).await {
                 eprintln!("Stream error: {e}");
             }
         }

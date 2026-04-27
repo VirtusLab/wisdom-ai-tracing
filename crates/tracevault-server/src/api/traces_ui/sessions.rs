@@ -341,17 +341,14 @@ pub async fn get_session_transcript(
 ) -> Result<Json<TranscriptResponse>, AppError> {
     verify_session_access(&state.pool, session_id, auth.org_id).await?;
 
-    let session_model: Option<String> =
-        sqlx::query_scalar("SELECT model FROM sessions WHERE id = $1")
-            .bind(session_id)
-            .fetch_one(&state.pool)
-            .await?;
-
-    let session_started_at: Option<DateTime<Utc>> =
-        sqlx::query_scalar("SELECT started_at FROM sessions WHERE id = $1")
-            .bind(session_id)
-            .fetch_one(&state.pool)
-            .await?;
+    let (session_model, session_tool, session_started_at): (
+        Option<String>,
+        Option<String>,
+        Option<DateTime<Utc>>,
+    ) = sqlx::query_as("SELECT model, tool, started_at FROM sessions WHERE id = $1")
+        .bind(session_id)
+        .fetch_one(&state.pool)
+        .await?;
 
     let transcript_chunks = sqlx::query_as::<_, TranscriptChunkRow>(include_str!(
         "sql/get_session_transcript_chunks.sql"
@@ -370,7 +367,10 @@ pub async fn get_session_transcript(
     let transcript_array: Vec<serde_json::Value> =
         transcript_chunks.iter().map(|c| c.data.clone()).collect();
     let transcript_val = serde_json::Value::Array(transcript_array);
-    let (_, transcript_records, _, _, _) = parse_transcript(&transcript_val, &pricing);
+    let adapter = state
+        .agent_registry
+        .get(session_tool.as_deref().unwrap_or("claude-code"));
+    let (_, transcript_records, _, _, _) = parse_transcript(&transcript_val, &pricing, adapter);
 
     Ok(Json(TranscriptResponse {
         transcript_chunks,

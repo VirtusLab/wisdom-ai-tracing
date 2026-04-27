@@ -4,6 +4,8 @@ use chrono::{DateTime, Utc};
 use serde::Serialize;
 use uuid::Uuid;
 
+use tracevault_core::agent_adapter::AgentAdapter;
+
 use crate::error::AppError;
 use crate::extractors::OrgAuth;
 use crate::pricing::{self, ModelPricing};
@@ -91,230 +93,10 @@ pub struct TranscriptRecord {
     pub model: Option<String>,
 }
 
-fn parse_record(record: &serde_json::Value, pricing: &ModelPricing) -> Option<TranscriptRecord> {
-    let record_type = record.get("type")?.as_str()?.to_string();
-    let timestamp = record
-        .get("timestamp")
-        .and_then(|v| v.as_str())
-        .map(String::from);
-
-    match record_type.as_str() {
-        "assistant" => {
-            let msg = match record.get("message") {
-                Some(m) => m,
-                None => {
-                    return Some(TranscriptRecord {
-                        record_type,
-                        timestamp,
-                        content_types: vec![],
-                        tool_name: None,
-                        text: None,
-                        usage: None,
-                        model: None,
-                    });
-                }
-            };
-            let model = msg.get("model").and_then(|v| v.as_str()).map(String::from);
-
-            let mut content_types = Vec::new();
-            let mut texts = Vec::new();
-            if let Some(content) = msg.get("content").and_then(|v| v.as_array()) {
-                for block in content {
-                    if let Some(ct) = block.get("type").and_then(|v| v.as_str()) {
-                        if !content_types.contains(&ct.to_string()) {
-                            content_types.push(ct.to_string());
-                        }
-                    }
-                    if let Some(text) = block.get("text").and_then(|v| v.as_str()) {
-                        texts.push(text.to_string());
-                    }
-                    if let Some(thinking) = block.get("thinking").and_then(|v| v.as_str()) {
-                        texts.push(format!("[thinking] {}", thinking));
-                    }
-                }
-            }
-
-            let usage = msg.get("usage").map(|u| {
-                let total_input = u.get("input_tokens").and_then(|v| v.as_i64()).unwrap_or(0);
-                let output = u.get("output_tokens").and_then(|v| v.as_i64()).unwrap_or(0);
-                let cache_read = u
-                    .get("cache_read_input_tokens")
-                    .and_then(|v| v.as_i64())
-                    .unwrap_or(0);
-                let cache_write = u
-                    .get("cache_creation_input_tokens")
-                    .and_then(|v| v.as_i64())
-                    .unwrap_or(0);
-                // input_tokens from the API includes cache_read and cache_write tokens,
-                // so subtract them to get fresh (non-cached) input tokens only
-                let fresh_input = (total_input - cache_read - cache_write).max(0);
-                let cost = pricing::estimate_cost_with_pricing(
-                    pricing,
-                    fresh_input,
-                    output,
-                    cache_read,
-                    cache_write,
-                );
-                RecordUsage {
-                    input_tokens: fresh_input,
-                    output_tokens: output,
-                    cache_read_tokens: cache_read,
-                    cache_write_tokens: cache_write,
-                    cost_usd: cost,
-                }
-            });
-
-            let tool_name = msg
-                .get("content")
-                .and_then(|v| v.as_array())
-                .and_then(|arr| {
-                    arr.iter()
-                        .find(|b| b.get("type").and_then(|v| v.as_str()) == Some("tool_use"))
-                })
-                .and_then(|b| b.get("name").and_then(|v| v.as_str()).map(String::from));
-
-            Some(TranscriptRecord {
-                record_type,
-                timestamp,
-                content_types,
-                tool_name,
-                text: if texts.is_empty() {
-                    None
-                } else {
-                    Some(texts.join("\n\n"))
-                },
-                usage,
-                model,
-            })
-        }
-        "user" => {
-            let mut content_types = Vec::new();
-            let mut text = None;
-            let mut tool_name = None;
-
-            let msg = record.get("message");
-            match msg.and_then(|m| m.get("content")) {
-                Some(serde_json::Value::String(s)) => {
-                    content_types.push("text".to_string());
-                    text = Some(s.clone());
-                }
-                Some(serde_json::Value::Array(arr)) => {
-                    for block in arr {
-                        if let Some(ct) = block.get("type").and_then(|v| v.as_str()) {
-                            if !content_types.contains(&ct.to_string()) {
-                                content_types.push(ct.to_string());
-                            }
-                            if ct == "tool_result" {
-                                if let Some(content) = block.get("content").and_then(|v| v.as_str())
-                                {
-                                    text = Some(content.to_string());
-                                }
-                            } else if ct == "text" {
-                                if let Some(t) = block.get("text").and_then(|v| v.as_str()) {
-                                    text = Some(t.to_string());
-                                }
-                            }
-                        }
-                    }
-                }
-                _ => {}
-            }
-
-            if let Some(tur) = record.get("toolUseResult") {
-                if let Some(file) = tur
-                    .get("file")
-                    .and_then(|f| f.get("filePath").and_then(|v| v.as_str()))
-                {
-                    tool_name = Some(format!("Read: {}", file));
-                } else if tur.get("filenames").is_some() {
-                    tool_name = Some("Glob".to_string());
-                } else if tur.get("stdout").is_some() {
-                    tool_name = Some("Bash".to_string());
-                }
-            }
-
-            Some(TranscriptRecord {
-                record_type,
-                timestamp,
-                content_types,
-                tool_name,
-                text,
-                usage: None,
-                model: None,
-            })
-        }
-        "progress" => {
-            let data = record.get("data");
-            let hook_name = data
-                .and_then(|d| d.get("hookName").and_then(|v| v.as_str()))
-                .map(String::from);
-            let hook_event = data.and_then(|d| d.get("hookEvent").and_then(|v| v.as_str()));
-            let text = hook_event.map(|e| {
-                if let Some(ref name) = hook_name {
-                    format!("{}: {}", e, name)
-                } else {
-                    e.to_string()
-                }
-            });
-
-            Some(TranscriptRecord {
-                record_type,
-                timestamp,
-                content_types: vec![],
-                tool_name: hook_name,
-                text,
-                usage: None,
-                model: None,
-            })
-        }
-        "system" => {
-            let subtype = record
-                .get("subtype")
-                .and_then(|v| v.as_str())
-                .unwrap_or("unknown");
-            let text = match subtype {
-                "turn_duration" => {
-                    let ms = record
-                        .get("durationMs")
-                        .and_then(|v| v.as_f64())
-                        .unwrap_or(0.0);
-                    Some(format!("turn_duration: {:.1}s", ms / 1000.0))
-                }
-                "stop_hook_summary" => {
-                    let count = record
-                        .get("hookCount")
-                        .and_then(|v| v.as_i64())
-                        .unwrap_or(0);
-                    Some(format!("stop_hook_summary: {} hooks", count))
-                }
-                _ => Some(subtype.to_string()),
-            };
-
-            Some(TranscriptRecord {
-                record_type,
-                timestamp,
-                content_types: vec![subtype.to_string()],
-                tool_name: None,
-                text,
-                usage: None,
-                model: None,
-            })
-        }
-        _ => Some(TranscriptRecord {
-            record_type,
-            timestamp,
-            content_types: vec![],
-            tool_name: None,
-            text: None,
-            usage: None,
-            model: None,
-        }),
-    }
-}
-
 pub fn parse_transcript(
     transcript: &serde_json::Value,
     pricing: &ModelPricing,
+    adapter: &dyn AgentAdapter,
 ) -> (
     Vec<PerCallUsage>,
     Vec<TranscriptRecord>,
@@ -335,7 +117,41 @@ pub fn parse_transcript(
     let mut total_cache_write: i64 = 0;
 
     for record in records {
-        if let Some(tr) = parse_record(record, pricing) {
+        if let Some(parsed) = adapter.parse_transcript_record(record) {
+            let usage = if parsed.raw_input_tokens.is_some() {
+                let total_input_raw = parsed.raw_input_tokens.unwrap_or(0);
+                let output = parsed.raw_output_tokens.unwrap_or(0);
+                let cache_read = parsed.raw_cache_read_tokens.unwrap_or(0);
+                let cache_write = parsed.raw_cache_write_tokens.unwrap_or(0);
+                let fresh_input = (total_input_raw - cache_read - cache_write).max(0);
+                let cost = pricing::estimate_cost_with_pricing(
+                    pricing,
+                    fresh_input,
+                    output,
+                    cache_read,
+                    cache_write,
+                );
+                Some(RecordUsage {
+                    input_tokens: fresh_input,
+                    output_tokens: output,
+                    cache_read_tokens: cache_read,
+                    cache_write_tokens: cache_write,
+                    cost_usd: cost,
+                })
+            } else {
+                None
+            };
+
+            let tr = TranscriptRecord {
+                record_type: parsed.record_type.clone(),
+                timestamp: parsed.timestamp,
+                content_types: parsed.content_types,
+                tool_name: parsed.tool_name,
+                text: parsed.text,
+                usage,
+                model: parsed.model,
+            };
+
             if tr.record_type == "assistant" {
                 if let Some(ref usage) = tr.usage {
                     let model = tr.model.as_deref().unwrap_or("unknown");
@@ -414,6 +230,7 @@ pub fn parse_transcript(
 struct SessionRow {
     session_id: String,
     model: Option<String>,
+    tool: Option<String>,
     started_at: Option<DateTime<Utc>>,
     ended_at: Option<DateTime<Utc>>,
     duration_ms: Option<i64>,
@@ -436,7 +253,7 @@ pub async fn get_session_detail(
     let org_id = auth.org_id;
 
     let row = sqlx::query_as::<_, SessionRow>(
-        "SELECT s.session_id, s.model, s.started_at, s.ended_at, s.duration_ms,
+        "SELECT s.session_id, s.model, s.tool, s.started_at, s.ended_at, s.duration_ms,
                 s.total_tokens, s.input_tokens, s.output_tokens,
                 s.cache_read_tokens, s.cache_write_tokens,
                 s.estimated_cost_usd,
@@ -471,8 +288,11 @@ pub async fn get_session_detail(
 
     let transcript_array: Vec<serde_json::Value> = chunks.into_iter().map(|(d,)| d).collect();
     let transcript_val = serde_json::Value::Array(transcript_array);
+    let adapter = state
+        .agent_registry
+        .get(row.tool.as_deref().unwrap_or("claude-code"));
     let (per_call, transcript_records, token_distribution, cost_breakdown, cache_savings) =
-        parse_transcript(&transcript_val, &pricing);
+        parse_transcript(&transcript_val, &pricing, adapter);
 
     // Count API calls from per_call data since api_calls column doesn't exist on sessions
     let api_calls = per_call.len() as i32;
@@ -505,6 +325,7 @@ pub async fn get_session_detail(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tracevault_core::agent_adapter::AgentAdapterRegistry;
 
     fn test_pricing() -> ModelPricing {
         ModelPricing {
@@ -518,8 +339,10 @@ mod tests {
     #[test]
     fn test_parse_empty_transcript() {
         let transcript = serde_json::json!([]);
+        let registry = AgentAdapterRegistry::new();
+        let adapter = registry.get("claude-code");
         let (per_call, records, dist, cost, savings) =
-            parse_transcript(&transcript, &test_pricing());
+            parse_transcript(&transcript, &test_pricing(), adapter);
         assert!(per_call.is_empty());
         assert!(records.is_empty());
         assert_eq!(dist.input_tokens, 0);
@@ -545,8 +368,10 @@ mod tests {
                 }
             }
         ]);
+        let registry = AgentAdapterRegistry::new();
+        let adapter = registry.get("claude-code");
         let (per_call, records, dist, _cost, _savings) =
-            parse_transcript(&transcript, &test_pricing());
+            parse_transcript(&transcript, &test_pricing(), adapter);
         assert_eq!(per_call.len(), 1);
         assert_eq!(per_call[0].index, 1);
         assert_eq!(per_call[0].cache_read_tokens, 1000);
@@ -567,8 +392,10 @@ mod tests {
                 }
             }
         ]);
+        let registry = AgentAdapterRegistry::new();
+        let adapter = registry.get("claude-code");
         let (per_call, records, _dist, _cost, _savings) =
-            parse_transcript(&transcript, &test_pricing());
+            parse_transcript(&transcript, &test_pricing(), adapter);
         assert!(per_call.is_empty());
         assert_eq!(records.len(), 1);
     }
@@ -592,7 +419,10 @@ mod tests {
             }
         ]);
         let pricing = test_pricing();
-        let (_per_call, _records, _dist, _cost, savings) = parse_transcript(&transcript, &pricing);
+        let registry = AgentAdapterRegistry::new();
+        let adapter = registry.get("claude-code");
+        let (_per_call, _records, _dist, _cost, savings) =
+            parse_transcript(&transcript, &pricing, adapter);
         assert!((savings.gross_savings_usd - 13.5).abs() < 0.001);
         assert!((savings.cache_write_overhead_usd - 0.375).abs() < 0.001);
         assert!((savings.net_savings_usd - 13.125).abs() < 0.001);
@@ -620,7 +450,9 @@ mod tests {
                 }
             }
         ]);
-        let (per_call, _, _, _, _) = parse_transcript(&transcript, &test_pricing());
+        let registry = AgentAdapterRegistry::new();
+        let adapter = registry.get("claude-code");
+        let (per_call, _, _, _, _) = parse_transcript(&transcript, &test_pricing(), adapter);
         assert_eq!(per_call.len(), 2);
         assert!((per_call[0].cumulative_cost_usd - 15.0).abs() < 0.001);
         assert!((per_call[1].cumulative_cost_usd - 30.0).abs() < 0.001);

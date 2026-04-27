@@ -16,6 +16,7 @@ async fn init_fails_without_git() {
         None,
         Some(ClaudeSettingsTarget::Shared),
         false,
+        None,
     )
     .await;
     assert!(result.is_err());
@@ -35,6 +36,7 @@ async fn init_creates_tracevault_config() {
         None,
         Some(ClaudeSettingsTarget::Shared),
         false,
+        None,
     )
     .await
     .unwrap();
@@ -53,6 +55,7 @@ async fn init_creates_directory_structure() {
         None,
         Some(ClaudeSettingsTarget::Shared),
         false,
+        None,
     )
     .await
     .unwrap();
@@ -78,6 +81,7 @@ async fn init_installs_claude_hooks() {
         None,
         Some(ClaudeSettingsTarget::Shared),
         false,
+        None,
     )
     .await
     .unwrap();
@@ -107,6 +111,7 @@ async fn init_merges_into_existing_settings() {
         None,
         Some(ClaudeSettingsTarget::Shared),
         false,
+        None,
     )
     .await
     .unwrap();
@@ -137,6 +142,7 @@ async fn init_installs_git_pre_push_hook() {
         None,
         Some(ClaudeSettingsTarget::Shared),
         false,
+        None,
     )
     .await
     .unwrap();
@@ -170,6 +176,7 @@ async fn init_preserves_existing_pre_push_hook() {
         None,
         Some(ClaudeSettingsTarget::Shared),
         false,
+        None,
     )
     .await
     .unwrap();
@@ -192,6 +199,7 @@ async fn init_does_not_duplicate_hook_on_reinit() {
         None,
         Some(ClaudeSettingsTarget::Shared),
         false,
+        None,
     )
     .await
     .unwrap();
@@ -200,6 +208,7 @@ async fn init_does_not_duplicate_hook_on_reinit() {
         None,
         Some(ClaudeSettingsTarget::Shared),
         false,
+        None,
     )
     .await
     .unwrap();
@@ -221,6 +230,7 @@ async fn init_installs_post_commit_hook() {
         None,
         Some(ClaudeSettingsTarget::Shared),
         false,
+        None,
     )
     .await
     .unwrap();
@@ -243,6 +253,7 @@ async fn init_does_not_duplicate_post_commit_hook_on_reinit() {
         None,
         Some(ClaudeSettingsTarget::Shared),
         false,
+        None,
     )
     .await
     .unwrap();
@@ -251,6 +262,7 @@ async fn init_does_not_duplicate_post_commit_hook_on_reinit() {
         None,
         Some(ClaudeSettingsTarget::Shared),
         false,
+        None,
     )
     .await
     .unwrap();
@@ -272,6 +284,7 @@ async fn init_local_target_writes_to_settings_local_json() {
         None,
         Some(ClaudeSettingsTarget::Local),
         false,
+        None,
     )
     .await
     .unwrap();
@@ -298,6 +311,7 @@ async fn init_local_target_gitignores_settings_local_json() {
         None,
         Some(ClaudeSettingsTarget::Local),
         false,
+        None,
     )
     .await
     .unwrap();
@@ -326,6 +340,7 @@ async fn init_local_target_merges_into_existing_settings_local_json() {
         None,
         Some(ClaudeSettingsTarget::Local),
         false,
+        None,
     )
     .await
     .unwrap();
@@ -345,6 +360,7 @@ async fn init_writes_server_url_to_config() {
         Some("https://tv.example.com"),
         Some(ClaudeSettingsTarget::Shared),
         false,
+        None,
     )
     .await
     .unwrap();
@@ -363,6 +379,7 @@ async fn init_no_gitignore_skips_gitignore_update() {
         None,
         Some(ClaudeSettingsTarget::Shared),
         true,
+        None,
     )
     .await
     .unwrap();
