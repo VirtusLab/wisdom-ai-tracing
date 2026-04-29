@@ -143,7 +143,11 @@ async fn main() {
                     println!("TraceVault initialized in {}", cwd.display());
                     println!("Claude Code hooks installed ({entry})");
                     for agent in &agents {
-                        println!("{agent} hooks installed");
+                        match agent.as_str() {
+                            "codex" => println!("Codex hooks installed (.codex/hooks.json)"),
+                            "claude" | "claude-code" => {}
+                            other => println!("{other} hooks installed"),
+                        }
                     }
                     println!("Git hooks installed (pre-push, post-commit)");
                     println!("Added .tracevault/ and {entry} to .gitignore");

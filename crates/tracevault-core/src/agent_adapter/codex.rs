@@ -17,7 +17,7 @@ pub struct CodexAdapter;
 fn hooks_json() -> serde_json::Value {
     serde_json::json!({
         "SessionStart": [{
-            "matcher": "startup|resume",
+            "matcher": "",
             "hooks": [{
                 "type": "command",
                 "command": "tracevault stream --agent codex --event session-start",
@@ -292,8 +292,11 @@ impl CodexAdapter {
                                 let block_type = block.get("type").and_then(|v| v.as_str())?;
                                 if block_type == "input_text" || block_type == "output_text" {
                                     let t = block.get("text").and_then(|v| v.as_str())?;
-                                    // Skip system prompts (XML tags in user messages)
-                                    if t.starts_with('<') && role == "user" {
+                                    // Codex injects system context into the user role wrapped
+                                    // in known XML tags (see openai/codex protocol.rs).
+                                    // Skip only those — a blunt `starts_with('<')` would also
+                                    // drop legitimate user questions about HTML/JSX/XML snippets.
+                                    if role == "user" && is_codex_system_prompt(t) {
                                         return None;
                                     }
                                     Some(t.to_string())
@@ -350,6 +353,27 @@ impl CodexAdapter {
             _ => None,
         }
     }
+}
+
+/// Known opening tags Codex uses to inject system context into the user role.
+/// Sourced from openai/codex `codex-rs/protocol/src/protocol.rs`.
+const CODEX_SYSTEM_PROMPT_TAGS: &[&str] = &[
+    "<user_instructions>",
+    "<environment_context>",
+    "<apps_instructions>",
+    "<skills_instructions>",
+    "<plugins_instructions>",
+    "<collaboration_mode>",
+    "<realtime_conversation>",
+];
+
+/// Returns true if `text` starts with one of the known Codex system-prompt tags
+/// (after trimming leading whitespace).
+fn is_codex_system_prompt(text: &str) -> bool {
+    let trimmed = text.trim_start();
+    CODEX_SYSTEM_PROMPT_TAGS
+        .iter()
+        .any(|tag| trimmed.starts_with(tag))
 }
 
 /// Parse Codex's custom apply_patch format into file changes.

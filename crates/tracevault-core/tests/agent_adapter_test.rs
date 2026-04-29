@@ -160,12 +160,107 @@ fn claude_code_parse_user_record() {
 }
 
 #[test]
-fn claude_code_parse_user_tool_result() {
+fn claude_code_parse_user_tool_result_read() {
     let registry = AgentAdapterRegistry::new();
     let adapter = registry.get("claude-code");
     let chunk = json!({"type": "user", "toolUseResult": {"file": {"filePath": "src/main.rs"}}});
     let record = adapter.parse_transcript_record(&chunk).unwrap();
     assert_eq!(record.tool_name.as_deref(), Some("Read: src/main.rs"));
+}
+
+#[test]
+fn claude_code_parse_user_tool_result_bash_uses_top_level_stdout() {
+    let registry = AgentAdapterRegistry::new();
+    let adapter = registry.get("claude-code");
+    let chunk = json!({
+        "type": "user",
+        "toolUseResult": {
+            "stdout": "ok\n",
+            "stderr": "",
+            "interrupted": false
+        }
+    });
+    let record = adapter.parse_transcript_record(&chunk).unwrap();
+    assert_eq!(record.tool_name.as_deref(), Some("Bash"));
+}
+
+#[test]
+fn claude_code_parse_user_tool_result_glob_uses_top_level_filenames() {
+    let registry = AgentAdapterRegistry::new();
+    let adapter = registry.get("claude-code");
+    let chunk = json!({
+        "type": "user",
+        "toolUseResult": {
+            "filenames": ["src/main.rs", "src/lib.rs"]
+        }
+    });
+    let record = adapter.parse_transcript_record(&chunk).unwrap();
+    assert_eq!(record.tool_name.as_deref(), Some("Glob"));
+}
+
+#[test]
+fn claude_code_parse_user_tool_result_block_reads_content_field() {
+    // tool_result blocks store the body under `content`, not `text`.
+    let registry = AgentAdapterRegistry::new();
+    let adapter = registry.get("claude-code");
+    let chunk = json!({
+        "type": "user",
+        "message": {
+            "content": [
+                {"type": "tool_result", "tool_use_id": "abc", "content": "command output"}
+            ]
+        }
+    });
+    let record = adapter.parse_transcript_record(&chunk).unwrap();
+    assert_eq!(record.text.as_deref(), Some("command output"));
+    assert!(record.content_types.contains(&"tool_result".to_string()));
+}
+
+#[test]
+fn claude_code_parse_user_text_block() {
+    let registry = AgentAdapterRegistry::new();
+    let adapter = registry.get("claude-code");
+    let chunk = json!({
+        "type": "user",
+        "message": {
+            "content": [{"type": "text", "text": "follow up"}]
+        }
+    });
+    let record = adapter.parse_transcript_record(&chunk).unwrap();
+    assert_eq!(record.text.as_deref(), Some("follow up"));
+}
+
+#[test]
+fn claude_code_parse_assistant_thinking_uses_prefix_and_double_newline() {
+    let registry = AgentAdapterRegistry::new();
+    let adapter = registry.get("claude-code");
+    let chunk = json!({
+        "type": "assistant",
+        "message": {
+            "model": "claude-opus-4-6",
+            "content": [
+                {"type": "thinking", "thinking": "let me think"},
+                {"type": "text", "text": "the answer"}
+            ]
+        }
+    });
+    let record = adapter.parse_transcript_record(&chunk).unwrap();
+    assert_eq!(
+        record.text.as_deref(),
+        Some("[thinking] let me think\n\nthe answer")
+    );
+}
+
+#[test]
+fn claude_code_parse_assistant_missing_message_returns_empty_record() {
+    let registry = AgentAdapterRegistry::new();
+    let adapter = registry.get("claude-code");
+    let chunk = json!({"type": "assistant", "timestamp": "2026-04-29T10:00:00Z"});
+    let record = adapter.parse_transcript_record(&chunk).unwrap();
+    assert_eq!(record.record_type, "assistant");
+    assert!(record.text.is_none());
+    assert!(record.content_types.is_empty());
+    assert!(record.model.is_none());
 }
 
 #[test]
@@ -177,16 +272,57 @@ fn claude_code_parse_progress_record() {
     let record = adapter.parse_transcript_record(&chunk).unwrap();
     assert_eq!(record.record_type, "progress");
     assert_eq!(record.text.as_deref(), Some("PostToolUse: tracevault"));
+    assert_eq!(record.tool_name.as_deref(), Some("tracevault"));
 }
 
 #[test]
-fn claude_code_parse_system_record() {
+fn claude_code_parse_progress_record_event_only() {
+    let registry = AgentAdapterRegistry::new();
+    let adapter = registry.get("claude-code");
+    let chunk = json!({"type": "progress", "data": {"hookEvent": "PostToolUse"}});
+    let record = adapter.parse_transcript_record(&chunk).unwrap();
+    assert_eq!(record.text.as_deref(), Some("PostToolUse"));
+    assert!(record.tool_name.is_none());
+}
+
+#[test]
+fn claude_code_parse_progress_record_missing_event_yields_no_text() {
+    let registry = AgentAdapterRegistry::new();
+    let adapter = registry.get("claude-code");
+    let chunk = json!({"type": "progress", "data": {"hookName": "tracevault"}});
+    let record = adapter.parse_transcript_record(&chunk).unwrap();
+    assert!(record.text.is_none());
+    assert_eq!(record.tool_name.as_deref(), Some("tracevault"));
+}
+
+#[test]
+fn claude_code_parse_system_record_turn_duration() {
     let registry = AgentAdapterRegistry::new();
     let adapter = registry.get("claude-code");
     let chunk = json!({"type": "system", "subtype": "turn_duration", "durationMs": 5000.0});
     let record = adapter.parse_transcript_record(&chunk).unwrap();
     assert_eq!(record.record_type, "system");
-    assert!(record.text.as_ref().unwrap().contains("5.0s"));
+    assert_eq!(record.text.as_deref(), Some("turn_duration: 5.0s"));
+    assert_eq!(record.content_types, vec!["turn_duration".to_string()]);
+}
+
+#[test]
+fn claude_code_parse_system_record_stop_hook_summary() {
+    let registry = AgentAdapterRegistry::new();
+    let adapter = registry.get("claude-code");
+    let chunk = json!({"type": "system", "subtype": "stop_hook_summary", "hookCount": 3});
+    let record = adapter.parse_transcript_record(&chunk).unwrap();
+    assert_eq!(record.text.as_deref(), Some("stop_hook_summary: 3 hooks"));
+}
+
+#[test]
+fn claude_code_parse_system_record_unknown_subtype_keeps_subtype_in_content_types() {
+    let registry = AgentAdapterRegistry::new();
+    let adapter = registry.get("claude-code");
+    let chunk = json!({"type": "system", "subtype": "init"});
+    let record = adapter.parse_transcript_record(&chunk).unwrap();
+    assert_eq!(record.text.as_deref(), Some("init"));
+    assert_eq!(record.content_types, vec!["init".to_string()]);
 }
 
 #[test]
@@ -228,6 +364,27 @@ fn codex_extract_token_usage_non_token_chunk_returns_none() {
 }
 
 #[test]
+fn codex_extract_token_usage_token_count_without_info_returns_none() {
+    // token_count event with no `info` field (e.g. early/empty payload).
+    let registry = AgentAdapterRegistry::new();
+    let adapter = registry.get("codex");
+    let chunk = json!({"type": "event_msg", "payload": {"type": "token_count"}});
+    assert!(adapter.extract_token_usage(&chunk).is_none());
+}
+
+#[test]
+fn codex_extract_token_usage_token_count_without_last_token_usage_returns_none() {
+    // token_count event with `info` but no `last_token_usage` (metadata-only).
+    let registry = AgentAdapterRegistry::new();
+    let adapter = registry.get("codex");
+    let chunk = json!({
+        "type": "event_msg",
+        "payload": {"type": "token_count", "info": {"total_tokens": 0}}
+    });
+    assert!(adapter.extract_token_usage(&chunk).is_none());
+}
+
+#[test]
 fn codex_extract_model() {
     let registry = AgentAdapterRegistry::new();
     let adapter = registry.get("codex");
@@ -264,6 +421,95 @@ fn codex_parse_user_message() {
     let record = adapter.parse_transcript_record(&chunk).unwrap();
     assert_eq!(record.record_type, "user");
     assert_eq!(record.text.as_deref(), Some("Fix the login bug"));
+}
+
+#[test]
+fn codex_user_message_with_html_snippet_is_kept() {
+    // Legitimate user questions starting with `<` (HTML/JSX/XML) must not be
+    // dropped by the system-prompt filter — only known Codex prompt tags are.
+    let registry = AgentAdapterRegistry::new();
+    let adapter = registry.get("codex");
+    let chunk = json!({
+        "type": "response_item",
+        "payload": {
+            "type": "message",
+            "role": "user",
+            "content": [
+                {"type": "input_text", "text": "<div>fix this rendering</div>"}
+            ]
+        }
+    });
+    let record = adapter.parse_transcript_record(&chunk).unwrap();
+    assert_eq!(
+        record.text.as_deref(),
+        Some("<div>fix this rendering</div>")
+    );
+}
+
+#[test]
+fn codex_user_message_with_system_prompt_tag_is_dropped() {
+    let registry = AgentAdapterRegistry::new();
+    let adapter = registry.get("codex");
+    for tag in [
+        "<user_instructions>",
+        "<environment_context>",
+        "<apps_instructions>",
+        "<skills_instructions>",
+        "<plugins_instructions>",
+        "<collaboration_mode>",
+        "<realtime_conversation>",
+    ] {
+        let body = format!("{tag}some system context\n</tag>");
+        let chunk = json!({
+            "type": "response_item",
+            "payload": {
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": body}]
+            }
+        });
+        assert!(
+            adapter.parse_transcript_record(&chunk).is_none(),
+            "tag {tag} should be filtered out"
+        );
+    }
+}
+
+#[test]
+fn codex_user_message_with_leading_whitespace_then_system_tag_is_dropped() {
+    let registry = AgentAdapterRegistry::new();
+    let adapter = registry.get("codex");
+    let chunk = json!({
+        "type": "response_item",
+        "payload": {
+            "type": "message",
+            "role": "user",
+            "content": [
+                {"type": "input_text", "text": "  \n<environment_context>cwd: /tmp</environment_context>"}
+            ]
+        }
+    });
+    assert!(adapter.parse_transcript_record(&chunk).is_none());
+}
+
+#[test]
+fn codex_assistant_message_with_html_snippet_is_kept_regardless_of_prefix() {
+    // The system-prompt filter only applies to the user role.
+    let registry = AgentAdapterRegistry::new();
+    let adapter = registry.get("codex");
+    let chunk = json!({
+        "type": "response_item",
+        "payload": {
+            "type": "message",
+            "role": "assistant",
+            "content": [
+                {"type": "output_text", "text": "<environment_context>example</environment_context>"}
+            ]
+        }
+    });
+    let record = adapter.parse_transcript_record(&chunk).unwrap();
+    assert_eq!(record.record_type, "assistant");
+    assert!(record.text.is_some());
 }
 
 #[test]

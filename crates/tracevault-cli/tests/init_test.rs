@@ -95,6 +95,7 @@ async fn init_installs_claude_hooks() {
     assert!(hooks.get("PreToolUse").is_some());
     assert!(hooks.get("PostToolUse").is_some());
     assert!(hooks.get("Notification").is_some());
+    assert!(hooks.get("Stop").is_some());
 }
 
 #[tokio::test]
@@ -398,4 +399,79 @@ async fn init_no_gitignore_skips_gitignore_update() {
     // But the rest of init should still work
     assert!(tmp.path().join(".tracevault").exists());
     assert!(tmp.path().join(".claude/settings.json").exists());
+}
+
+#[tokio::test]
+async fn init_with_codex_agent_also_installs_claude() {
+    // --agent codex must be additive: Claude Code hooks are still installed.
+    let tmp = tmp_git_repo();
+    let extras = vec!["codex".to_string()];
+
+    tracevault_cli::commands::init::init_in_directory(
+        tmp.path(),
+        None,
+        None,
+        false,
+        Some(extras.as_slice()),
+    )
+    .await
+    .unwrap();
+
+    assert!(tmp.path().join(".claude/settings.json").exists());
+    assert!(tmp.path().join(".codex/hooks.json").exists());
+}
+
+#[tokio::test]
+async fn init_installs_codex_session_start_with_match_all_matcher() {
+    // Codex SessionStart matcher must be empty so the hook fires for all
+    // source variants Codex passes: startup, resume, clear.
+    let tmp = tmp_git_repo();
+    let extras = vec!["codex".to_string()];
+    tracevault_cli::commands::init::init_in_directory(
+        tmp.path(),
+        None,
+        None,
+        false,
+        Some(extras.as_slice()),
+    )
+    .await
+    .unwrap();
+
+    let content = fs::read_to_string(tmp.path().join(".codex/hooks.json")).unwrap();
+    let config: serde_json::Value = serde_json::from_str(&content).unwrap();
+    let session_start = &config["hooks"]["SessionStart"][0];
+    assert_eq!(session_start["matcher"], "");
+}
+
+#[tokio::test]
+async fn init_default_installs_only_claude() {
+    let tmp = tmp_git_repo();
+
+    tracevault_cli::commands::init::init_in_directory(tmp.path(), None, None, false, None)
+        .await
+        .unwrap();
+
+    assert!(tmp.path().join(".claude/settings.json").exists());
+    assert!(!tmp.path().join(".codex/hooks.json").exists());
+}
+
+#[tokio::test]
+async fn init_dedupes_explicit_claude_alias() {
+    // Passing both `claude` and `claude-code` must not error or double-install;
+    // Claude is installed via the always-on path and skipped in the agent loop.
+    let tmp = tmp_git_repo();
+    let extras = vec!["claude".to_string(), "claude-code".to_string()];
+
+    tracevault_cli::commands::init::init_in_directory(
+        tmp.path(),
+        None,
+        None,
+        false,
+        Some(extras.as_slice()),
+    )
+    .await
+    .unwrap();
+
+    assert!(tmp.path().join(".claude/settings.json").exists());
+    assert!(!tmp.path().join(".codex/hooks.json").exists());
 }

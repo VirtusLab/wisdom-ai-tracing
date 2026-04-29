@@ -427,7 +427,7 @@ export DATABASE_URL=postgres://user:password@host:5432/tracevault?sslmode=requir
 
 | Command | Description |
 |---------|-------------|
-| `tracevault init [--server-url URL] [--claude-settings shared\|local] [--agent <name>]...` | Initialize Visdom Trace in current repo, install pre-push hook and agent hooks (Claude Code by default, repeat `--agent` to add others e.g. `codex`). `--claude-settings` chooses between `.claude/settings.json` (default) and `.claude/settings.local.json`; prompts interactively if omitted on a TTY |
+| `tracevault init [--server-url URL] [--claude-settings shared\|local] [--agent <name>]...` | Initialize Visdom Trace in current repo, install pre-push hook and agent hooks. Claude Code hooks are always installed; repeat `--agent <name>` to additionally install hooks for other agents, e.g. `--agent codex`. `--claude-settings` chooses between `.claude/settings.json` (default) and `.claude/settings.local.json`; prompts interactively if omitted on a TTY |
 | `tracevault login --server-url URL [--no-browser]` | Authenticate via device auth flow. Prints the URL and opens a browser when possible; `--no-browser` (or a headless env) skips the auto-open. |
 | `tracevault logout` | Clear local credentials |
 | `tracevault stream --event <type> [--agent <name>]` | Handle an agent hook event (reads JSON from stdin) and stream it to the server (`--agent`: `claude-code` (default), `codex`) |

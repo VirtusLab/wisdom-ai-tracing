@@ -126,10 +126,19 @@ impl AgentAdapter for ClaudeCodeAdapter {
     }
 
     fn extract_token_usage(&self, chunk: &serde_json::Value) -> Option<TokenUsage> {
+        // Match main's pre-adapter behavior: any missing field defaults to 0
+        // rather than aborting the whole extraction. The presence of `usage` is
+        // the only gating signal.
         let usage = chunk.get("message")?.get("usage")?;
         Some(TokenUsage {
-            input_tokens: usage.get("input_tokens")?.as_i64()?,
-            output_tokens: usage.get("output_tokens")?.as_i64()?,
+            input_tokens: usage
+                .get("input_tokens")
+                .and_then(|v| v.as_i64())
+                .unwrap_or(0),
+            output_tokens: usage
+                .get("output_tokens")
+                .and_then(|v| v.as_i64())
+                .unwrap_or(0),
             cache_read_tokens: usage
                 .get("cache_read_input_tokens")
                 .and_then(|v| v.as_i64())
@@ -219,7 +228,23 @@ impl ClaudeCodeAdapter {
         record_type: String,
         timestamp: Option<String>,
     ) -> Option<ParsedTranscriptRecord> {
-        let message = chunk.get("message")?;
+        let message = match chunk.get("message") {
+            Some(m) => m,
+            None => {
+                return Some(ParsedTranscriptRecord {
+                    record_type,
+                    timestamp,
+                    content_types: Vec::new(),
+                    tool_name: None,
+                    text: None,
+                    raw_input_tokens: None,
+                    raw_output_tokens: None,
+                    raw_cache_read_tokens: None,
+                    raw_cache_write_tokens: None,
+                    model: None,
+                });
+            }
+        };
         let model = message
             .get("model")
             .and_then(|v| v.as_str())
@@ -235,47 +260,44 @@ impl ClaudeCodeAdapter {
                     if !content_types.contains(&block_type.to_string()) {
                         content_types.push(block_type.to_string());
                     }
-                    match block_type {
-                        "text" => {
-                            if let Some(t) = block.get("text").and_then(|v| v.as_str()) {
-                                text_parts.push(t.to_string());
-                            }
-                        }
-                        "thinking" => {
-                            if let Some(t) = block.get("thinking").and_then(|v| v.as_str()) {
-                                text_parts.push(t.to_string());
-                            }
-                        }
-                        "tool_use" if first_tool_name.is_none() => {
-                            first_tool_name = block
-                                .get("name")
-                                .and_then(|v| v.as_str())
-                                .map(|s| s.to_string());
-                        }
-                        _ => {}
+                    if block_type == "tool_use" && first_tool_name.is_none() {
+                        first_tool_name = block
+                            .get("name")
+                            .and_then(|v| v.as_str())
+                            .map(|s| s.to_string());
                     }
+                }
+                if let Some(t) = block.get("text").and_then(|v| v.as_str()) {
+                    text_parts.push(t.to_string());
+                }
+                if let Some(t) = block.get("thinking").and_then(|v| v.as_str()) {
+                    text_parts.push(format!("[thinking] {}", t));
                 }
             }
         }
 
+        // Match main's parse_record: presence of `usage` field gates the whole
+        // RecordUsage downstream. Individual missing tokens default to 0.
         let usage = message.get("usage");
-        let raw_input_tokens = usage
-            .and_then(|u| u.get("input_tokens"))
-            .and_then(|v| v.as_i64());
-        let raw_output_tokens = usage
-            .and_then(|u| u.get("output_tokens"))
-            .and_then(|v| v.as_i64());
-        let raw_cache_read_tokens = usage
-            .and_then(|u| u.get("cache_read_input_tokens"))
-            .and_then(|v| v.as_i64());
-        let raw_cache_write_tokens = usage
-            .and_then(|u| u.get("cache_creation_input_tokens"))
-            .and_then(|v| v.as_i64());
+        let raw_input_tokens =
+            usage.map(|u| u.get("input_tokens").and_then(|v| v.as_i64()).unwrap_or(0));
+        let raw_output_tokens =
+            usage.map(|u| u.get("output_tokens").and_then(|v| v.as_i64()).unwrap_or(0));
+        let raw_cache_read_tokens = usage.map(|u| {
+            u.get("cache_read_input_tokens")
+                .and_then(|v| v.as_i64())
+                .unwrap_or(0)
+        });
+        let raw_cache_write_tokens = usage.map(|u| {
+            u.get("cache_creation_input_tokens")
+                .and_then(|v| v.as_i64())
+                .unwrap_or(0)
+        });
 
         let text = if text_parts.is_empty() {
             None
         } else {
-            Some(text_parts.join("\n"))
+            Some(text_parts.join("\n\n"))
         };
 
         Some(ParsedTranscriptRecord {
@@ -299,63 +321,49 @@ impl ClaudeCodeAdapter {
         timestamp: Option<String>,
     ) -> Option<ParsedTranscriptRecord> {
         let mut content_types = Vec::new();
-        let mut text_parts = Vec::new();
+        let mut text: Option<String> = None;
         let mut tool_name: Option<String> = None;
 
-        // Check for toolUseResult (e.g. Read, Glob, Bash results)
-        if let Some(tool_result) = chunk.get("toolUseResult") {
-            if let Some(file_info) = tool_result.get("file") {
-                let file_path = file_info
-                    .get("filePath")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("unknown");
-                tool_name = Some(format!("Read: {}", file_path));
-            } else if let Some(glob_info) = tool_result.get("glob") {
-                let pattern = glob_info
-                    .get("pattern")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("unknown");
-                tool_name = Some(format!("Glob: {}", pattern));
-            } else if let Some(bash_info) = tool_result.get("bash") {
-                let command = bash_info
-                    .get("command")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("unknown");
-                tool_name = Some(format!("Bash: {}", command));
+        // Handle message.content as either a string or an array of blocks.
+        match chunk.get("message").and_then(|m| m.get("content")) {
+            Some(serde_json::Value::String(s)) => {
+                content_types.push("text".to_string());
+                text = Some(s.clone());
             }
-        }
-
-        // Handle message.content as either a string or an array
-        if let Some(message) = chunk.get("message") {
-            if let Some(content) = message.get("content") {
-                if let Some(text) = content.as_str() {
-                    text_parts.push(text.to_string());
-                    content_types.push("text".to_string());
-                } else if let Some(arr) = content.as_array() {
-                    for block in arr {
-                        if let Some(block_type) = block.get("type").and_then(|v| v.as_str()) {
-                            if !content_types.contains(&block_type.to_string()) {
-                                content_types.push(block_type.to_string());
+            Some(serde_json::Value::Array(arr)) => {
+                for block in arr {
+                    if let Some(ct) = block.get("type").and_then(|v| v.as_str()) {
+                        if !content_types.contains(&ct.to_string()) {
+                            content_types.push(ct.to_string());
+                        }
+                        if ct == "tool_result" {
+                            if let Some(content) = block.get("content").and_then(|v| v.as_str()) {
+                                text = Some(content.to_string());
                             }
-                            match block_type {
-                                "tool_result" | "text" => {
-                                    if let Some(t) = block.get("text").and_then(|v| v.as_str()) {
-                                        text_parts.push(t.to_string());
-                                    }
-                                }
-                                _ => {}
+                        } else if ct == "text" {
+                            if let Some(t) = block.get("text").and_then(|v| v.as_str()) {
+                                text = Some(t.to_string());
                             }
                         }
                     }
                 }
             }
+            _ => {}
         }
 
-        let text = if text_parts.is_empty() {
-            None
-        } else {
-            Some(text_parts.join("\n"))
-        };
+        // toolUseResult discriminates by which top-level field is present.
+        if let Some(tur) = chunk.get("toolUseResult") {
+            if let Some(file) = tur
+                .get("file")
+                .and_then(|f| f.get("filePath").and_then(|v| v.as_str()))
+            {
+                tool_name = Some(format!("Read: {}", file));
+            } else if tur.get("filenames").is_some() {
+                tool_name = Some("Glob".to_string());
+            } else if tur.get("stdout").is_some() {
+                tool_name = Some("Bash".to_string());
+            }
+        }
 
         Some(ParsedTranscriptRecord {
             record_type,
@@ -379,22 +387,23 @@ impl ClaudeCodeAdapter {
     ) -> Option<ParsedTranscriptRecord> {
         let data = chunk.get("data");
         let hook_name = data
-            .and_then(|d| d.get("hookName"))
-            .and_then(|v| v.as_str())
-            .unwrap_or("unknown");
-        let hook_event = data
-            .and_then(|d| d.get("hookEvent"))
-            .and_then(|v| v.as_str())
-            .unwrap_or("unknown");
-
-        let text = format!("{}: {}", hook_event, hook_name);
+            .and_then(|d| d.get("hookName").and_then(|v| v.as_str()))
+            .map(|s| s.to_string());
+        let hook_event = data.and_then(|d| d.get("hookEvent").and_then(|v| v.as_str()));
+        let text = hook_event.map(|e| {
+            if let Some(ref name) = hook_name {
+                format!("{}: {}", e, name)
+            } else {
+                e.to_string()
+            }
+        });
 
         Some(ParsedTranscriptRecord {
             record_type,
             timestamp,
             content_types: Vec::new(),
-            tool_name: None,
-            text: Some(text),
+            tool_name: hook_name,
+            text,
             raw_input_tokens: None,
             raw_output_tokens: None,
             raw_cache_read_tokens: None,
@@ -409,28 +418,29 @@ impl ClaudeCodeAdapter {
         record_type: String,
         timestamp: Option<String>,
     ) -> Option<ParsedTranscriptRecord> {
-        let subtype = chunk.get("subtype").and_then(|v| v.as_str());
-
+        let subtype = chunk
+            .get("subtype")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown");
         let text = match subtype {
-            Some("turn_duration") => {
-                let duration_ms = chunk
+            "turn_duration" => {
+                let ms = chunk
                     .get("durationMs")
                     .and_then(|v| v.as_f64())
                     .unwrap_or(0.0);
-                let seconds = duration_ms / 1000.0;
-                Some(format!("Turn duration: {:.1}s", seconds))
+                Some(format!("turn_duration: {:.1}s", ms / 1000.0))
             }
-            Some("stop_hook_summary") => {
-                let hook_count = chunk.get("hookCount").and_then(|v| v.as_i64()).unwrap_or(0);
-                Some(format!("Stop hooks executed: {}", hook_count))
+            "stop_hook_summary" => {
+                let count = chunk.get("hookCount").and_then(|v| v.as_i64()).unwrap_or(0);
+                Some(format!("stop_hook_summary: {} hooks", count))
             }
-            _ => None,
+            _ => Some(subtype.to_string()),
         };
 
         Some(ParsedTranscriptRecord {
             record_type,
             timestamp,
-            content_types: Vec::new(),
+            content_types: vec![subtype.to_string()],
             tool_name: None,
             text,
             raw_input_tokens: None,

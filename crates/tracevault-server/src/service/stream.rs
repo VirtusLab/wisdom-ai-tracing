@@ -88,6 +88,16 @@ impl StreamService {
                     // Each adapter decides which chunk types contain file modifications.
                     let transcript_file_changes =
                         adapter.extract_file_changes_from_transcript(line);
+                    // Prefer the chunk's own timestamp (precise per-line time of the
+                    // event in the transcript) over the hook delivery time, which can
+                    // lag minutes behind for batched transcript ingestion (e.g. Codex
+                    // emits patches mid-turn but the hook fires at Stop).
+                    let chunk_timestamp = line
+                        .get("timestamp")
+                        .and_then(|v| v.as_str())
+                        .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+                        .map(|dt| dt.with_timezone(&chrono::Utc))
+                        .unwrap_or(req.timestamp);
                     for change in transcript_file_changes {
                         let tool_name = line
                             .get("payload")
@@ -103,7 +113,7 @@ impl StreamService {
                                 tool_input: line.get("payload").cloned(),
                                 tool_response: None,
                                 tool_is_error: None,
-                                timestamp: Some(req.timestamp),
+                                timestamp: Some(chunk_timestamp),
                             },
                         )
                         .await?;
@@ -117,7 +127,7 @@ impl StreamService {
                                     change_type: change.change_type,
                                     diff_text: change.diff_text,
                                     content_hash: change.content_hash,
-                                    timestamp: Some(req.timestamp),
+                                    timestamp: Some(chunk_timestamp),
                                 },
                             )
                             .await?;
@@ -234,7 +244,7 @@ impl StreamService {
                     event_db_id = Some(eid);
 
                     // Extract file changes for file-modifying tools
-                    if adapter.is_file_modifying(tool_name) {
+                    if store_response {
                         if let Some(ref tool_input) = req.tool_input {
                             let file_changes = adapter.extract_file_changes(tool_name, tool_input);
                             for change in file_changes {
