@@ -17,7 +17,7 @@ pub struct OrgRepo;
 
 impl OrgRepo {
     pub async fn name_exists(pool: &PgPool, name: &str) -> Result<bool, AppError> {
-        let row = sqlx::query_as::<_, (Uuid,)>("SELECT id FROM orgs WHERE name = $1")
+        let row = sqlx::query_as::<_, (Uuid,)>("SELECT id FROM orgs WHERE LOWER(name) = LOWER($1)")
             .bind(name)
             .fetch_optional(pool)
             .await?;
@@ -26,7 +26,7 @@ impl OrgRepo {
     }
 
     pub async fn find_by_slug(pool: &PgPool, slug: &str) -> Result<Option<Uuid>, AppError> {
-        let row = sqlx::query_as::<_, (Uuid,)>("SELECT id FROM orgs WHERE name = $1")
+        let row = sqlx::query_as::<_, (Uuid,)>("SELECT id FROM orgs WHERE LOWER(name) = LOWER($1)")
             .bind(slug)
             .fetch_optional(pool)
             .await?;

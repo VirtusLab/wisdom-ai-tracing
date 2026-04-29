@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { page } from '$app/stores';
+	import { goto } from '$app/navigation';
 	import { api } from '$lib/api';
 	import { orgStore } from '$lib/stores/org';
 	import { features } from '$lib/stores/features';
@@ -26,8 +27,12 @@
 	let org: OrgDetail | null = $state(null);
 	let editing = $state(false);
 	let editDisplayName = $state('');
+	let editingName = $state(false);
+	let editName = $state('');
 	let saving = $state(false);
+	let savingName = $state(false);
 	let error = $state('');
+	let nameError = $state('');
 	let success = $state('');
 
 	const isOwner = $derived(orgState.current?.role === 'owner');
@@ -36,6 +41,7 @@
 		try {
 			org = await api.get<OrgDetail>(`/api/v1/orgs/${slug}`);
 			editDisplayName = org.display_name ?? '';
+			editName = org.name;
 		} catch (err) {
 			error = err instanceof Error ? err.message : 'Failed to load organization';
 		}
@@ -55,6 +61,27 @@
 			error = err instanceof Error ? err.message : 'Failed to update';
 		} finally {
 			saving = false;
+		}
+	}
+
+	async function handleSaveName() {
+		if (!org) return;
+		const next = editName.trim();
+		if (!next || next === org.name) {
+			editingName = false;
+			return;
+		}
+		savingName = true;
+		nameError = '';
+		success = '';
+		try {
+			const resp = await api.put<{ name: string }>(`/api/v1/orgs/${slug}`, { name: next });
+			editingName = false;
+			await goto(`/orgs/${resp.name}/settings/org`, { invalidateAll: true });
+		} catch (err) {
+			nameError = err instanceof Error ? err.message : 'Failed to rename';
+		} finally {
+			savingName = false;
 		}
 	}
 </script>
@@ -94,20 +121,49 @@
 		<div class="border-border overflow-hidden rounded-lg border max-w-lg">
 			<div class="bg-muted/30 px-4 py-3 text-sm font-semibold">General</div>
 			<div class="p-4 space-y-4">
-				<div class="flex justify-between items-center">
-					<div>
-						<span class="text-muted-foreground text-xs">GitHub Organization</span>
-						<p class="font-mono text-sm">{org.name}</p>
+				{#if editingName}
+					<div class="space-y-3">
+						<div class="grid gap-2">
+							<Label for="org_name">GitHub Organization</Label>
+							<Input id="org_name" bind:value={editName} placeholder="e.g. VirtusLab" />
+							<p class="text-xs text-muted-foreground">
+								Must match your GitHub organization name (case is preserved). Allowed: letters, digits, hyphens.
+								Renaming changes the URL of this org and may break repo configs that reference the old slug.
+							</p>
+							{#if nameError}
+								<p class="text-xs text-destructive">{nameError}</p>
+							{/if}
+						</div>
+						<div class="flex gap-2">
+							<Button onclick={handleSaveName} disabled={savingName}>
+								{savingName ? 'Saving...' : 'Save'}
+							</Button>
+							<Button variant="outline" onclick={() => { editingName = false; nameError = ''; editName = org?.name ?? ''; }}>
+								Cancel
+							</Button>
+						</div>
 					</div>
-					<a
-						href="https://github.com/{org.name}"
-						target="_blank"
-						rel="noopener noreferrer"
-						class="text-xs text-muted-foreground hover:underline"
-					>
-						View on GitHub
-					</a>
-				</div>
+				{:else}
+					<div class="flex justify-between items-center gap-2">
+						<div>
+							<span class="text-muted-foreground text-xs">GitHub Organization</span>
+							<p class="font-mono text-sm">{org.name}</p>
+						</div>
+						<div class="flex items-center gap-3">
+							<a
+								href="https://github.com/{org.name}"
+								target="_blank"
+								rel="noopener noreferrer"
+								class="text-xs text-muted-foreground hover:underline"
+							>
+								View on GitHub
+							</a>
+							{#if isOwner}
+								<Button variant="outline" size="sm" onclick={() => (editingName = true)}>Edit</Button>
+							{/if}
+						</div>
+					</div>
+				{/if}
 
 				<div class="border-t pt-4">
 					{#if editing}

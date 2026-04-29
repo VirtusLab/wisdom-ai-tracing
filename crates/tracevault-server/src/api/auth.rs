@@ -92,11 +92,12 @@ pub async fn register(
         ));
     }
 
-    // Check if org already exists
-    let org_exists: Option<(Uuid,)> = sqlx::query_as("SELECT id FROM orgs WHERE name = $1")
-        .bind(&org_slug)
-        .fetch_optional(&state.pool)
-        .await?;
+    // Check if org already exists (case-insensitive)
+    let org_exists: Option<(Uuid,)> =
+        sqlx::query_as("SELECT id FROM orgs WHERE LOWER(name) = LOWER($1)")
+            .bind(&org_slug)
+            .fetch_optional(&state.pool)
+            .await?;
 
     if org_exists.is_some() {
         return Err(AppError::Conflict(
@@ -593,7 +594,7 @@ pub async fn request_invitation(
     State(state): State<AppState>,
     Json(req): Json<InvitationRequestInput>,
 ) -> Result<StatusCode, AppError> {
-    let org_id: Uuid = sqlx::query_scalar("SELECT id FROM orgs WHERE name = $1")
+    let org_id: Uuid = sqlx::query_scalar("SELECT id FROM orgs WHERE LOWER(name) = LOWER($1)")
         .bind(&req.org_name)
         .fetch_optional(&state.pool)
         .await?

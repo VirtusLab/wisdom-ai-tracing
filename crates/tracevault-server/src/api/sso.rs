@@ -21,7 +21,7 @@ pub async fn sso_status(
     State(state): State<AppState>,
     axum::extract::Path(slug): axum::extract::Path<String>,
 ) -> Result<Json<SsoStatusResponse>, AppError> {
-    let org_row = sqlx::query_as::<_, (Uuid,)>("SELECT id FROM orgs WHERE name = $1")
+    let org_row = sqlx::query_as::<_, (Uuid,)>("SELECT id FROM orgs WHERE LOWER(name) = LOWER($1)")
         .bind(&slug)
         .fetch_optional(&state.pool)
         .await?
@@ -279,7 +279,7 @@ pub async fn sso_initiate(
         ));
     }
 
-    let org_row = sqlx::query_as::<_, (Uuid,)>("SELECT id FROM orgs WHERE name = $1")
+    let org_row = sqlx::query_as::<_, (Uuid,)>("SELECT id FROM orgs WHERE LOWER(name) = LOWER($1)")
         .bind(&slug)
         .fetch_optional(&state.pool)
         .await?
