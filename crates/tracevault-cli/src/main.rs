@@ -1,5 +1,6 @@
 use clap::Parser;
 use std::env;
+use tracevault_core::agent_adapter::AgentAdapterRegistry;
 
 mod api_client;
 mod commands;
@@ -142,11 +143,18 @@ async fn main() {
                     let entry = target.gitignore_entry();
                     println!("TraceVault initialized in {}", cwd.display());
                     println!("Claude Code hooks installed ({entry})");
+                    let registry = AgentAdapterRegistry::new();
                     for agent in &agents {
-                        match agent.as_str() {
-                            "codex" => println!("Codex hooks installed (.codex/hooks.json)"),
-                            "claude" | "claude-code" => {}
-                            other => println!("{other} hooks installed"),
+                        if agent == "claude" || agent == "claude-code" {
+                            // Claude is always installed above via the settings target.
+                            continue;
+                        }
+                        let adapter = registry.get(agent);
+                        let path = adapter.hooks_install_path();
+                        if path.is_empty() {
+                            println!("{} hooks installed", adapter.display_name());
+                        } else {
+                            println!("{} hooks installed ({})", adapter.display_name(), path);
                         }
                     }
                     println!("Git hooks installed (pre-push, post-commit)");

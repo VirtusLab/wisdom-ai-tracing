@@ -1,6 +1,11 @@
+use chrono::{TimeZone, Utc};
 use serde_json::json;
 use tracevault_core::agent_adapter::AgentAdapterRegistry;
 use tracevault_core::streaming::StreamEventType;
+
+fn ts() -> chrono::DateTime<chrono::Utc> {
+    Utc.with_ymd_and_hms(2026, 4, 29, 10, 0, 0).unwrap()
+}
 
 #[test]
 fn registry_unknown_agent_returns_default() {
@@ -48,25 +53,28 @@ fn claude_code_map_event_types() {
 }
 
 #[test]
-fn claude_code_extract_file_change_write() {
+fn claude_code_file_changes_from_hook_write() {
     let registry = AgentAdapterRegistry::new();
     let adapter = registry.get("claude-code");
     let input = json!({"file_path": "src/main.rs", "content": "fn main() {}"});
-    let changes = adapter.extract_file_changes("Write", &input);
-    assert_eq!(changes.len(), 1);
-    assert_eq!(changes[0].file_path, "src/main.rs");
-    assert_eq!(changes[0].change_type, "create");
-    assert!(changes[0].content_hash.is_some());
+    let records = adapter.file_changes_from_hook("Write", &input, ts());
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].change.file_path, "src/main.rs");
+    assert_eq!(records[0].change.change_type, "create");
+    assert!(records[0].change.content_hash.is_some());
+    assert_eq!(records[0].tool_name, "Write");
+    assert_eq!(records[0].timestamp, ts());
 }
 
 #[test]
-fn claude_code_extract_file_change_edit() {
+fn claude_code_file_changes_from_hook_edit() {
     let registry = AgentAdapterRegistry::new();
     let adapter = registry.get("claude-code");
     let input = json!({"file_path": "src/lib.rs", "old_string": "old", "new_string": "new"});
-    let changes = adapter.extract_file_changes("Edit", &input);
-    assert_eq!(changes.len(), 1);
-    assert_eq!(changes[0].change_type, "edit");
+    let records = adapter.file_changes_from_hook("Edit", &input, ts());
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].change.change_type, "edit");
+    assert_eq!(records[0].tool_name, "Edit");
 }
 
 #[test]
@@ -74,7 +82,9 @@ fn claude_code_read_returns_empty() {
     let registry = AgentAdapterRegistry::new();
     let adapter = registry.get("claude-code");
     let input = json!({"file_path": "src/lib.rs"});
-    assert!(adapter.extract_file_changes("Read", &input).is_empty());
+    assert!(adapter
+        .file_changes_from_hook("Read", &input, ts())
+        .is_empty());
 }
 
 #[test]
@@ -567,17 +577,19 @@ fn codex_patch_parse_delete_file() {
 }
 
 #[test]
-fn codex_hook_extract_file_changes_returns_empty() {
-    // Codex does not extract file changes from hook events
+fn codex_file_changes_from_hook_returns_empty() {
+    // Codex hook events don't carry file modifications.
     let registry = AgentAdapterRegistry::new();
     let adapter = registry.get("codex");
     let input = json!({"command": "cargo build"});
-    assert!(adapter.extract_file_changes("Bash", &input).is_empty());
+    assert!(adapter
+        .file_changes_from_hook("Bash", &input, ts())
+        .is_empty());
 }
 
 #[test]
 fn codex_is_file_modifying_always_false() {
-    // Codex file changes come from transcript, not hook events
+    // Codex file changes come from transcript, not hook events.
     let registry = AgentAdapterRegistry::new();
     let adapter = registry.get("codex");
     assert!(!adapter.is_file_modifying("Bash"));
@@ -586,7 +598,30 @@ fn codex_is_file_modifying_always_false() {
 }
 
 #[test]
-fn codex_extract_file_changes_from_transcript_apply_patch() {
+fn codex_file_changes_from_transcript_apply_patch() {
+    let registry = AgentAdapterRegistry::new();
+    let adapter = registry.get("codex");
+    let chunk = json!({
+        "type": "response_item",
+        "timestamp": "2026-04-29T11:30:00Z",
+        "payload": {
+            "type": "custom_tool_call",
+            "name": "apply_patch",
+            "input": "*** Begin Patch\n*** Update File: src/main.rs\n@@ fn old()\n-fn old()\n+fn new_func()\n*** End Patch\n"
+        }
+    });
+    let records = adapter.file_changes_from_transcript(&chunk, ts());
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].change.file_path, "src/main.rs");
+    assert_eq!(records[0].change.change_type, "edit");
+    assert_eq!(records[0].tool_name, "apply_patch");
+    assert!(records[0].tool_input.is_some());
+    // chunk timestamp wins over fallback.
+    assert_ne!(records[0].timestamp, ts());
+}
+
+#[test]
+fn codex_file_changes_from_transcript_falls_back_when_chunk_has_no_timestamp() {
     let registry = AgentAdapterRegistry::new();
     let adapter = registry.get("codex");
     let chunk = json!({
@@ -594,17 +629,16 @@ fn codex_extract_file_changes_from_transcript_apply_patch() {
         "payload": {
             "type": "custom_tool_call",
             "name": "apply_patch",
-            "input": "*** Begin Patch\n*** Update File: src/main.rs\n@@ fn old()\n-fn old()\n+fn new_func()\n*** End Patch\n"
+            "input": "*** Begin Patch\n*** Add File: x.rs\n+x\n*** End Patch\n"
         }
     });
-    let changes = adapter.extract_file_changes_from_transcript(&chunk);
-    assert_eq!(changes.len(), 1);
-    assert_eq!(changes[0].file_path, "src/main.rs");
-    assert_eq!(changes[0].change_type, "edit");
+    let records = adapter.file_changes_from_transcript(&chunk, ts());
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].timestamp, ts());
 }
 
 #[test]
-fn codex_extract_file_changes_from_transcript_non_patch_returns_empty() {
+fn codex_file_changes_from_transcript_non_patch_returns_empty() {
     let registry = AgentAdapterRegistry::new();
     let adapter = registry.get("codex");
     let chunk = json!({
@@ -612,7 +646,7 @@ fn codex_extract_file_changes_from_transcript_non_patch_returns_empty() {
         "payload": {"type": "message", "role": "assistant", "content": []}
     });
     assert!(adapter
-        .extract_file_changes_from_transcript(&chunk)
+        .file_changes_from_transcript(&chunk, ts())
         .is_empty());
 }
 
@@ -652,12 +686,12 @@ fn codex_custom_tool_call_display() {
 }
 
 #[test]
-fn claude_code_extract_file_changes_from_transcript_returns_empty() {
-    // Claude Code file changes come from hook events, not transcript
+fn claude_code_file_changes_from_transcript_returns_empty() {
+    // Claude Code file changes come from hook events, not transcript.
     let registry = AgentAdapterRegistry::new();
     let adapter = registry.get("claude-code");
     let chunk = json!({"type": "assistant", "message": {"content": []}});
     assert!(adapter
-        .extract_file_changes_from_transcript(&chunk)
+        .file_changes_from_transcript(&chunk, ts())
         .is_empty());
 }

@@ -1,3 +1,4 @@
+use chrono::{DateTime, Utc};
 use sha2::{Digest, Sha256};
 use std::fs;
 use std::io;
@@ -6,7 +7,7 @@ use std::path::Path;
 use crate::hooks::HookResponse;
 use crate::streaming::{ExtractedFileChange, StreamEventType};
 
-use super::{AgentAdapter, ParsedTranscriptRecord, TokenUsage};
+use super::{AgentAdapter, FileChangeRecord, ParsedTranscriptRecord, TokenUsage};
 
 pub struct ClaudeCodeAdapter;
 
@@ -56,6 +57,14 @@ impl AgentAdapter for ClaudeCodeAdapter {
         "claude-code"
     }
 
+    fn display_name(&self) -> &str {
+        "Claude Code"
+    }
+
+    fn hooks_install_path(&self) -> &str {
+        ".claude/settings.json"
+    }
+
     fn map_event_type(&self, hook_event_name: &str) -> StreamEventType {
         // Claude Code has no SessionStart hook — Notification is the first
         // hook fired and serves as the session-start signal.
@@ -70,12 +79,13 @@ impl AgentAdapter for ClaudeCodeAdapter {
         matches!(tool_name, "Write" | "Edit" | "Bash")
     }
 
-    fn extract_file_changes(
+    fn file_changes_from_hook(
         &self,
         tool_name: &str,
         tool_input: &serde_json::Value,
-    ) -> Vec<ExtractedFileChange> {
-        match tool_name {
+        timestamp: DateTime<Utc>,
+    ) -> Vec<FileChangeRecord> {
+        let change = match tool_name {
             "Write" => {
                 let file_path = match tool_input.get("file_path").and_then(|v| v.as_str()) {
                     Some(p) => p.to_string(),
@@ -93,12 +103,12 @@ impl AgentAdapter for ClaudeCodeAdapter {
                     .map(|line| format!("+{}", line))
                     .collect::<Vec<_>>()
                     .join("\n");
-                vec![ExtractedFileChange {
+                ExtractedFileChange {
                     file_path,
                     change_type: "create".to_string(),
                     diff_text: Some(diff_text),
                     content_hash: Some(hash),
-                }]
+                }
             }
             "Edit" => {
                 let file_path = match tool_input.get("file_path").and_then(|v| v.as_str()) {
@@ -114,15 +124,21 @@ impl AgentAdapter for ClaudeCodeAdapter {
                     None => return Vec::new(),
                 };
                 let diff_text = format!("--- {}\n+++ {}", old_string, new_string);
-                vec![ExtractedFileChange {
+                ExtractedFileChange {
                     file_path,
                     change_type: "edit".to_string(),
                     diff_text: Some(diff_text),
                     content_hash: None,
-                }]
+                }
             }
-            _ => Vec::new(),
-        }
+            _ => return Vec::new(),
+        };
+        vec![FileChangeRecord {
+            change,
+            tool_name: tool_name.to_string(),
+            tool_input: Some(tool_input.clone()),
+            timestamp,
+        }]
     }
 
     fn extract_token_usage(&self, chunk: &serde_json::Value) -> Option<TokenUsage> {

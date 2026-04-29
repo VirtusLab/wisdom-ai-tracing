@@ -84,53 +84,41 @@ impl StreamService {
                         continue;
                     }
 
-                    // Extract file changes from transcript chunks (e.g. Codex apply_patch).
-                    // Each adapter decides which chunk types contain file modifications.
-                    let transcript_file_changes =
-                        adapter.extract_file_changes_from_transcript(line);
-                    // Prefer the chunk's own timestamp (precise per-line time of the
-                    // event in the transcript) over the hook delivery time, which can
-                    // lag minutes behind for batched transcript ingestion (e.g. Codex
-                    // emits patches mid-turn but the hook fires at Stop).
-                    let chunk_timestamp = line
-                        .get("timestamp")
-                        .and_then(|v| v.as_str())
-                        .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
-                        .map(|dt| dt.with_timezone(&chrono::Utc))
-                        .unwrap_or(req.timestamp);
-                    for change in transcript_file_changes {
-                        let tool_name = line
-                            .get("payload")
-                            .and_then(|p| p.get("name"))
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("unknown");
-                        let event_id = EventRepo::insert_tool_event(
-                            &state.pool,
-                            &crate::repo::events::InsertToolEvent {
-                                session_id: session_db_id,
-                                event_index: chunk_index,
-                                tool_name: Some(tool_name.to_string()),
-                                tool_input: line.get("payload").cloned(),
-                                tool_response: None,
-                                tool_is_error: None,
-                                timestamp: Some(chunk_timestamp),
-                            },
-                        )
-                        .await?;
-                        if let Some(eid) = event_id {
-                            EventRepo::insert_file_change(
+                    // Transcript-sourced file changes (Codex apply_patch) come
+                    // with their own synthetic tool_event. The capability flag
+                    // gates the call entirely so adapters without this feature
+                    // (Claude Code) don't even invoke the method — keeping the
+                    // pre-multi-agent code path for them bit-for-bit.
+                    if adapter.provides_transcript_file_changes() {
+                        for record in adapter.file_changes_from_transcript(line, req.timestamp) {
+                            let event_id = EventRepo::insert_tool_event(
                                 &state.pool,
-                                &InsertFileChange {
+                                &crate::repo::events::InsertToolEvent {
                                     session_id: session_db_id,
-                                    event_id: eid,
-                                    file_path: change.file_path,
-                                    change_type: change.change_type,
-                                    diff_text: change.diff_text,
-                                    content_hash: change.content_hash,
-                                    timestamp: Some(chunk_timestamp),
+                                    event_index: chunk_index,
+                                    tool_name: Some(record.tool_name),
+                                    tool_input: record.tool_input,
+                                    tool_response: None,
+                                    tool_is_error: None,
+                                    timestamp: Some(record.timestamp),
                                 },
                             )
                             .await?;
+                            if let Some(eid) = event_id {
+                                EventRepo::insert_file_change(
+                                    &state.pool,
+                                    &InsertFileChange {
+                                        session_id: session_db_id,
+                                        event_id: eid,
+                                        file_path: record.change.file_path,
+                                        change_type: record.change.change_type,
+                                        diff_text: record.change.diff_text,
+                                        content_hash: record.change.content_hash,
+                                        timestamp: Some(record.timestamp),
+                                    },
+                                )
+                                .await?;
+                            }
                         }
                         if let Some(id) = msg.get("id").and_then(|v| v.as_str()) {
                             message_ids.push(id.to_string());
@@ -243,21 +231,26 @@ impl StreamService {
                 if let Some(eid) = inserted_id {
                     event_db_id = Some(eid);
 
-                    // Extract file changes for file-modifying tools
+                    // Hook-sourced file changes attach to the tool_event that
+                    // was just inserted. Gated by `is_file_modifying` so the
+                    // Claude path matches main exactly: Read/Glob/etc. skip
+                    // the call, only Write/Edit/Bash enter (Bash returns empty
+                    // because there's no file_path/content to extract).
                     if store_response {
                         if let Some(ref tool_input) = req.tool_input {
-                            let file_changes = adapter.extract_file_changes(tool_name, tool_input);
-                            for change in file_changes {
+                            for record in
+                                adapter.file_changes_from_hook(tool_name, tool_input, req.timestamp)
+                            {
                                 EventRepo::insert_file_change(
                                     &state.pool,
                                     &InsertFileChange {
                                         session_id: session_db_id,
                                         event_id: eid,
-                                        file_path: change.file_path,
-                                        change_type: change.change_type,
-                                        diff_text: change.diff_text,
-                                        content_hash: change.content_hash,
-                                        timestamp: Some(req.timestamp),
+                                        file_path: record.change.file_path,
+                                        change_type: record.change.change_type,
+                                        diff_text: record.change.diff_text,
+                                        content_hash: record.change.content_hash,
+                                        timestamp: Some(record.timestamp),
                                     },
                                 )
                                 .await?;

@@ -1,4 +1,4 @@
-use crate::streaming::{ExtractedFileChange, StreamEventType};
+use crate::streaming::StreamEventType;
 
 use super::{AgentAdapter, ParsedTranscriptRecord, TokenUsage};
 
@@ -19,14 +19,6 @@ impl AgentAdapter for DefaultAdapter {
 
     fn is_file_modifying(&self, _tool_name: &str) -> bool {
         false
-    }
-
-    fn extract_file_changes(
-        &self,
-        _tool_name: &str,
-        _tool_input: &serde_json::Value,
-    ) -> Vec<ExtractedFileChange> {
-        Vec::new()
     }
 
     fn extract_token_usage(&self, _chunk: &serde_json::Value) -> Option<TokenUsage> {

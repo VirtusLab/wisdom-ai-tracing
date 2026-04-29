@@ -1,3 +1,4 @@
+use chrono::{DateTime, Utc};
 use sha2::{Digest, Sha256};
 use std::fs;
 use std::io;
@@ -5,7 +6,7 @@ use std::path::Path;
 
 use crate::streaming::{ExtractedFileChange, StreamEventType};
 
-use super::{AgentAdapter, ParsedTranscriptRecord, TokenUsage};
+use super::{AgentAdapter, FileChangeRecord, ParsedTranscriptRecord, TokenUsage};
 
 /// Adapter for OpenAI Codex CLI.
 ///
@@ -59,6 +60,14 @@ impl AgentAdapter for CodexAdapter {
         "codex"
     }
 
+    fn display_name(&self) -> &str {
+        "Codex"
+    }
+
+    fn hooks_install_path(&self) -> &str {
+        ".codex/hooks.json"
+    }
+
     fn map_event_type(&self, hook_event_name: &str) -> StreamEventType {
         match hook_event_name {
             "SessionStart" => StreamEventType::SessionStart,
@@ -67,27 +76,23 @@ impl AgentAdapter for CodexAdapter {
         }
     }
 
-    /// Codex hook events never carry file-modifying tool calls.
-    /// File changes are extracted from transcript via `extract_file_changes_from_transcript`.
+    /// Codex hook events never carry file-modifying tool calls. File changes
+    /// come from transcript chunks via `file_changes_from_transcript`.
     fn is_file_modifying(&self, _tool_name: &str) -> bool {
         false
     }
 
-    /// Not used for Codex — file changes come from transcript, not hook events.
-    fn extract_file_changes(
-        &self,
-        _tool_name: &str,
-        _tool_input: &serde_json::Value,
-    ) -> Vec<ExtractedFileChange> {
-        vec![]
+    fn provides_transcript_file_changes(&self) -> bool {
+        true
     }
 
     /// Extract file changes from Codex transcript chunks.
     /// Handles `response_item` with `payload.type: "custom_tool_call"` and `name: "apply_patch"`.
-    fn extract_file_changes_from_transcript(
+    fn file_changes_from_transcript(
         &self,
         chunk: &serde_json::Value,
-    ) -> Vec<ExtractedFileChange> {
+        fallback_timestamp: DateTime<Utc>,
+    ) -> Vec<FileChangeRecord> {
         let payload = match chunk.get("payload") {
             Some(p) => p,
             None => return vec![],
@@ -98,7 +103,10 @@ impl AgentAdapter for CodexAdapter {
             return vec![];
         }
 
-        let name = payload.get("name").and_then(|v| v.as_str()).unwrap_or("");
+        let name = payload
+            .get("name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown");
         if name != "apply_patch" {
             return vec![];
         }
@@ -108,7 +116,28 @@ impl AgentAdapter for CodexAdapter {
             None => return vec![],
         };
 
+        // Codex chunks carry their own RFC 3339 timestamp at the top level —
+        // use it for precise per-patch ordering instead of the hook delivery
+        // time (which can lag minutes if patches are batched and the hook
+        // only fires at Stop).
+        let timestamp = chunk
+            .get("timestamp")
+            .and_then(|v| v.as_str())
+            .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
+            .map(|dt| dt.with_timezone(&Utc))
+            .unwrap_or(fallback_timestamp);
+
+        let tool_input = Some(payload.clone());
+
         parse_codex_patch(input)
+            .into_iter()
+            .map(|change| FileChangeRecord {
+                change,
+                tool_name: name.to_string(),
+                tool_input: tool_input.clone(),
+                timestamp,
+            })
+            .collect()
     }
 
     fn extract_token_usage(&self, chunk: &serde_json::Value) -> Option<TokenUsage> {
