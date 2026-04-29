@@ -37,8 +37,7 @@ fn is_valid_slug(slug: &str) -> bool {
     if slug.starts_with('-') || slug.ends_with('-') {
         return false;
     }
-    slug.chars()
-        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+    slug.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
 }
 
 pub async fn create_org(
@@ -46,14 +45,16 @@ pub async fn create_org(
     auth: AuthUser,
     Json(req): Json<CreateOrgRequest>,
 ) -> Result<(StatusCode, Json<CreateOrgResponse>), AppError> {
-    // Normalize and validate slug
-    let req_name = req.name.trim().to_lowercase();
+    // Validate slug (case preserved so it can match GitHub org capitalization;
+    // uniqueness is enforced case-insensitively in the DB).
+    let req_name = req.name.trim().to_string();
     if !is_valid_slug(&req_name) {
         return Err(AppError::BadRequest(
-            "Slug must be 1-100 lowercase alphanumeric characters or hyphens, no leading/trailing hyphens".into(),
+            "Slug must be 1-100 alphanumeric characters or hyphens, no leading/trailing hyphens"
+                .into(),
         ));
     }
-    if RESERVED_SLUGS.contains(&req_name.as_str()) {
+    if RESERVED_SLUGS.contains(&req_name.to_lowercase().as_str()) {
         return Err(AppError::BadRequest(format!(
             "'{}' is a reserved name",
             req_name
@@ -187,13 +188,19 @@ pub async fn get_org(
 #[derive(Deserialize)]
 pub struct UpdateOrgRequest {
     pub display_name: Option<String>,
+    pub name: Option<String>,
+}
+
+#[derive(Serialize)]
+pub struct UpdateOrgResponse {
+    pub name: String,
 }
 
 pub async fn update_org(
     State(state): State<AppState>,
     auth: OrgAuth,
     Json(req): Json<UpdateOrgRequest>,
-) -> Result<StatusCode, AppError> {
+) -> Result<Json<UpdateOrgResponse>, AppError> {
     if auth.role != "owner" {
         return Err(AppError::Forbidden("Requires owner role".into()));
     }
@@ -206,7 +213,61 @@ pub async fn update_org(
             .await?;
     }
 
-    Ok(StatusCode::OK)
+    let mut new_name: Option<String> = None;
+    if let Some(name) = req.name.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        if !is_valid_slug(name) {
+            return Err(AppError::BadRequest(
+                "Slug must be 1-100 alphanumeric characters or hyphens, no leading/trailing hyphens".into(),
+            ));
+        }
+        if RESERVED_SLUGS.contains(&name.to_lowercase().as_str()) {
+            return Err(AppError::BadRequest(format!("'{name}' is a reserved name")));
+        }
+
+        let res = sqlx::query("UPDATE orgs SET name = $1 WHERE id = $2")
+            .bind(name)
+            .bind(auth.org_id)
+            .execute(&state.pool)
+            .await
+            .map_err(|e| {
+                if e.to_string().contains("unique") || e.to_string().contains("duplicate") {
+                    AppError::Conflict("Organization name already taken".into())
+                } else {
+                    AppError::Sqlx(e)
+                }
+            })?;
+
+        if res.rows_affected() == 0 {
+            return Err(AppError::NotFound("Org not found".into()));
+        }
+
+        crate::audit::log(
+            &state.pool,
+            crate::audit::user_action(
+                auth.org_id,
+                auth.user_id,
+                "org.rename",
+                "org",
+                Some(auth.org_id),
+                Some(serde_json::json!({"name": name})),
+            ),
+        )
+        .await;
+
+        new_name = Some(name.to_string());
+    }
+
+    let current_name = match new_name {
+        Some(n) => n,
+        None => {
+            sqlx::query_scalar::<_, String>("SELECT name FROM orgs WHERE id = $1")
+                .bind(auth.org_id)
+                .fetch_one(&state.pool)
+                .await?
+        }
+    };
+
+    Ok(Json(UpdateOrgResponse { name: current_name }))
 }
 
 // --- Members ---

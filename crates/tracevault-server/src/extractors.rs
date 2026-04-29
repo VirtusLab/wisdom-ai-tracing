@@ -105,16 +105,18 @@ impl FromRequestParts<AppState> for OrgAuth {
                 "Missing org slug in URL".to_string(),
             ))?;
 
-        // Resolve org
-        let org_row = sqlx::query_as::<_, (Uuid,)>("SELECT id FROM orgs WHERE name = $1")
-            .bind(&slug)
-            .fetch_optional(&state.pool)
-            .await
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-            .ok_or((
-                StatusCode::NOT_FOUND,
-                format!("Organization '{slug}' not found"),
-            ))?;
+        // Resolve org (case-insensitive — GitHub org names are case-insensitive,
+        // and stored slugs may preserve mixed case).
+        let org_row =
+            sqlx::query_as::<_, (Uuid,)>("SELECT id FROM orgs WHERE LOWER(name) = LOWER($1)")
+                .bind(&slug)
+                .fetch_optional(&state.pool)
+                .await
+                .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+                .ok_or((
+                    StatusCode::NOT_FOUND,
+                    format!("Organization '{slug}' not found"),
+                ))?;
 
         let org_id = org_row.0;
 
