@@ -68,6 +68,13 @@ impl AgentAdapter for CodexAdapter {
         ".codex/hooks.json"
     }
 
+    /// Codex transcripts can carry a model name in chunks that have no token
+    /// usage yet (e.g. a session-start chunk preceding any assistant reply).
+    /// Persist the model anyway so `sessions.model` is populated promptly.
+    fn persists_model_without_usage(&self) -> bool {
+        true
+    }
+
     fn map_event_type(&self, hook_event_name: &str) -> StreamEventType {
         match hook_event_name {
             "SessionStart" => StreamEventType::SessionStart,

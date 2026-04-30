@@ -120,9 +120,6 @@ impl StreamService {
                                 .await?;
                             }
                         }
-                        if let Some(id) = msg.get("id").and_then(|v| v.as_str()) {
-                            message_ids.push(id.to_string());
-                        }
                     }
 
                     // Extract token usage via adapter
@@ -134,6 +131,19 @@ impl StreamService {
                     }
                     if detected_model.is_none() {
                         detected_model = adapter.extract_model(line);
+                    }
+
+                    // Record assistant message ids for hook/proxy usage dedup.
+                    // Extracted from the Anthropic line shape directly (not via
+                    // the adapter): identical to pre-multi-agent main for
+                    // Claude Code, and a no-op for transcript shapes without
+                    // `message.id` (Codex).
+                    if let Some(id) = line
+                        .get("message")
+                        .and_then(|m| m.get("id"))
+                        .and_then(|v| v.as_str())
+                    {
+                        message_ids.push(id.to_string());
                     }
                 }
 
@@ -155,12 +165,18 @@ impl StreamService {
                     .await?;
                 }
 
-                // Update session token counts and cost if we found usage data
+                // Update session token counts and cost if we found usage data.
+                // The `persists_model_without_usage` capability lets adapters
+                // (Codex) extend the gate to also fire on a model-only batch;
+                // Claude leaves it `false` so the gate stays bit-identical to
+                // pre-multi-agent main (token presence only).
                 let has_tokens = batch_input > 0
                     || batch_output > 0
                     || batch_cache_read > 0
                     || batch_cache_write > 0;
-                if has_tokens || detected_model.is_some() {
+                let persist_model_only =
+                    adapter.persists_model_without_usage() && detected_model.is_some();
+                if has_tokens || persist_model_only {
                     let model_name = detected_model.as_deref().unwrap_or("unknown");
                     // input_tokens from the API includes cache_read and cache_write,
                     // subtract to get fresh (non-cached) input only

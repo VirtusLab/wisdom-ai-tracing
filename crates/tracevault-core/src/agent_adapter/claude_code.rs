@@ -65,6 +65,10 @@ impl AgentAdapter for ClaudeCodeAdapter {
         ".claude/settings.json"
     }
 
+    fn wire_protocol_version(&self) -> u32 {
+        1
+    }
+
     fn map_event_type(&self, hook_event_name: &str) -> StreamEventType {
         // Claude Code has no SessionStart hook — Notification is the first
         // hook fired and serves as the session-start signal.
@@ -269,6 +273,11 @@ impl ClaudeCodeAdapter {
         let mut content_types = Vec::new();
         let mut text_parts = Vec::new();
         let mut first_tool_name: Option<String> = None;
+        // Match main's `arr.iter().find(|b| type==tool_use).and_then(|b| name)`:
+        // we lock onto the first tool_use block regardless of whether it had a
+        // `name` field, so a missing name yields `None` (not a name from a
+        // later block).
+        let mut seen_tool_use = false;
 
         if let Some(content) = message.get("content").and_then(|v| v.as_array()) {
             for block in content {
@@ -276,7 +285,8 @@ impl ClaudeCodeAdapter {
                     if !content_types.contains(&block_type.to_string()) {
                         content_types.push(block_type.to_string());
                     }
-                    if block_type == "tool_use" && first_tool_name.is_none() {
+                    if block_type == "tool_use" && !seen_tool_use {
+                        seen_tool_use = true;
                         first_tool_name = block
                             .get("name")
                             .and_then(|v| v.as_str())

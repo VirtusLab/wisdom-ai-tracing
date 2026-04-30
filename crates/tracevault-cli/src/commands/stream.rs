@@ -69,6 +69,10 @@ pub fn drain_pending(pending_path: &Path) -> Result<Vec<String>, io::Error> {
     Ok(lines)
 }
 
+// Routing is driven by `hook_event.hook_event_name` from stdin (see
+// `adapter.map_event_type` below). The `--event` CLI flag is kept only because
+// the installed hooks pass it for shell-log readability. `project_root` is
+// resolved internally from `hook_event.cwd`, matching single-agent (main) behaviour.
 pub async fn run_stream(_event_type: &str, agent: &str) -> Result<(), Box<dyn std::error::Error>> {
     // 1. Read HookEvent from stdin
     let mut input = String::new();
@@ -101,11 +105,13 @@ pub async fn run_stream(_event_type: &str, agent: &str) -> Result<(), Box<dyn st
     let offset_path = session_dir.join(".stream_offset");
     let (transcript_lines, new_offset) = read_new_transcript_lines(transcript_path, &offset_path)?;
 
-    // 5. Map hook event to stream event type via the agent adapter
+    // 5. Map hook event to stream event type via the agent adapter.
+    // Resolve the adapter once; it owns the wire protocol version and the
+    // canonical tool name so user-supplied aliases (e.g. "claude" → "claude-code")
+    // produce the same wire bytes as the canonical name.
     let registry = AgentAdapterRegistry::new();
-    let stream_event_type = registry
-        .get(agent)
-        .map_event_type(&hook_event.hook_event_name);
+    let adapter = registry.get(agent);
+    let stream_event_type = adapter.map_event_type(&hook_event.hook_event_name);
 
     // Extract is_error from transcript for this tool_use_id
     let tool_is_error = hook_event
@@ -114,8 +120,8 @@ pub async fn run_stream(_event_type: &str, agent: &str) -> Result<(), Box<dyn st
         .and_then(|uid| extract_is_error_from_transcript(uid, &transcript_lines));
 
     let mut req = StreamEventRequest {
-        protocol_version: 2,
-        tool: Some(agent.to_string()),
+        protocol_version: adapter.wire_protocol_version(),
+        tool: Some(adapter.name().to_string()),
         event_type: stream_event_type,
         session_id: hook_event.session_id.clone(),
         timestamp: chrono::Utc::now(),
@@ -198,7 +204,7 @@ pub async fn run_stream(_event_type: &str, agent: &str) -> Result<(), Box<dyn st
     }
 
     // 12. Always print agent-specific hook response to stdout
-    let response = registry.get(agent).hook_response();
+    let response = adapter.hook_response();
     println!("{}", serde_json::to_string(&response)?);
 
     Ok(())

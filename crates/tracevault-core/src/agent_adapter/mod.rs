@@ -59,6 +59,21 @@ pub trait AgentAdapter: Send + Sync {
     fn hooks_install_path(&self) -> &str {
         ""
     }
+    /// Wire protocol version the CLI should send for this adapter.
+    /// Claude Code stays on v1 to keep its request bytes identical to the
+    /// pre-multi-agent main; new adapters use v2 (which carries `tool` over
+    /// the wire instead of the server hardcoding "claude-code").
+    fn wire_protocol_version(&self) -> u32 {
+        2
+    }
+    /// Capability flag: should the server fire `update_tokens` when a
+    /// transcript batch contained a model but zero token usage? Defaults to
+    /// `false` to preserve main's Claude path bit-for-bit (where the gate was
+    /// solely on token presence). Codex sets this to `true` because its
+    /// model-only chunks can legitimately precede usage.
+    fn persists_model_without_usage(&self) -> bool {
+        false
+    }
     fn map_event_type(&self, hook_event_name: &str) -> StreamEventType;
     fn is_file_modifying(&self, tool_name: &str) -> bool;
     /// File changes derived from a hook ToolUse event (Claude Write/Edit).
