@@ -403,7 +403,8 @@ async fn init_no_gitignore_skips_gitignore_update() {
 
 #[tokio::test]
 async fn init_with_codex_agent_also_installs_claude() {
-    // --agent codex must be additive: Claude Code hooks are still installed.
+    // --agent codex must be additive: Claude Code hooks are still installed
+    // (the Claude path stays byte-equivalent with the single-agent behaviour).
     let tmp = tmp_git_repo();
     let extras = vec!["codex".to_string()];
 
