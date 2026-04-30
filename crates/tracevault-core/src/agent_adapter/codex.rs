@@ -45,6 +45,7 @@ fn hooks_json() -> serde_json::Value {
             }]
         }],
         "Stop": [{
+            "matcher": "",
             "hooks": [{
                 "type": "command",
                 "command": "tracevault stream --agent codex --event stop",

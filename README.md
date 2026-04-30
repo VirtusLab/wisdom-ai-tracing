@@ -373,7 +373,7 @@ tracevault login --server-url https://your-tracevault-server.example.com
 tracevault init --agent codex
 ```
 
-This installs hooks in `.codex/hooks.json` in addition to the Claude Code hooks. Codex sessions are traced including transcript parsing, token usage, and file changes via `apply_patch`. The session detail view shows a Codex badge to distinguish agent types.
+`--agent` selects exactly which agents to install — passing it replaces the default. `tracevault init --agent codex` installs Codex hooks in `.codex/hooks.json` only; to enable both agents in the same repo, pass each one explicitly: `tracevault init --agent claude-code --agent codex`. Codex sessions are traced including transcript parsing, token usage, and file changes via `apply_patch`. The session detail view shows a Codex badge to distinguish agent types.
 
 ## Keys & Secrets
 
