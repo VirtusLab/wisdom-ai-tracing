@@ -424,9 +424,21 @@ pub async fn get_blame(
         .peel_to_commit()
         .map_err(|e| AppError::BadRequest(format!("Ref is not a commit: {e}")))?;
 
+    // Prevent path traversal attacks by rejecting paths containing '..'.
+    let path = std::path::Path::new(&query.path);
+    if path
+        .components()
+        .any(|c| c == std::path::Component::ParentDir)
+    {
+        return Err(AppError::BadRequest(format!(
+            "Invalid input: {}",
+            path.display()
+        )));
+    }
+
     let blame = repo
         .blame_file(
-            std::path::Path::new(&query.path),
+            path,
             Some(git2::BlameOptions::new().newest_commit(commit.id())),
         )
         .map_err(|e| AppError::Internal(format!("Blame failed: {e}")))?;
@@ -598,8 +610,21 @@ pub async fn generate_story(
             .peel_to_commit()
             .map_err(|e| AppError::BadRequest(format!("Ref is not a commit: {e}")))?;
         let tree = commit.tree()?;
+
+        // Prevent path traversal attacks by rejecting paths containing '..'.
+        let path = std::path::Path::new(&req.path);
+        if path
+            .components()
+            .any(|c| c == std::path::Component::ParentDir)
+        {
+            return Err(AppError::BadRequest(format!(
+                "Invalid input: {}",
+                path.display()
+            )));
+        }
+
         let entry = tree
-            .get_path(std::path::Path::new(&req.path))
+            .get_path(path)
             .map_err(|e| AppError::NotFound(format!("File not found: {e}")))?;
         let blob_obj = entry.to_object(&repo)?;
         let blob = blob_obj
@@ -841,8 +866,21 @@ pub async fn get_function_sessions(
             .peel_to_commit()
             .map_err(|e| AppError::BadRequest(format!("Ref is not a commit: {e}")))?;
         let tree = commit.tree()?;
+
+        // Prevent path traversal attacks by rejecting paths containing '..'.
+        let path = std::path::Path::new(&query.path);
+        if path
+            .components()
+            .any(|c| c == std::path::Component::ParentDir)
+        {
+            return Err(AppError::BadRequest(format!(
+                "Invalid input: {}",
+                path.display()
+            )));
+        }
+
         let entry = tree
-            .get_path(std::path::Path::new(&query.path))
+            .get_path(path)
             .map_err(|e| AppError::NotFound(format!("File not found: {e}")))?;
         let blob_obj = entry.to_object(&repo)?;
         let blob = blob_obj
