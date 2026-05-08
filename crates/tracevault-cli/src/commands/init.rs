@@ -1,8 +1,63 @@
 use crate::api_client::ApiClient;
 use crate::config::TracevaultConfig;
 use std::fs;
-use std::io;
+use std::io::{self, BufRead, IsTerminal, Write};
 use std::path::Path;
+
+/// Which Claude Code settings file to install hooks into.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum ClaudeSettingsTarget {
+    /// .claude/settings.json — typically committed/shared with the team.
+    Shared,
+    /// .claude/settings.local.json — personal, conventionally git-ignored.
+    Local,
+}
+
+impl ClaudeSettingsTarget {
+    pub fn filename(self) -> &'static str {
+        match self {
+            ClaudeSettingsTarget::Shared => "settings.json",
+            ClaudeSettingsTarget::Local => "settings.local.json",
+        }
+    }
+
+    pub fn gitignore_entry(self) -> &'static str {
+        match self {
+            ClaudeSettingsTarget::Shared => ".claude/settings.json",
+            ClaudeSettingsTarget::Local => ".claude/settings.local.json",
+        }
+    }
+}
+
+/// Resolve which settings file to use. If the caller passed an explicit
+/// choice, honor it. Otherwise prompt interactively when stdin is a TTY,
+/// or fall back to Shared for non-interactive callers (CI, scripts, tests).
+fn resolve_claude_target(
+    explicit: Option<ClaudeSettingsTarget>,
+) -> io::Result<ClaudeSettingsTarget> {
+    if let Some(target) = explicit {
+        return Ok(target);
+    }
+    if !io::stdin().is_terminal() {
+        return Ok(ClaudeSettingsTarget::Shared);
+    }
+
+    let stdout = io::stdout();
+    let mut stdout = stdout.lock();
+    write!(
+        stdout,
+        "Install Claude Code hooks into [s]hared (.claude/settings.json) or [l]ocal (.claude/settings.local.json)? [s]: "
+    )?;
+    stdout.flush()?;
+
+    let mut line = String::new();
+    io::stdin().lock().read_line(&mut line)?;
+    let answer = line.trim().to_lowercase();
+    Ok(match answer.as_str() {
+        "l" | "local" => ClaudeSettingsTarget::Local,
+        _ => ClaudeSettingsTarget::Shared,
+    })
+}
 
 pub fn git_remote_url(project_root: &Path) -> Option<String> {
     std::process::Command::new("git")
@@ -33,7 +88,8 @@ fn parse_github_org(remote_url: &str) -> Option<String> {
 pub async fn init_in_directory(
     project_root: &Path,
     server_url: Option<&str>,
-) -> Result<(), io::Error> {
+    claude_settings: Option<ClaudeSettingsTarget>,
+) -> Result<ClaudeSettingsTarget, io::Error> {
     // Check for git repository
     if !project_root.join(".git").exists() {
         return Err(io::Error::new(
@@ -42,6 +98,8 @@ pub async fn init_in_directory(
         ));
     }
 
+    let target = resolve_claude_target(claude_settings)?;
+
     // Create .tracevault/ directory
     let config_dir = TracevaultConfig::config_dir(project_root);
     fs::create_dir_all(&config_dir)?;
@@ -49,7 +107,7 @@ pub async fn init_in_directory(
     fs::create_dir_all(config_dir.join("cache"))?;
 
     // Keep all tracevault files local — update root .gitignore
-    update_root_gitignore(project_root)?;
+    update_root_gitignore(project_root, target)?;
 
     // Register repo on server if authenticated, server URL known, and git remote available
     let remote_url = git_remote_url(project_root);
@@ -72,8 +130,8 @@ pub async fn init_in_directory(
         config.to_toml(),
     )?;
 
-    // Install Claude Code hooks into .claude/settings.json
-    install_claude_hooks(project_root)?;
+    // Install Claude Code hooks into the chosen settings file
+    install_claude_hooks(project_root, target)?;
 
     // Install git hooks
     install_git_hook(project_root)?;
@@ -128,10 +186,13 @@ pub async fn init_in_directory(
         }
     }
 
-    Ok(())
+    Ok(target)
 }
 
-fn update_root_gitignore(project_root: &Path) -> Result<(), io::Error> {
+fn update_root_gitignore(
+    project_root: &Path,
+    claude_target: ClaudeSettingsTarget,
+) -> Result<(), io::Error> {
     let path = project_root.join(".gitignore");
     let existing = if path.exists() {
         fs::read_to_string(&path)?
@@ -139,7 +200,7 @@ fn update_root_gitignore(project_root: &Path) -> Result<(), io::Error> {
         String::new()
     };
 
-    let needed: Vec<&str> = [".tracevault/", ".claude/settings.json"]
+    let needed: Vec<&str> = [".tracevault/", claude_target.gitignore_entry()]
         .iter()
         .copied()
         .filter(|entry| !existing.lines().any(|line| line.trim() == *entry))
@@ -284,17 +345,21 @@ fn install_post_commit_hook(project_root: &Path) -> Result<(), io::Error> {
     Ok(())
 }
 
-fn install_claude_hooks(project_root: &Path) -> Result<(), io::Error> {
+fn install_claude_hooks(
+    project_root: &Path,
+    target: ClaudeSettingsTarget,
+) -> Result<(), io::Error> {
     let claude_dir = project_root.join(".claude");
     fs::create_dir_all(&claude_dir)?;
 
-    let settings_path = claude_dir.join("settings.json");
+    let filename = target.filename();
+    let settings_path = claude_dir.join(filename);
     let mut settings: serde_json::Value = if settings_path.exists() {
         let content = fs::read_to_string(&settings_path)?;
         serde_json::from_str(&content).map_err(|e| {
             io::Error::new(
                 io::ErrorKind::InvalidData,
-                format!("Failed to parse .claude/settings.json: {e}"),
+                format!("Failed to parse .claude/{filename}: {e}"),
             )
         })?
     } else {
@@ -307,7 +372,7 @@ fn install_claude_hooks(project_root: &Path) -> Result<(), io::Error> {
     let settings_obj = settings.as_object_mut().ok_or_else(|| {
         io::Error::new(
             io::ErrorKind::InvalidData,
-            ".claude/settings.json is not a JSON object",
+            format!(".claude/{filename} is not a JSON object"),
         )
     })?;
 

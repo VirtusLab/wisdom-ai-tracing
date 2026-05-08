@@ -196,7 +196,7 @@ tracevault check      # evaluate policies against server rules (blocks push on f
 
 Session and commit data is streamed to the server continuously via the Claude Code hooks (`tracevault stream`) and the git post-commit hook (`tracevault commit-push`), so there is no separate upload step.
 
-The command also installs the Claude Code hook configuration in `.claude/settings.json`. Each hook runs `tracevault stream --event <type>`, which records the event locally and pushes it to the server in real time:
+The command also installs the Claude Code hook configuration. By default it writes to `.claude/settings.json` (shared with the team). Pass `--claude-settings local` (or pick `local` at the interactive prompt) to install into `.claude/settings.local.json` instead — the personal, git-ignored variant. Each hook runs `tracevault stream --event <type>`, which records the event locally and pushes it to the server in real time:
 
 ```json
 {
@@ -332,7 +332,7 @@ export DATABASE_URL=postgres://user:password@host:5432/tracevault?sslmode=requir
 
 | Command | Description |
 |---------|-------------|
-| `tracevault init [--server-url URL]` | Initialize TraceVault in current repo, install pre-push hook and Claude Code hooks |
+| `tracevault init [--server-url URL] [--claude-settings shared\|local]` | Initialize TraceVault in current repo, install pre-push hook and Claude Code hooks. `--claude-settings` chooses between `.claude/settings.json` (default) and `.claude/settings.local.json`; prompts interactively if omitted on a TTY |
 | `tracevault login --server-url URL [--no-browser]` | Authenticate via device auth flow. Prints the URL and opens a browser when possible; `--no-browser` (or a headless env) skips the auto-open. |
 | `tracevault logout` | Clear local credentials |
 | `tracevault stream --event <type>` | Handle a Claude Code hook event (reads JSON from stdin) and stream it to the server |
