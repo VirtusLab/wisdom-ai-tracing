@@ -15,6 +15,12 @@ enum Cli {
         /// TraceVault server URL for repo registration
         #[arg(long)]
         server_url: Option<String>,
+        /// Where to install Claude Code hooks: `shared` (.claude/settings.json,
+        /// typically committed) or `local` (.claude/settings.local.json,
+        /// personal/git-ignored). When omitted, prompts interactively if stdin
+        /// is a TTY, otherwise defaults to `shared`.
+        #[arg(long, value_enum)]
+        claude_settings: Option<commands::init::ClaudeSettingsTarget>,
     },
     /// Show current session status
     Status,
@@ -66,14 +72,20 @@ enum Cli {
 async fn main() {
     let cli = Cli::parse();
     match cli {
-        Cli::Init { server_url } => {
+        Cli::Init {
+            server_url,
+            claude_settings,
+        } => {
             let cwd = env::current_dir().expect("Cannot determine current directory");
-            match commands::init::init_in_directory(&cwd, server_url.as_deref()).await {
-                Ok(()) => {
+            match commands::init::init_in_directory(&cwd, server_url.as_deref(), claude_settings)
+                .await
+            {
+                Ok(target) => {
+                    let entry = target.gitignore_entry();
                     println!("TraceVault initialized in {}", cwd.display());
-                    println!("Claude Code hooks installed (.claude/settings.json)");
+                    println!("Claude Code hooks installed ({entry})");
                     println!("Git hooks installed (pre-push, post-commit)");
-                    println!("Added .tracevault/ and .claude/settings.json to .gitignore");
+                    println!("Added .tracevault/ and {entry} to .gitignore");
                     println!(
                         "Nothing needs to be committed — all TraceVault files are local only."
                     );
