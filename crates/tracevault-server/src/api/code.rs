@@ -277,8 +277,13 @@ pub async fn get_tree(
     let target_tree = if query.path.is_empty() || query.path == "/" {
         tree
     } else {
+        // Prevent path traversal attacks by rejecting paths containing '..'.
+        let path = std::path::Path::new(&query.path);
+        if path.components().any(|c| c == std::path::Component::ParentDir) {
+            return Err(AppError::BadRequest(format!("Invalid input: {}", path.display())));
+        }
         let entry = tree
-            .get_path(std::path::Path::new(&query.path))
+            .get_path(path)
             .map_err(|e| AppError::NotFound(format!("Path not found: {e}")))?;
         let obj = entry.to_object(&repo)?;
         obj.into_tree()
