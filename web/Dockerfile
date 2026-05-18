@@ -1,9 +1,10 @@
 FROM node:24-slim AS build
 WORKDIR /app
 RUN npm install -g pnpm
-COPY package.json pnpm-lock.yaml ./
-RUN pnpm install --frozen-lockfile
+COPY package.json pnpm-lock.yaml .npmrc pnpm-workspace.yaml ./
+RUN pnpm install --no-frozen-lockfile
 COPY . .
+ENV CI=true
 RUN pnpm build
 
 FROM node:24-slim
