@@ -231,6 +231,17 @@
 		];
 	});
 
+	const savingsRows = $derived.by(() => {
+		const d = overview.data;
+		if (!d || d.cache_savings_usd === 0) return [];
+		const fullCost = d.estimated_cost_usd + d.cache_savings_usd;
+		const pct = (d.cache_savings_usd / fullCost) * 100;
+		return [
+			{ label: 'Full cost', value: fmtCost(fullCost) },
+			{ label: 'Saved', value: `${pct.toFixed(1)}%` }
+		];
+	});
+
 	const commitColumns = [
 		{ key: 'commit_sha', label: 'Commit' },
 		{ key: 'author', label: 'Author' },
@@ -262,7 +273,7 @@
 			<SplitStatCard label="Estimated Cost" value={fmtCost(data.estimated_cost_usd)} icon={DollarSignIcon} color="#dc2626" secondary={costSecondary} tooltip="Estimated total cost based on token usage and model pricing." rows={costRows} />
 			<StatCard label="Avg Session Duration" value={fmtDuration(data.avg_session_duration_ms)} icon={ClockIcon} color="#06b6d4" tooltip="Average wall-clock time of completed sessions." />
 			<StatCard label="Total Tool Calls" value={fmtNum(data.total_tool_calls)} icon={WrenchIcon} color="#f59e0b" tooltip="Total tool invocations across all sessions (edits, reads, bash, etc.)." />
-			<StatCard label="Cache Savings" value={fmtCost(data.cache_savings_usd)} icon={PiggyBankIcon} color="#10b981" tooltip="Money saved by reusing cached tokens at reduced rates." />
+			<SplitStatCard label="Cache Savings" value={fmtCost(data.cache_savings_usd)} icon={PiggyBankIcon} color="#10b981" tooltip="Money saved by reusing cached tokens at reduced rates. Full cost shows what you would have paid without caching." rows={savingsRows} />
 		</div>
 
 		<div class="grid gap-4 lg:grid-cols-2">
