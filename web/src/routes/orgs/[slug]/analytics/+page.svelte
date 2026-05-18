@@ -3,6 +3,7 @@
 	import { useFetch } from '$lib/hooks/use-fetch.svelte';
 	import { fmtNum, fmtCost, fmtDuration } from '$lib/utils/format';
 	import StatCard from '$lib/components/StatCard.svelte';
+	import SplitStatCard from '$lib/components/SplitStatCard.svelte';
 	import HelpTip from '$lib/components/HelpTip.svelte';
 	import DataTable from '$lib/components/DataTable.svelte';
 	import Chart from '$lib/components/chart.svelte';
@@ -199,6 +200,37 @@
 		return `$${(d.estimated_cost_usd / d.total_commits).toFixed(2)} avg/commit`;
 	});
 
+	const tokenRows = $derived.by(() => {
+		const d = overview.data;
+		if (!d) return [];
+		return [
+			{ label: 'Input', value: fmtNum(d.total_input_tokens) },
+			{ label: 'Output', value: fmtNum(d.total_output_tokens) },
+			{ label: 'Cache write', value: fmtNum(d.total_cache_write_tokens) },
+			{ label: 'Cache read', value: fmtNum(d.total_cache_read_tokens) }
+		];
+	});
+
+	const costRows = $derived.by(() => {
+		const d = overview.data;
+		if (!d) return [];
+		// Weight by Sonnet rates to apportion total cost per type (approximate — model mix varies)
+		const rates = { input: 3.0, output: 15.0, cacheWrite: 3.75, cacheRead: 0.30 };
+		const weighted =
+			d.total_input_tokens * rates.input +
+			d.total_output_tokens * rates.output +
+			d.total_cache_write_tokens * rates.cacheWrite +
+			d.total_cache_read_tokens * rates.cacheRead;
+		if (weighted === 0) return [];
+		const c = d.estimated_cost_usd;
+		return [
+			{ label: 'Input', value: fmtCost(((d.total_input_tokens * rates.input) / weighted) * c) },
+			{ label: 'Output', value: fmtCost(((d.total_output_tokens * rates.output) / weighted) * c) },
+			{ label: 'Cache write', value: fmtCost(((d.total_cache_write_tokens * rates.cacheWrite) / weighted) * c) },
+			{ label: 'Cache read', value: fmtCost(((d.total_cache_read_tokens * rates.cacheRead) / weighted) * c) }
+		];
+	});
+
 	const commitColumns = [
 		{ key: 'commit_sha', label: 'Commit' },
 		{ key: 'author', label: 'Author' },
@@ -224,10 +256,10 @@
 		<div class="grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-3 xl:grid-cols-3">
 			<StatCard label="Total Commits" value={fmtNum(data.total_commits)} icon={GitCommitHorizontalIcon} color="#3b82f6" tooltip="Total git commits linked to AI sessions in the selected period." />
 			<StatCard label="Sessions" value={fmtNum(data.total_sessions)} icon={MonitorPlayIcon} color="#10b981" tooltip="Total AI coding sessions in the selected period." />
-			<StatCard label="Total Tokens" value={fmtNum(data.total_tokens)} icon={CoinsIcon} color="#f59e0b" secondary={tokensSecondary} tooltip="Total tokens processed, including input, output, and cached tokens." />
+			<SplitStatCard label="Total Tokens" value={fmtNum(data.total_tokens)} icon={CoinsIcon} color="#f59e0b" secondary={tokensSecondary} tooltip="Total tokens processed, including input, output, and cached tokens." rows={tokenRows} />
 			<StatCard label="Active Authors" value={String(data.active_authors)} icon={UsersIcon} color="#8b5cf6" tooltip="Number of unique developers with AI sessions." />
 			<StatCard label="AI %" value={data.ai_percentage != null ? `${data.ai_percentage.toFixed(1)}%` : 'N/A'} icon={PercentIcon} color="#ec4899" tooltip="Percentage of code lines attributed to AI across all commits." />
-			<StatCard label="Estimated Cost" value={fmtCost(data.estimated_cost_usd)} icon={DollarSignIcon} color="#dc2626" secondary={costSecondary} tooltip="Estimated total cost based on token usage and model pricing." />
+			<SplitStatCard label="Estimated Cost" value={fmtCost(data.estimated_cost_usd)} icon={DollarSignIcon} color="#dc2626" secondary={costSecondary} tooltip="Estimated total cost based on token usage and model pricing." rows={costRows} />
 			<StatCard label="Avg Session Duration" value={fmtDuration(data.avg_session_duration_ms)} icon={ClockIcon} color="#06b6d4" tooltip="Average wall-clock time of completed sessions." />
 			<StatCard label="Total Tool Calls" value={fmtNum(data.total_tool_calls)} icon={WrenchIcon} color="#f59e0b" tooltip="Total tool invocations across all sessions (edits, reads, bash, etc.)." />
 			<StatCard label="Cache Savings" value={fmtCost(data.cache_savings_usd)} icon={PiggyBankIcon} color="#10b981" tooltip="Money saved by reusing cached tokens at reduced rates." />
