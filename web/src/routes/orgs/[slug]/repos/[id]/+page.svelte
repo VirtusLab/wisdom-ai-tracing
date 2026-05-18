@@ -10,6 +10,8 @@
 	import { Input } from '$lib/components/ui/input/index.js';
 	import { Label } from '$lib/components/ui/label/index.js';
 	import { formatDate } from '$lib/utils/date';
+	import ChevronLeftIcon from '@lucide/svelte/icons/chevron-left';
+	import ChevronRightIcon from '@lucide/svelte/icons/chevron-right';
 
 	interface CommitListItem {
 		id: string;
@@ -69,9 +71,15 @@
 		evaluated_at: string;
 	}
 
+	interface PolicyEvaluationPage {
+		items: PolicyEvaluation[];
+		total: number;
+	}
+
 	let commits: CommitListItem[] = $state([]);
 	let policies: Policy[] = $state([]);
 	let evaluations: PolicyEvaluation[] = $state([]);
+	let evaluationsTotal = $state(0);
 	let repo = $state<Repo | null>(null);
 	let repoName = $state('');
 	let loading = $state(true);
@@ -82,10 +90,11 @@
 	let evaluationsError = $state('');
 	let syncing = $state(false);
 
-	// Activity filters
+	// Activity filters and pagination
 	let filterResult = $state('all'); // all | pass | fail | warn | skip
 	let filterPolicyId = $state('all');
-	let evalLimit = 100;
+	const evalPageSize = 25;
+	let evalPage = $state(0); // 0-indexed
 
 	const repoId = $derived($page.params.id ?? '');
 	const slug = $derived($page.params.slug);
@@ -178,17 +187,31 @@
 		evaluationsLoading = true;
 		evaluationsError = '';
 		try {
-			const params = new URLSearchParams({ limit: String(evalLimit) });
+			const params = new URLSearchParams({
+				limit: String(evalPageSize),
+				offset: String(evalPage * evalPageSize)
+			});
 			if (filterResult !== 'all') params.set('result', filterResult);
 			if (filterPolicyId !== 'all') params.set('policy_id', filterPolicyId);
-			evaluations = await api.get<PolicyEvaluation[]>(
+			const page = await api.get<PolicyEvaluationPage>(
 				`/api/v1/orgs/${slug}/repos/${repoId}/policy-evaluations?${params}`
 			);
+			evaluations = page.items;
+			evaluationsTotal = page.total;
 		} catch (err) {
 			evaluationsError = err instanceof Error ? err.message : 'Failed to load policy activity';
 		} finally {
 			evaluationsLoading = false;
 		}
+	}
+
+	function setEvalPage(p: number) {
+		evalPage = p;
+		loadEvaluations();
+	}
+
+	function resetEvalPage() {
+		evalPage = 0;
 	}
 
 	function resultPillStyle(result: string): string {
@@ -526,7 +549,7 @@
 		<div class="bg-muted/30 flex items-center justify-between gap-3 px-4 py-3">
 			<span class="text-sm font-semibold">Policy Activity</span>
 			<div class="flex items-center gap-2">
-				<Select.Root type="single" value={filterResult} onValueChange={(v) => { if (v) { filterResult = v; loadEvaluations(); } }}>
+				<Select.Root type="single" value={filterResult} onValueChange={(v) => { if (v) { filterResult = v; resetEvalPage(); loadEvaluations(); } }}>
 					<Select.Trigger class="h-8 w-[120px] text-xs">
 						{filterResult === 'all' ? 'All results' : filterResult}
 					</Select.Trigger>
@@ -538,7 +561,7 @@
 						<Select.Item value="skip">skip</Select.Item>
 					</Select.Content>
 				</Select.Root>
-				<Select.Root type="single" value={filterPolicyId} onValueChange={(v) => { if (v) { filterPolicyId = v; loadEvaluations(); } }}>
+				<Select.Root type="single" value={filterPolicyId} onValueChange={(v) => { if (v) { filterPolicyId = v; resetEvalPage(); loadEvaluations(); } }}>
 					<Select.Trigger class="h-8 w-[180px] text-xs">
 						{filterPolicyId === 'all' ? 'All rules' : (policies.find((p) => p.id === filterPolicyId)?.name ?? filterPolicyId.slice(0, 8))}
 					</Select.Trigger>
@@ -563,58 +586,87 @@
 			{:else if evaluations.length === 0}
 				<p class="text-muted-foreground text-sm">No policy evaluations recorded yet. Run <code class="font-mono text-xs">tracevault check</code> from a repo with policies enabled to populate this view.</p>
 			{:else}
-				<Table.Root>
-					<Table.Header>
-						<Table.Row>
-							<Table.Head class="text-xs">When</Table.Head>
-							<Table.Head class="text-xs">Rule</Table.Head>
-							<Table.Head class="text-xs">Result</Table.Head>
-							<Table.Head class="text-xs">Action</Table.Head>
-							<Table.Head class="text-xs">Commit</Table.Head>
-							<Table.Head class="text-xs">Session</Table.Head>
-							<Table.Head class="text-xs">Source</Table.Head>
-							<Table.Head class="text-xs">Details</Table.Head>
-						</Table.Row>
-					</Table.Header>
-					<Table.Body>
-						{#each evaluations as ev}
-							<Table.Row class="hover:bg-muted/40 transition-colors">
-								<Table.Cell class="text-xs whitespace-nowrap">{formatDate(ev.evaluated_at)}</Table.Cell>
-								<Table.Cell class="text-xs font-medium">
-									{ev.policy_name}
-									{#if ev.policy_id === null}
-										<span class="text-muted-foreground text-[10px]"> (deleted)</span>
-									{/if}
-								</Table.Cell>
-								<Table.Cell class="text-xs">
-									<span class="rounded-full px-2 py-0.5 text-[10px]" style={resultPillStyle(ev.result)}>
-										{ev.result}
-									</span>
-								</Table.Cell>
-								<Table.Cell class="text-xs">
-									{#if ev.action === 'block_push'}
-										<span class="rounded-full px-2 py-0.5 text-[10px]" style="background: rgba(240,101,101,0.08); color: #f06565">block</span>
-									{:else}
-										<span class="rounded-full px-2 py-0.5 text-[10px]" style="background: rgba(246,177,68,0.08); color: #f6b144">warn</span>
-									{/if}
-								</Table.Cell>
-								<Table.Cell class="font-mono text-xs">
-									{ev.commit_sha ? ev.commit_sha.slice(0, 8) : '-'}
-								</Table.Cell>
-								<Table.Cell class="font-mono text-xs max-w-[120px] truncate" title={ev.session_id ?? ''}>
-									{ev.session_id ? ev.session_id.slice(0, 8) : '-'}
-								</Table.Cell>
-								<Table.Cell class="text-xs text-muted-foreground">{ev.source}</Table.Cell>
-								<Table.Cell class="text-xs max-w-md truncate text-muted-foreground" title={ev.details}>
-									{ev.details}
-								</Table.Cell>
+				<div class="border-border overflow-hidden rounded-lg border">
+					<Table.Root class="text-xs">
+						<Table.Header>
+							<Table.Row class="bg-muted/30 border-border border-b">
+								<Table.Head class="text-muted-foreground text-[10px] font-semibold uppercase tracking-wider">When</Table.Head>
+								<Table.Head class="text-muted-foreground text-[10px] font-semibold uppercase tracking-wider">Rule</Table.Head>
+								<Table.Head class="text-muted-foreground text-[10px] font-semibold uppercase tracking-wider">Result</Table.Head>
+								<Table.Head class="text-muted-foreground text-[10px] font-semibold uppercase tracking-wider">Action</Table.Head>
+								<Table.Head class="text-muted-foreground text-[10px] font-semibold uppercase tracking-wider">Commit</Table.Head>
+								<Table.Head class="text-muted-foreground text-[10px] font-semibold uppercase tracking-wider">Session</Table.Head>
+								<Table.Head class="text-muted-foreground text-[10px] font-semibold uppercase tracking-wider">Source</Table.Head>
+								<Table.Head class="text-muted-foreground text-[10px] font-semibold uppercase tracking-wider">Details</Table.Head>
 							</Table.Row>
-						{/each}
-					</Table.Body>
-				</Table.Root>
-				{#if evaluations.length === evalLimit}
-					<p class="text-muted-foreground mt-2 text-xs">Showing the {evalLimit} most recent evaluations.</p>
-				{/if}
+						</Table.Header>
+						<Table.Body>
+							{#each evaluations as ev}
+								<Table.Row class="hover:bg-muted/40 transition-colors">
+									<Table.Cell class="text-xs whitespace-nowrap">{formatDate(ev.evaluated_at)}</Table.Cell>
+									<Table.Cell class="text-xs font-medium">
+										{ev.policy_name}
+										{#if ev.policy_id === null}
+											<span class="text-muted-foreground text-[10px]"> (deleted)</span>
+										{/if}
+									</Table.Cell>
+									<Table.Cell class="text-xs">
+										<span class="rounded-full px-2 py-0.5 text-[10px]" style={resultPillStyle(ev.result)}>
+											{ev.result}
+										</span>
+									</Table.Cell>
+									<Table.Cell class="text-xs">
+										{#if ev.action === 'block_push'}
+											<span class="rounded-full px-2 py-0.5 text-[10px]" style="background: rgba(240,101,101,0.08); color: #f06565">block</span>
+										{:else}
+											<span class="rounded-full px-2 py-0.5 text-[10px]" style="background: rgba(246,177,68,0.08); color: #f6b144">warn</span>
+										{/if}
+									</Table.Cell>
+									<Table.Cell class="font-mono text-xs">
+										{ev.commit_sha ? ev.commit_sha.slice(0, 8) : '-'}
+									</Table.Cell>
+									<Table.Cell class="font-mono text-xs max-w-[120px] truncate" title={ev.session_id ?? ''}>
+										{ev.session_id ? ev.session_id.slice(0, 8) : '-'}
+									</Table.Cell>
+									<Table.Cell class="text-xs text-muted-foreground">{ev.source}</Table.Cell>
+									<Table.Cell class="text-xs max-w-md truncate text-muted-foreground" title={ev.details}>
+										{ev.details}
+									</Table.Cell>
+								</Table.Row>
+							{/each}
+							{#if evaluations.length === 0}
+								<Table.Row>
+									<Table.Cell colspan={8} class="text-muted-foreground py-8 text-center text-xs">No data.</Table.Cell>
+								</Table.Row>
+							{/if}
+						</Table.Body>
+					</Table.Root>
+					{#if evaluationsTotal > 0}
+						{@const totalPages = Math.max(1, Math.ceil(evaluationsTotal / evalPageSize))}
+						{@const showFrom = evalPage * evalPageSize + 1}
+						{@const showTo = Math.min((evalPage + 1) * evalPageSize, evaluationsTotal)}
+						<div class="border-border text-muted-foreground flex items-center justify-between border-t px-3 py-2 text-xs">
+							<span>{showFrom}-{showTo} of {evaluationsTotal}</span>
+							<div class="flex items-center gap-3">
+								<button
+									class="hover:text-foreground disabled:opacity-30"
+									disabled={evalPage === 0}
+									onclick={() => setEvalPage(evalPage - 1)}
+								>
+									<ChevronLeftIcon class="h-4 w-4" />
+								</button>
+								<span>{evalPage + 1}/{totalPages}</span>
+								<button
+									class="hover:text-foreground disabled:opacity-30"
+									disabled={evalPage >= totalPages - 1}
+									onclick={() => setEvalPage(evalPage + 1)}
+								>
+									<ChevronRightIcon class="h-4 w-4" />
+								</button>
+							</div>
+						</div>
+					{/if}
+				</div>
 			{/if}
 		</div>
 	</div>
