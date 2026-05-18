@@ -312,14 +312,14 @@ impl PolicyRepo {
         filter: &PolicyEvaluationFilter,
     ) -> Result<i64, AppError> {
         let count: i64 = sqlx::query_scalar(include_str!("sql/count_evaluations.sql"))
-        .bind(org_id)
-        .bind(repo_id)
-        .bind(filter.policy_id)
-        .bind(filter.result.as_deref())
-        .bind(filter.source.as_deref())
-        .bind(filter.since)
-        .fetch_one(pool)
-        .await?;
+            .bind(org_id)
+            .bind(repo_id)
+            .bind(filter.policy_id)
+            .bind(filter.result.as_deref())
+            .bind(filter.source.as_deref())
+            .bind(filter.since)
+            .fetch_one(pool)
+            .await?;
         Ok(count)
     }
 
