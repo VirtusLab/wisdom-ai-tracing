@@ -1,6 +1,6 @@
 FROM node:24-slim AS build
 WORKDIR /app
-RUN npm install -g pnpm
+RUN npm install -g pnpm@10
 COPY package.json pnpm-lock.yaml .npmrc pnpm-workspace.yaml ./
 RUN pnpm install --no-frozen-lockfile
 COPY . .
