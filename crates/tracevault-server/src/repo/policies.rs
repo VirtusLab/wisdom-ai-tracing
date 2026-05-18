@@ -304,6 +304,33 @@ impl PolicyRepo {
             .collect())
     }
 
+    /// Count policy evaluations matching the same filters (no limit/offset).
+    pub async fn count_evaluations(
+        pool: &PgPool,
+        org_id: Uuid,
+        repo_id: Uuid,
+        filter: &PolicyEvaluationFilter,
+    ) -> Result<i64, AppError> {
+        let count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*)
+             FROM policy_evaluations
+             WHERE org_id = $1 AND repo_id = $2
+               AND ($3::uuid IS NULL OR policy_id = $3)
+               AND ($4::text IS NULL OR result = $4)
+               AND ($5::text IS NULL OR source = $5)
+               AND ($6::timestamptz IS NULL OR evaluated_at >= $6)",
+        )
+        .bind(org_id)
+        .bind(repo_id)
+        .bind(filter.policy_id)
+        .bind(filter.result.as_deref())
+        .bind(filter.source.as_deref())
+        .bind(filter.since)
+        .fetch_one(pool)
+        .await?;
+        Ok(count)
+    }
+
     /// Persist a single policy evaluation. Best-effort: callers should log
     /// and continue on failure so a DB hiccup doesn't turn a passing push
     /// into a blocked one.

@@ -410,7 +410,7 @@ pub struct ListEvaluationsQuery {
 }
 
 #[derive(Debug, Serialize)]
-pub struct PolicyEvaluationResponse {
+pub struct PolicyEvaluationItem {
     pub id: Uuid,
     pub policy_id: Option<Uuid>,
     pub policy_name: String,
@@ -424,6 +424,12 @@ pub struct PolicyEvaluationResponse {
     pub evaluated_at: DateTime<Utc>,
 }
 
+#[derive(Debug, Serialize)]
+pub struct PolicyEvaluationPage {
+    pub items: Vec<PolicyEvaluationItem>,
+    pub total: i64,
+}
+
 /// GET /api/v1/orgs/{slug}/repos/{repo_id}/policy-evaluations
 /// List recent policy evaluations for this repo. Open to any org member —
 /// this is operational visibility, not a mutation.
@@ -432,14 +438,12 @@ pub async fn list_policy_evaluations(
     auth: OrgAuth,
     Path((_slug, repo_id)): Path<(String, Uuid)>,
     Query(q): Query<ListEvaluationsQuery>,
-) -> Result<Json<Vec<PolicyEvaluationResponse>>, AppError> {
+) -> Result<Json<PolicyEvaluationPage>, AppError> {
     if !PolicyRepo::repo_belongs_to_org(&state.pool, repo_id, auth.org_id).await? {
         return Err(AppError::NotFound("Repo not found".into()));
     }
 
-    // Bound the page size. 500 is plenty for a single dashboard query and
-    // keeps a mis-clicked "limit=100000" from grinding the DB.
-    let limit = q.limit.unwrap_or(100).clamp(1, 500);
+    let limit = q.limit.unwrap_or(25).clamp(1, 500);
     let offset = q.offset.unwrap_or(0).max(0);
 
     let filter = PolicyEvaluationFilter {
@@ -451,11 +455,15 @@ pub async fn list_policy_evaluations(
         offset,
     };
 
-    let rows = PolicyRepo::list_evaluations(&state.pool, auth.org_id, repo_id, &filter).await?;
+    let (rows, total) = tokio::try_join!(
+        PolicyRepo::list_evaluations(&state.pool, auth.org_id, repo_id, &filter),
+        PolicyRepo::count_evaluations(&state.pool, auth.org_id, repo_id, &filter),
+    )?;
 
-    Ok(Json(
-        rows.into_iter()
-            .map(|r| PolicyEvaluationResponse {
+    Ok(Json(PolicyEvaluationPage {
+        items: rows
+            .into_iter()
+            .map(|r| PolicyEvaluationItem {
                 id: r.id,
                 policy_id: r.policy_id,
                 policy_name: r.policy_name,
@@ -469,7 +477,8 @@ pub async fn list_policy_evaluations(
                 evaluated_at: r.evaluated_at,
             })
             .collect(),
-    ))
+        total,
+    }))
 }
 
 /// Map an EvalOutcome into the stored result string. Today evaluate_condition
