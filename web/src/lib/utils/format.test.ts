@@ -15,7 +15,7 @@ describe('fmtCost', () => {
 	it('returns dash for undefined', () => expect(fmtCost(undefined)).toBe('-'));
 	it('formats to 2 decimal places', () => expect(fmtCost(1.5)).toBe('$1.50'));
 	it('formats zero', () => expect(fmtCost(0)).toBe('$0.00'));
-	it('formats small amounts', () => expect(fmtCost(0.003)).toBe('$0.00'));
+	it('formats small amounts', () => expect(fmtCost(0.003)).toBe('<$0.01'));
 });
 
 describe('fmtDuration', () => {
