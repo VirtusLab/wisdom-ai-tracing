@@ -7,6 +7,7 @@ export function fmtNum(n: number | null | undefined): string {
 
 export function fmtCost(usd: number | null | undefined): string {
 	if (usd == null) return '-';
+	if (usd > 0 && usd < 0.01) return '<$0.01';
 	return `$${usd.toFixed(2)}`;
 }
 
