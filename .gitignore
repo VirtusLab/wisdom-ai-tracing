@@ -15,3 +15,32 @@ docs/general/
 PROJECT_DESCRIPTION.md
 .tracevault/
 .fastembed_cache/
+
+# ── GSD baseline (auto-generated) ──
+.gsd
+.gsd-id
+.mcp.json
+.bg-shell/
+Thumbs.db
+*.swo
+*~
+.vscode/
+*.code-workspace
+.env.*
+node_modules/
+.next/
+dist/
+build/
+__pycache__/
+*.pyc
+.venv/
+venv/
+target/
+vendor/
+*.log
+coverage/
+.cache/
+tmp/
+
+# TraceVault — local only, do not commit
+.claude/settings.json
