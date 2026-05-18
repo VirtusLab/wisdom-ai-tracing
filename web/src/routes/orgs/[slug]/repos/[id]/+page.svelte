@@ -93,7 +93,7 @@
 	// Activity filters and pagination
 	let filterResult = $state('all'); // all | pass | fail | warn | skip
 	let filterPolicyId = $state('all');
-	const evalPageSize = 25;
+	let evalPageSize = $state(25);
 	let evalPage = $state(0); // 0-indexed
 
 	const repoId = $derived($page.params.id ?? '');
@@ -648,6 +648,22 @@
 						<div class="border-border text-muted-foreground flex items-center justify-between border-t px-3 py-2 text-xs">
 							<span>{showFrom}-{showTo} of {evaluationsTotal}</span>
 							<div class="flex items-center gap-3">
+								<span>Per page:</span>
+								{#each [10, 25, 50] as size}
+									<button
+										class="rounded px-1.5 py-0.5 transition-colors {evalPageSize === size
+											? 'bg-primary text-primary-foreground'
+											: 'hover:text-foreground'}"
+										onclick={() => {
+											evalPageSize = size;
+											evalPage = 0;
+											loadEvaluations();
+										}}
+									>
+										{size}
+									</button>
+								{/each}
+								<span class="text-border mx-1">|</span>
 								<button
 									class="hover:text-foreground disabled:opacity-30"
 									disabled={evalPage === 0}
