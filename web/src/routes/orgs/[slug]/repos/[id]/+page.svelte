@@ -634,11 +634,6 @@
 									</Table.Cell>
 								</Table.Row>
 							{/each}
-							{#if evaluations.length === 0}
-								<Table.Row>
-									<Table.Cell colspan={8} class="text-muted-foreground py-8 text-center text-xs">No data.</Table.Cell>
-								</Table.Row>
-							{/if}
 						</Table.Body>
 					</Table.Root>
 					{#if evaluationsTotal > 0}
