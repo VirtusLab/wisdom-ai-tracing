@@ -374,3 +374,84 @@ pub async fn list_mentions(
             .collect(),
     }))
 }
+
+// --- Stateless ask (MCP / programmatic use) ---
+
+#[derive(serde::Deserialize)]
+pub struct AskRequest {
+    pub question: String,
+}
+
+#[derive(serde::Serialize)]
+pub struct AskSourceSession {
+    pub session_id: uuid::Uuid,
+    pub session_external_id: String,
+    pub repo_name: String,
+    pub user_email: Option<String>,
+    pub started_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub summary_snippet: String,
+}
+
+#[derive(serde::Serialize)]
+pub struct AskResponse {
+    pub answer: String,
+    pub sources: Vec<AskSourceSession>,
+}
+
+/// POST /api/v1/orgs/{slug}/chat/ask
+///
+/// Stateless one-shot query — no conversation is created or stored.
+/// Intended for MCP server and programmatic integrations.
+pub async fn ask(
+    State(state): State<AppState>,
+    auth: OrgAuth,
+    Json(req): Json<AskRequest>,
+) -> Result<Json<AskResponse>, AppError> {
+    check_chat_enabled(&state, &auth)?;
+
+    let llm = crate::api::orgs::resolve_chat_llm(&state, auth.org_id)
+        .await
+        .ok_or_else(|| {
+            AppError::BadRequest(
+                "Chat LLM not configured. Configure it in Chat LLM settings.".into(),
+            )
+        })?;
+
+    let embedding_service = state
+        .embedding_service
+        .as_ref()
+        .ok_or_else(|| AppError::Internal("Embedding service not available".into()))?;
+
+    // Use a throwaway conversation ID — ChatService::query uses it only to
+    // load history (empty for a new ID) and to save messages (we skip that).
+    let throwaway_id = uuid::Uuid::new_v4();
+
+    let response = crate::service::chat::ChatService::query(
+        &state.pool,
+        llm.as_ref(),
+        embedding_service,
+        auth.org_id,
+        throwaway_id,
+        &req.question,
+        &crate::service::chat::MentionOverrides::default(),
+    )
+    .await?;
+
+    let sources = response
+        .referenced_sessions
+        .into_iter()
+        .map(|s| AskSourceSession {
+            session_id: s.session_id,
+            session_external_id: s.session_external_id,
+            repo_name: s.repo_name,
+            user_email: s.user_email,
+            started_at: s.started_at,
+            summary_snippet: s.summary,
+        })
+        .collect();
+
+    Ok(Json(AskResponse {
+        answer: response.content,
+        sources,
+    }))
+}

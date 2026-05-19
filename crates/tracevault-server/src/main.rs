@@ -547,6 +547,7 @@ async fn main() {
             "/api/v1/orgs/{slug}/chat/conversations/{id}/messages",
             post(api::chat::send_message),
         )
+        .route("/api/v1/orgs/{slug}/chat/ask", post(api::chat::ask))
         .route(
             "/api/v1/orgs/{slug}/chat/indexing/status",
             get(api::chat_indexing::get_indexing_status),
