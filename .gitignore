@@ -15,3 +15,7 @@ docs/general/
 PROJECT_DESCRIPTION.md
 .tracevault/
 .fastembed_cache/
+integrations/tracevault-mcp/node_modules/
+integrations/tracevault-mcp/dist/
+integrations/gsd2-extension/node_modules/
+integrations/gsd2-extension/dist/
