@@ -45,7 +45,7 @@ fn evaluate_policy(policy: &PolicyRule, trace: &TraceRecord) -> PolicyEvaluation
                 "Sensitive path review evaluated server-side".into(),
             )
         }
-        PolicyCondition::RequiredToolCall { tool_names } => {
+        PolicyCondition::RequiredToolCall { tool_names, .. } => {
             eval_required_tool_call(trace, tool_names)
         }
         PolicyCondition::TokenBudget {
@@ -55,7 +55,7 @@ fn evaluate_policy(policy: &PolicyRule, trace: &TraceRecord) -> PolicyEvaluation
         PolicyCondition::ConditionalToolCall {
             tool_name,
             min_count,
-            when_files_match: _,
+            ..
         } => eval_conditional_tool_call(trace, tool_name, *min_count),
     };
 
@@ -240,7 +240,10 @@ fn default_policies() -> Vec<PolicyRule> {
             org_id: None,
             name: "Required tool call".into(),
             description: "Trace must show that tests were run".into(),
-            condition: PolicyCondition::RequiredToolCall { tool_names: vec![] },
+            condition: PolicyCondition::RequiredToolCall {
+                tool_names: vec![],
+                must_succeed: false,
+            },
             action: PolicyAction::Warn,
             severity: PolicySeverity::Low,
             enabled: true,

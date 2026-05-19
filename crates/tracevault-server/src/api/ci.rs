@@ -5,7 +5,7 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use tracevault_core::policy_eval::{evaluate_condition, EvalOutcome};
+use tracevault_core::policy_eval::{evaluate_condition, EvalOutcome, ToolCallStats};
 
 use crate::error::AppError;
 use crate::extractors::OrgAuth;
@@ -182,13 +182,16 @@ pub async fn verify_commits(
             sealed_session_count as usize == sids.len()
         };
 
-        // Aggregate tool_calls from events table
-        let mut all_tool_calls: std::collections::HashMap<String, i64> =
+        // Aggregate tool_calls from events table (total + successful)
+        let mut all_tool_calls: std::collections::HashMap<String, ToolCallStats> =
             std::collections::HashMap::new();
 
         if !sids.is_empty() {
-            let tool_counts = sqlx::query_as::<_, (String, i64)>(
-                "SELECT e.tool_name, COUNT(*) FROM events e
+            let tool_counts = sqlx::query_as::<_, (String, i64, i64)>(
+                "SELECT e.tool_name,
+                        COUNT(*) as total,
+                        COUNT(*) FILTER (WHERE e.is_error = false) as successful
+                 FROM events e
                  WHERE e.session_id = ANY($1) AND e.tool_name IS NOT NULL
                  GROUP BY e.tool_name",
             )
@@ -196,8 +199,10 @@ pub async fn verify_commits(
             .fetch_all(&state.pool)
             .await?;
 
-            for (name, count) in tool_counts {
-                *all_tool_calls.entry(name).or_insert(0) += count;
+            for (name, total, successful) in tool_counts {
+                let stats = all_tool_calls.entry(name).or_default();
+                stats.total += total;
+                stats.successful += successful;
             }
         }
 

@@ -299,17 +299,30 @@ pub async fn check_policies(
     // Fetch all enabled policies for this repo (repo-specific + org-wide)
     let rows = PolicyRepo::list_enabled_for_check(&state.pool, auth.org_id, repo_id).await?;
 
-    // Aggregate session data: merge tool_calls across all sessions, union files_modified
-    let mut all_tool_calls: std::collections::HashMap<String, i64> =
-        std::collections::HashMap::new();
+    // Aggregate session data: merge tool_calls across all sessions, union files_modified.
+    // tool_calls from the client is a JSON map of tool_name → count (legacy) or
+    // tool_name → {total, successful} (new). We accept both formats.
+    let mut all_tool_calls: std::collections::HashMap<
+        String,
+        tracevault_core::policy_eval::ToolCallStats,
+    > = std::collections::HashMap::new();
     let mut all_files: Vec<String> = Vec::new();
 
     for session in &req.sessions {
         if let Some(tc) = &session.tool_calls {
             if let Some(obj) = tc.as_object() {
                 for (k, v) in obj {
-                    let count = v.as_i64().unwrap_or(0);
-                    *all_tool_calls.entry(k.clone()).or_insert(0) += count;
+                    let stats = all_tool_calls.entry(k.clone()).or_default();
+                    if let Some(total) = v.as_i64() {
+                        // Legacy format: plain count — treat all calls as successful
+                        stats.total += total;
+                        stats.successful += total;
+                    } else if let Some(o) = v.as_object() {
+                        let total = o.get("total").and_then(|x| x.as_i64()).unwrap_or(0);
+                        let successful = o.get("successful").and_then(|x| x.as_i64()).unwrap_or(0);
+                        stats.total += total;
+                        stats.successful += successful;
+                    }
                 }
             }
         }

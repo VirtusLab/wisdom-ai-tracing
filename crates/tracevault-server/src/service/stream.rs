@@ -170,6 +170,7 @@ impl StreamService {
                         } else {
                             None
                         },
+                        tool_is_error: req.tool_is_error,
                         timestamp: Some(req.timestamp),
                     },
                 )

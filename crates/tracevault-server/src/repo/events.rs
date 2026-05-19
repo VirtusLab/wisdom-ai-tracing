@@ -10,6 +10,7 @@ pub struct InsertToolEvent {
     pub tool_name: Option<String>,
     pub tool_input: Option<serde_json::Value>,
     pub tool_response: Option<serde_json::Value>,
+    pub tool_is_error: Option<bool>,
     pub timestamp: Option<DateTime<Utc>>,
 }
 
@@ -56,8 +57,8 @@ impl EventRepo {
         req: &InsertToolEvent,
     ) -> Result<Option<Uuid>, AppError> {
         let id: Option<Uuid> = sqlx::query_scalar(
-            "INSERT INTO events (session_id, event_index, event_type, tool_name, tool_input, tool_response, timestamp)
-             VALUES ($1, $2, 'tool_use', $3, $4, $5, $6)
+            "INSERT INTO events (session_id, event_index, event_type, tool_name, tool_input, tool_response, is_error, timestamp)
+             VALUES ($1, $2, 'tool_use', $3, $4, $5, $6, $7)
              ON CONFLICT (session_id, event_index) DO NOTHING
              RETURNING id",
         )
@@ -66,6 +67,7 @@ impl EventRepo {
         .bind(&req.tool_name)
         .bind(&req.tool_input)
         .bind(&req.tool_response)
+        .bind(req.tool_is_error)
         .bind(req.timestamp)
         .fetch_optional(pool)
         .await?;
