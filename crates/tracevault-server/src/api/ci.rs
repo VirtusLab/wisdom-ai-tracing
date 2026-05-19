@@ -187,14 +187,9 @@ pub async fn verify_commits(
             std::collections::HashMap::new();
 
         if !sids.is_empty() {
-            let tool_counts = sqlx::query_as::<_, (String, i64, i64)>(
-                "SELECT e.tool_name,
-                        COUNT(*) as total,
-                        COUNT(*) FILTER (WHERE e.is_error = false) as successful
-                 FROM events e
-                 WHERE e.session_id = ANY($1) AND e.tool_name IS NOT NULL
-                 GROUP BY e.tool_name",
-            )
+            let tool_counts = sqlx::query_as::<_, (String, i64, i64)>(include_str!(
+                "../repo/sql/aggregate_tool_calls_by_sessions.sql"
+            ))
             .bind(&sids)
             .fetch_all(&state.pool)
             .await?;

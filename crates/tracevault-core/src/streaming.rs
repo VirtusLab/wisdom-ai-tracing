@@ -108,13 +108,21 @@ pub fn extract_is_error_from_transcript(
     transcript_lines: &[serde_json::Value],
 ) -> Option<bool> {
     for line in transcript_lines {
-        // Transcript lines are full message objects; content is an array of blocks
-        let content = line.get("message")?.get("content")?.as_array()?;
+        // Transcript lines are full message objects; content is an array of blocks.
+        // Use explicit matching so a malformed line is skipped rather than aborting the scan.
+        let content = match line
+            .get("message")
+            .and_then(|m| m.get("content"))
+            .and_then(|c| c.as_array())
+        {
+            Some(c) => c,
+            None => continue,
+        };
         for block in content {
-            if block.get("type")?.as_str()? == "tool_result"
-                && block.get("tool_use_id")?.as_str()? == tool_use_id
-            {
-                return block.get("is_error")?.as_bool().map(Some).unwrap_or(None);
+            let block_type = block.get("type").and_then(|v| v.as_str());
+            let block_uid = block.get("tool_use_id").and_then(|v| v.as_str());
+            if block_type == Some("tool_result") && block_uid == Some(tool_use_id) {
+                return block.get("is_error").and_then(|v| v.as_bool());
             }
         }
     }

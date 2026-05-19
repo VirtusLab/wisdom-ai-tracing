@@ -300,8 +300,6 @@ pub async fn check_policies(
     let rows = PolicyRepo::list_enabled_for_check(&state.pool, auth.org_id, repo_id).await?;
 
     // Aggregate session data: merge tool_calls across all sessions, union files_modified.
-    // tool_calls from the client is a JSON map of tool_name → count (legacy) or
-    // tool_name → {total, successful} (new). We accept both formats.
     let mut all_tool_calls: std::collections::HashMap<
         String,
         tracevault_core::policy_eval::ToolCallStats,
@@ -312,17 +310,10 @@ pub async fn check_policies(
         if let Some(tc) = &session.tool_calls {
             if let Some(obj) = tc.as_object() {
                 for (k, v) in obj {
+                    let delta = parse_tool_call_stats(v);
                     let stats = all_tool_calls.entry(k.clone()).or_default();
-                    if let Some(total) = v.as_i64() {
-                        // Legacy format: plain count — treat all calls as successful
-                        stats.total += total;
-                        stats.successful += total;
-                    } else if let Some(o) = v.as_object() {
-                        let total = o.get("total").and_then(|x| x.as_i64()).unwrap_or(0);
-                        let successful = o.get("successful").and_then(|x| x.as_i64()).unwrap_or(0);
-                        stats.total += total;
-                        stats.successful += successful;
-                    }
+                    stats.total += delta.total;
+                    stats.successful += delta.successful;
                 }
             }
         }
@@ -498,6 +489,26 @@ pub async fn list_policy_evaluations(
 /// only exposes pass/fail, but "skip" is already a concept inside the
 /// evaluator (rule skipped when no files matched) — surface it here so the
 /// activity log can distinguish "rule didn't apply" from "rule passed".
+/// Parse a single tool_call value from the client payload into ToolCallStats.
+/// Accepts legacy format (plain i64 count) and new format ({total, successful}).
+/// Legacy counts treat all calls as successful for backward compatibility.
+fn parse_tool_call_stats(v: &serde_json::Value) -> tracevault_core::policy_eval::ToolCallStats {
+    if let Some(total) = v.as_i64() {
+        // Legacy: plain count — treat all as successful
+        tracevault_core::policy_eval::ToolCallStats {
+            total,
+            successful: total,
+        }
+    } else if let Some(o) = v.as_object() {
+        tracevault_core::policy_eval::ToolCallStats {
+            total: o.get("total").and_then(|x| x.as_i64()).unwrap_or(0),
+            successful: o.get("successful").and_then(|x| x.as_i64()).unwrap_or(0),
+        }
+    } else {
+        tracevault_core::policy_eval::ToolCallStats::default()
+    }
+}
+
 fn classify_result(outcome: &tracevault_core::policy_eval::EvalOutcome) -> &'static str {
     if !outcome.passed {
         "fail"

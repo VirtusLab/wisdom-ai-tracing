@@ -56,21 +56,16 @@ impl EventRepo {
         pool: &PgPool,
         req: &InsertToolEvent,
     ) -> Result<Option<Uuid>, AppError> {
-        let id: Option<Uuid> = sqlx::query_scalar(
-            "INSERT INTO events (session_id, event_index, event_type, tool_name, tool_input, tool_response, is_error, timestamp)
-             VALUES ($1, $2, 'tool_use', $3, $4, $5, $6, $7)
-             ON CONFLICT (session_id, event_index) DO NOTHING
-             RETURNING id",
-        )
-        .bind(req.session_id)
-        .bind(req.event_index)
-        .bind(&req.tool_name)
-        .bind(&req.tool_input)
-        .bind(&req.tool_response)
-        .bind(req.tool_is_error)
-        .bind(req.timestamp)
-        .fetch_optional(pool)
-        .await?;
+        let id: Option<Uuid> = sqlx::query_scalar(include_str!("sql/insert_tool_event.sql"))
+            .bind(req.session_id)
+            .bind(req.event_index)
+            .bind(&req.tool_name)
+            .bind(&req.tool_input)
+            .bind(&req.tool_response)
+            .bind(req.tool_is_error)
+            .bind(req.timestamp)
+            .fetch_optional(pool)
+            .await?;
         Ok(id)
     }
 
