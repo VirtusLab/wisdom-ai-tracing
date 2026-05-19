@@ -695,3 +695,233 @@ fn claude_code_file_changes_from_transcript_returns_empty() {
         .file_changes_from_transcript(&chunk, ts())
         .is_empty());
 }
+
+// ─── GSD2 adapter tests ─────────────────────────────────────────────────────
+
+#[test]
+fn gsd2_registry_dispatch() {
+    let registry = AgentAdapterRegistry::new();
+    let a = registry.get("gsd2");
+    assert_eq!(a.name(), "gsd2");
+    let b = registry.get("gsd-2");
+    assert_eq!(b.name(), "gsd2");
+}
+
+#[test]
+fn gsd2_map_event_types() {
+    let registry = AgentAdapterRegistry::new();
+    let adapter = registry.get("gsd2");
+    assert!(matches!(
+        adapter.map_event_type("session_start"),
+        StreamEventType::SessionStart
+    ));
+    assert!(matches!(
+        adapter.map_event_type("stop"),
+        StreamEventType::SessionEnd
+    ));
+    assert!(matches!(
+        adapter.map_event_type("session_end"),
+        StreamEventType::SessionEnd
+    ));
+    assert!(matches!(
+        adapter.map_event_type("session_shutdown"),
+        StreamEventType::SessionEnd
+    ));
+    assert!(matches!(
+        adapter.map_event_type("tool_execution_end"),
+        StreamEventType::ToolUse
+    ));
+}
+
+#[test]
+fn gsd2_is_not_file_modifying_from_hooks() {
+    let registry = AgentAdapterRegistry::new();
+    let adapter = registry.get("gsd2");
+    // GSD2 gets file changes from transcript, not hook events
+    assert!(!adapter.is_file_modifying("write"));
+    assert!(!adapter.is_file_modifying("edit"));
+    assert!(!adapter.is_file_modifying("bash"));
+}
+
+#[test]
+fn gsd2_provides_transcript_file_changes() {
+    let registry = AgentAdapterRegistry::new();
+    let adapter = registry.get("gsd2");
+    assert!(adapter.provides_transcript_file_changes());
+}
+
+#[test]
+fn gsd2_file_change_from_write_chunk() {
+    let registry = AgentAdapterRegistry::new();
+    let adapter = registry.get("gsd2");
+    let chunk = json!({
+        "type": "tool_execution_end",
+        "toolCallId": "tc-001",
+        "toolName": "write",
+        "result": { "filePath": "src/lib.rs", "content": "pub fn hello() {}" },
+        "isError": false,
+        "timestamp": "2026-05-19T10:00:00Z"
+    });
+    let records = adapter.file_changes_from_transcript(&chunk, ts());
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].change.file_path, "src/lib.rs");
+    assert_eq!(records[0].change.change_type, "create");
+    assert!(records[0].change.content_hash.is_some());
+    assert_eq!(records[0].tool_name, "write");
+}
+
+#[test]
+fn gsd2_file_change_skipped_on_error() {
+    let registry = AgentAdapterRegistry::new();
+    let adapter = registry.get("gsd2");
+    let chunk = json!({
+        "type": "tool_execution_end",
+        "toolCallId": "tc-002",
+        "toolName": "write",
+        "result": { "filePath": "src/lib.rs", "content": "pub fn hello() {}" },
+        "isError": true
+    });
+    assert!(adapter
+        .file_changes_from_transcript(&chunk, ts())
+        .is_empty());
+}
+
+#[test]
+fn gsd2_file_change_from_edit_chunk() {
+    let registry = AgentAdapterRegistry::new();
+    let adapter = registry.get("gsd2");
+    let chunk = json!({
+        "type": "tool_execution_end",
+        "toolCallId": "tc-003",
+        "toolName": "edit",
+        "result": { "filePath": "src/main.rs", "oldString": "old", "newString": "new" },
+        "isError": false
+    });
+    let records = adapter.file_changes_from_transcript(&chunk, ts());
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].change.change_type, "edit");
+    assert!(records[0]
+        .change
+        .diff_text
+        .as_deref()
+        .unwrap_or("")
+        .contains("--- old"));
+}
+
+#[test]
+fn gsd2_non_file_tool_returns_empty() {
+    let registry = AgentAdapterRegistry::new();
+    let adapter = registry.get("gsd2");
+    let chunk = json!({
+        "type": "tool_execution_end",
+        "toolName": "bash",
+        "result": { "output": "hello" },
+        "isError": false
+    });
+    assert!(adapter
+        .file_changes_from_transcript(&chunk, ts())
+        .is_empty());
+}
+
+#[test]
+fn gsd2_extract_token_usage_from_agent_end() {
+    let registry = AgentAdapterRegistry::new();
+    let adapter = registry.get("gsd2");
+    let chunk = json!({
+        "type": "agent_end",
+        "usage": { "input": 1000, "output": 200, "cacheRead": 500, "cacheWrite": 50 },
+        "model": "claude-sonnet-4-5"
+    });
+    let usage = adapter.extract_token_usage(&chunk).unwrap();
+    assert_eq!(usage.input_tokens, 1000);
+    assert_eq!(usage.output_tokens, 200);
+    assert_eq!(usage.cache_read_tokens, 500);
+    assert_eq!(usage.cache_write_tokens, 50);
+}
+
+#[test]
+fn gsd2_extract_token_usage_wrong_type_returns_none() {
+    let registry = AgentAdapterRegistry::new();
+    let adapter = registry.get("gsd2");
+    let chunk = json!({ "type": "tool_execution_end", "usage": { "input": 100 } });
+    assert!(adapter.extract_token_usage(&chunk).is_none());
+}
+
+#[test]
+fn gsd2_extract_model_from_agent_end() {
+    let registry = AgentAdapterRegistry::new();
+    let adapter = registry.get("gsd2");
+    let chunk = json!({ "type": "agent_end", "model": "claude-opus-4-7" });
+    assert_eq!(
+        adapter.extract_model(&chunk),
+        Some("claude-opus-4-7".to_string())
+    );
+}
+
+#[test]
+fn gsd2_extract_model_from_session_start() {
+    let registry = AgentAdapterRegistry::new();
+    let adapter = registry.get("gsd2");
+    let chunk = json!({ "type": "session_start", "model": "gpt-5" });
+    assert_eq!(adapter.extract_model(&chunk), Some("gpt-5".to_string()));
+}
+
+#[test]
+fn gsd2_parse_assistant_message_record() {
+    let registry = AgentAdapterRegistry::new();
+    let adapter = registry.get("gsd2");
+    let chunk = json!({
+        "type": "assistant_message",
+        "text": "Here is the fix.",
+        "model": "claude-sonnet-4-5",
+        "timestamp": "2026-05-19T10:00:00Z"
+    });
+    let rec = adapter.parse_transcript_record(&chunk).unwrap();
+    assert_eq!(rec.record_type, "assistant");
+    assert_eq!(rec.text.as_deref(), Some("Here is the fix."));
+    assert_eq!(rec.model.as_deref(), Some("claude-sonnet-4-5"));
+}
+
+#[test]
+fn gsd2_parse_tool_execution_record() {
+    let registry = AgentAdapterRegistry::new();
+    let adapter = registry.get("gsd2");
+    let chunk = json!({
+        "type": "tool_execution_end",
+        "toolName": "bash",
+        "result": { "output": "ok" },
+        "isError": false,
+        "timestamp": "2026-05-19T10:00:00Z"
+    });
+    let rec = adapter.parse_transcript_record(&chunk).unwrap();
+    assert_eq!(rec.record_type, "assistant");
+    assert_eq!(rec.content_types, vec!["tool_use"]);
+    assert_eq!(rec.tool_name.as_deref(), Some("bash"));
+}
+
+#[test]
+fn gsd2_parse_agent_end_record_with_usage() {
+    let registry = AgentAdapterRegistry::new();
+    let adapter = registry.get("gsd2");
+    let chunk = json!({
+        "type": "agent_end",
+        "usage": { "input": 100, "output": 50, "cacheRead": 0, "cacheWrite": 0 },
+        "model": "claude-sonnet-4-5",
+        "timestamp": "2026-05-19T10:00:00Z"
+    });
+    let rec = adapter.parse_transcript_record(&chunk).unwrap();
+    assert_eq!(rec.record_type, "system");
+    assert_eq!(rec.raw_input_tokens, Some(100));
+    assert_eq!(rec.raw_output_tokens, Some(50));
+}
+
+#[test]
+fn gsd2_install_hooks_is_noop() {
+    let registry = AgentAdapterRegistry::new();
+    let adapter = registry.get("gsd2");
+    let dir = tempfile::tempdir().unwrap();
+    // Should succeed silently — GSD2 uses an in-process extension, not shell hooks
+    adapter.install_hooks(dir.path()).unwrap();
+    // Nothing should be created
+    assert!(!dir.path().join(".gsd2").exists());
+}

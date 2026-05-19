@@ -1,6 +1,7 @@
 pub mod claude_code;
 pub mod codex;
 mod default;
+pub mod gsd2;
 
 use chrono::{DateTime, Utc};
 use serde::Serialize;
@@ -132,6 +133,9 @@ impl AgentAdapterRegistry {
         adapters.insert("claude-code".to_string(), Arc::clone(&claude));
         adapters.insert("claude".to_string(), claude);
         adapters.insert("codex".to_string(), Arc::new(codex::CodexAdapter));
+        let gsd2: Arc<dyn AgentAdapter> = Arc::new(gsd2::Gsd2Adapter);
+        adapters.insert("gsd2".to_string(), Arc::clone(&gsd2));
+        adapters.insert("gsd-2".to_string(), gsd2);
         Self {
             adapters,
             default: Arc::new(DefaultAdapter),
