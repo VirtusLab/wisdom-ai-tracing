@@ -26,6 +26,7 @@ pub fn role_permissions(role: &str) -> HashSet<Permission> {
             CodeBrowse,
             StoryGenerate,
             StoryView,
+            ChatUse,
         ]),
         "admin" => HashSet::from([
             TracePush,
@@ -40,6 +41,7 @@ pub fn role_permissions(role: &str) -> HashSet<Permission> {
             CodeBrowse,
             StoryGenerate,
             StoryView,
+            ChatUse,
         ]),
         "policy_admin" => HashSet::from([
             TracePush,
@@ -58,6 +60,7 @@ pub fn role_permissions(role: &str) -> HashSet<Permission> {
             CodeBrowse,
             StoryGenerate,
             StoryView,
+            ChatUse,
         ]),
         "auditor" => HashSet::from([
             TraceViewAll,

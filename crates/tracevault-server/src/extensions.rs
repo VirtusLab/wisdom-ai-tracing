@@ -94,8 +94,11 @@ impl PermissionsProvider for CommunityPermissionsProvider {
                 CodeBrowse,
                 UserManage,
                 OrgSettingsManage,
+                ChatUse,
             ]),
-            "developer" => std::collections::HashSet::from([TracePush, TraceViewOwn, CodeBrowse]),
+            "developer" => {
+                std::collections::HashSet::from([TracePush, TraceViewOwn, CodeBrowse, ChatUse])
+            }
             _ => std::collections::HashSet::new(),
         }
     }
