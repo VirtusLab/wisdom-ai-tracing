@@ -42,6 +42,7 @@ async fn insert_tool_event_returns_id(pool: sqlx::PgPool) {
             tool_name: Some("read_file".into()),
             tool_input: Some(serde_json::json!({"path": "/foo/bar.rs"})),
             tool_response: Some(serde_json::json!({"content": "fn main() {}"})),
+            tool_is_error: None,
             timestamp: Some(Utc::now()),
         },
     )
@@ -61,6 +62,7 @@ async fn insert_tool_event_conflict_returns_none(pool: sqlx::PgPool) {
         tool_name: Some("write_file".into()),
         tool_input: None,
         tool_response: None,
+        tool_is_error: None,
         timestamp: Some(Utc::now()),
     };
 
@@ -84,6 +86,7 @@ async fn insert_file_change_succeeds(pool: sqlx::PgPool) {
             tool_name: Some("edit_file".into()),
             tool_input: None,
             tool_response: None,
+            tool_is_error: None,
             timestamp: Some(Utc::now()),
         },
     )
