@@ -612,6 +612,7 @@
 								<Table.Head class="text-muted-foreground text-[10px] font-semibold uppercase tracking-wider">When</Table.Head>
 								<Table.Head class="text-muted-foreground text-[10px] font-semibold uppercase tracking-wider">Rule</Table.Head>
 								<Table.Head class="text-muted-foreground text-[10px] font-semibold uppercase tracking-wider">Result</Table.Head>
+								<Table.Head class="text-muted-foreground text-[10px] font-semibold uppercase tracking-wider">Requires</Table.Head>
 								<Table.Head class="text-muted-foreground text-[10px] font-semibold uppercase tracking-wider">Action</Table.Head>
 								<Table.Head class="text-muted-foreground text-[10px] font-semibold uppercase tracking-wider">Commit</Table.Head>
 								<Table.Head class="text-muted-foreground text-[10px] font-semibold uppercase tracking-wider">Session</Table.Head>
@@ -633,6 +634,15 @@
 										<span class="rounded-full px-2 py-0.5 text-[10px]" style={resultPillStyle(ev.result)}>
 											{ev.result}
 										</span>
+									</Table.Cell>
+									<Table.Cell class="text-xs">
+										{@const pol = policies.find((p) => p.id === ev.policy_id)}
+										{@const mustSucceed = pol ? (pol.condition as Record<string, unknown>).must_succeed === true : false}
+										{#if mustSucceed}
+											<span class="rounded-full px-2 py-0.5 text-[10px]" style="background: rgba(79,110,247,0.12); color: #4f6ef7; border: 1px solid rgba(79,110,247,0.25)">pass</span>
+										{:else}
+											<span class="rounded-full px-2 py-0.5 text-[10px]" style="background: rgba(148,163,184,0.12); color: #94a3b8; border: 1px solid rgba(148,163,184,0.25)">call</span>
+										{/if}
 									</Table.Cell>
 									<Table.Cell class="text-xs">
 										{#if ev.action === 'block_push'}
