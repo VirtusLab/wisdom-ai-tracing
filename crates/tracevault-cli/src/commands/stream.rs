@@ -3,7 +3,9 @@ use std::io::{self, BufRead, Read, Seek, SeekFrom, Write};
 use std::path::Path;
 
 use tracevault_core::hooks::{parse_hook_event, HookResponse};
-use tracevault_core::streaming::{StreamEventRequest, StreamEventType};
+use tracevault_core::streaming::{
+    extract_is_error_from_transcript, StreamEventRequest, StreamEventType,
+};
 
 pub fn next_event_index(counter_path: &Path) -> Result<i32, io::Error> {
     let current = if counter_path.exists() {
@@ -114,6 +116,12 @@ pub async fn run_stream(
         _ => StreamEventType::ToolUse,
     };
 
+    // Extract is_error from transcript for this tool_use_id
+    let tool_is_error = hook_event
+        .tool_use_id
+        .as_deref()
+        .and_then(|uid| extract_is_error_from_transcript(uid, &transcript_lines));
+
     let mut req = StreamEventRequest {
         protocol_version: 1,
         tool: Some("claude-code".to_string()),
@@ -122,8 +130,10 @@ pub async fn run_stream(
         timestamp: chrono::Utc::now(),
         hook_event_name: Some(hook_event.hook_event_name.clone()),
         tool_name: hook_event.tool_name.clone(),
+        tool_use_id: hook_event.tool_use_id.clone(),
         tool_input: hook_event.tool_input.clone(),
         tool_response: hook_event.tool_response.clone(),
+        tool_is_error,
         event_index: Some(event_index),
         transcript_lines: if transcript_lines.is_empty() {
             None

@@ -11,10 +11,12 @@ fn test_stream_event_request_serialization() {
         timestamp: chrono::Utc::now(),
         hook_event_name: Some("PostToolUse".to_string()),
         tool_name: Some("Edit".to_string()),
+        tool_use_id: None,
         tool_input: Some(
             json!({"file_path": "src/main.rs", "old_string": "old", "new_string": "new"}),
         ),
         tool_response: Some(json!({"success": true})),
+        tool_is_error: None,
         event_index: Some(42),
         transcript_lines: None,
         transcript_offset: None,

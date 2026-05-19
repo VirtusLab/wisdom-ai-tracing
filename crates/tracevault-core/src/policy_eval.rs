@@ -9,13 +9,23 @@ pub struct EvalOutcome {
     pub details: String,
 }
 
+/// Per-tool call statistics used during policy evaluation.
+#[derive(Debug, Default, Clone)]
+pub struct ToolCallStats {
+    /// Total number of times the tool was called.
+    pub total: i64,
+    /// Number of calls where is_error = false (confirmed successful).
+    /// NULL is_error values are NOT counted as successful.
+    pub successful: i64,
+}
+
 /// Evaluate a condition JSON document against aggregated session data.
 ///
-/// `tool_calls` maps tool name → total call count across all sessions in the
+/// `tool_calls` maps tool name → ToolCallStats across all sessions in the
 /// push. `files_modified` is the union of file paths touched.
 pub fn evaluate_condition(
     condition: &serde_json::Value,
-    tool_calls: &HashMap<String, i64>,
+    tool_calls: &HashMap<String, ToolCallStats>,
     files_modified: &[String],
 ) -> EvalOutcome {
     let cond_type = condition.get("type").and_then(|v| v.as_str()).unwrap_or("");
@@ -38,7 +48,10 @@ pub fn evaluate_condition(
     }
 }
 
-fn eval_required(condition: &serde_json::Value, tool_calls: &HashMap<String, i64>) -> EvalOutcome {
+fn eval_required(
+    condition: &serde_json::Value,
+    tool_calls: &HashMap<String, ToolCallStats>,
+) -> EvalOutcome {
     let tool_names: Vec<String> = condition
         .get("tool_names")
         .and_then(|v| v.as_array())
@@ -49,21 +62,42 @@ fn eval_required(condition: &serde_json::Value, tool_calls: &HashMap<String, i64
         })
         .unwrap_or_default();
 
+    let must_succeed = condition
+        .get("must_succeed")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+
     let missing: Vec<&String> = tool_names
         .iter()
-        .filter(|name| tool_calls.get(name.as_str()).copied().unwrap_or(0) == 0)
+        .filter(|name| {
+            let stats = tool_calls.get(name.as_str());
+            if must_succeed {
+                stats.map(|s| s.successful).unwrap_or(0) == 0
+            } else {
+                stats.map(|s| s.total).unwrap_or(0) == 0
+            }
+        })
         .collect();
 
     if missing.is_empty() {
         EvalOutcome {
             passed: true,
-            details: "All required tools were used".into(),
+            details: if must_succeed {
+                "All required tools were used and succeeded".into()
+            } else {
+                "All required tools were used".into()
+            },
         }
     } else {
         EvalOutcome {
             passed: false,
             details: format!(
-                "Missing required tools: {}",
+                "{}: {}",
+                if must_succeed {
+                    "Required tools not called or failed"
+                } else {
+                    "Missing required tools"
+                },
                 missing
                     .iter()
                     .map(|s| s.as_str())
@@ -76,7 +110,7 @@ fn eval_required(condition: &serde_json::Value, tool_calls: &HashMap<String, i64
 
 fn eval_conditional(
     condition: &serde_json::Value,
-    tool_calls: &HashMap<String, i64>,
+    tool_calls: &HashMap<String, ToolCallStats>,
     files_modified: &[String],
 ) -> EvalOutcome {
     let tool_name = condition
@@ -113,14 +147,29 @@ fn eval_conditional(
         };
     }
 
-    let actual_count = tool_calls.get(tool_name).copied().unwrap_or(0);
+    let must_succeed = condition
+        .get("must_succeed")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+
+    let stats = tool_calls.get(tool_name);
+    let actual_count = if must_succeed {
+        stats.map(|s| s.successful).unwrap_or(0)
+    } else {
+        stats.map(|s| s.total).unwrap_or(0)
+    };
+    let total_count = stats.map(|s| s.total).unwrap_or(0);
 
     let passed = actual_count >= min_count;
     EvalOutcome {
         passed,
-        details: format!(
-            "Tool '{tool_name}' called {actual_count} time(s) (required >= {min_count})"
-        ),
+        details: if must_succeed {
+            format!(
+                "Tool '{tool_name}' called {total_count} time(s), {actual_count} succeeded (required >= {min_count} successful)"
+            )
+        } else {
+            format!("Tool '{tool_name}' called {actual_count} time(s) (required >= {min_count})")
+        },
     }
 }
 
@@ -129,8 +178,34 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    fn tools(pairs: &[(&str, i64)]) -> HashMap<String, i64> {
-        pairs.iter().map(|(k, v)| (k.to_string(), *v)).collect()
+    fn tools(pairs: &[(&str, i64)]) -> HashMap<String, ToolCallStats> {
+        pairs
+            .iter()
+            .map(|(k, v)| {
+                (
+                    k.to_string(),
+                    ToolCallStats {
+                        total: *v,
+                        successful: *v, // assume all successful unless test specifies otherwise
+                    },
+                )
+            })
+            .collect()
+    }
+
+    fn tools_with_errors(pairs: &[(&str, i64, i64)]) -> HashMap<String, ToolCallStats> {
+        pairs
+            .iter()
+            .map(|(k, total, successful)| {
+                (
+                    k.to_string(),
+                    ToolCallStats {
+                        total: *total,
+                        successful: *successful,
+                    },
+                )
+            })
+            .collect()
     }
 
     #[test]
@@ -223,5 +298,58 @@ mod tests {
     fn unknown_condition_passes() {
         let cond = json!({"type": "FutureCondition"});
         assert!(evaluate_condition(&cond, &HashMap::new(), &[]).passed);
+    }
+
+    #[test]
+    fn required_must_succeed_all_failed_fails() {
+        let cond =
+            json!({"type": "RequiredToolCall", "tool_names": ["Bash"], "must_succeed": true});
+        // Called 3 times but 0 successful
+        let t = tools_with_errors(&[("Bash", 3, 0)]);
+        let out = evaluate_condition(&cond, &t, &[]);
+        assert!(!out.passed);
+        assert!(out.details.contains("failed"));
+    }
+
+    #[test]
+    fn required_must_succeed_one_success_passes() {
+        let cond =
+            json!({"type": "RequiredToolCall", "tool_names": ["Bash"], "must_succeed": true});
+        let t = tools_with_errors(&[("Bash", 3, 1)]);
+        assert!(evaluate_condition(&cond, &t, &[]).passed);
+    }
+
+    #[test]
+    fn required_must_succeed_false_counts_all_calls() {
+        // Without must_succeed, even all-failed calls satisfy the policy
+        let cond =
+            json!({"type": "RequiredToolCall", "tool_names": ["Bash"], "must_succeed": false});
+        let t = tools_with_errors(&[("Bash", 3, 0)]);
+        assert!(evaluate_condition(&cond, &t, &[]).passed);
+    }
+
+    #[test]
+    fn conditional_must_succeed_counts_only_successes() {
+        let cond = json!({
+            "type": "ConditionalToolCall",
+            "tool_name": "security_scan",
+            "min_count": 2,
+            "must_succeed": true
+        });
+        // 5 total calls, only 1 successful — should fail min_count=2
+        let t = tools_with_errors(&[("security_scan", 5, 1)]);
+        assert!(!evaluate_condition(&cond, &t, &[]).passed);
+    }
+
+    #[test]
+    fn conditional_must_succeed_passes_when_enough_successes() {
+        let cond = json!({
+            "type": "ConditionalToolCall",
+            "tool_name": "security_scan",
+            "min_count": 2,
+            "must_succeed": true
+        });
+        let t = tools_with_errors(&[("security_scan", 5, 3)]);
+        assert!(evaluate_condition(&cond, &t, &[]).passed);
     }
 }

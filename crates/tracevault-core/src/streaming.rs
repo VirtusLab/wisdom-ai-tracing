@@ -21,8 +21,10 @@ pub struct StreamEventRequest {
     pub timestamp: DateTime<Utc>,
     pub hook_event_name: Option<String>,
     pub tool_name: Option<String>,
+    pub tool_use_id: Option<String>,
     pub tool_input: Option<serde_json::Value>,
     pub tool_response: Option<serde_json::Value>,
+    pub tool_is_error: Option<bool>,
     pub event_index: Option<i32>,
     pub transcript_lines: Option<Vec<serde_json::Value>>,
     pub transcript_offset: Option<i64>,
@@ -97,6 +99,26 @@ impl StreamEventRequest {
         }
         self.tool_input = None;
     }
+}
+
+/// Scan transcript lines for a tool_result whose tool_use_id matches the given id
+/// and return its is_error flag. Returns None if not found or no transcript available.
+pub fn extract_is_error_from_transcript(
+    tool_use_id: &str,
+    transcript_lines: &[serde_json::Value],
+) -> Option<bool> {
+    for line in transcript_lines {
+        // Transcript lines are full message objects; content is an array of blocks
+        let content = line.get("message")?.get("content")?.as_array()?;
+        for block in content {
+            if block.get("type")?.as_str()? == "tool_result"
+                && block.get("tool_use_id")?.as_str()? == tool_use_id
+            {
+                return block.get("is_error")?.as_bool().map(Some).unwrap_or(None);
+            }
+        }
+    }
+    None
 }
 
 pub fn extract_file_change(

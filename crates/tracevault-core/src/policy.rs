@@ -28,6 +28,8 @@ pub enum PolicyCondition {
     },
     RequiredToolCall {
         tool_names: Vec<String>,
+        #[serde(default)]
+        must_succeed: bool,
     },
     TokenBudget {
         max_tokens: Option<u64>,
@@ -37,6 +39,8 @@ pub enum PolicyCondition {
         tool_name: String,
         min_count: Option<u32>,
         when_files_match: Option<Vec<String>>,
+        #[serde(default)]
+        must_succeed: bool,
     },
 }
 

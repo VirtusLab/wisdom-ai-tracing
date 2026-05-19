@@ -115,6 +115,7 @@
 
 	// For RequiredToolCall type
 	let newToolNames = $state('');
+	let newMustSucceed = $state(false);
 
 	onMount(async () => {
 		await Promise.all([
@@ -236,13 +237,15 @@
 				tool_names: newToolNames
 					.split(',')
 					.map((s) => s.trim())
-					.filter((s) => s.length > 0)
+					.filter((s) => s.length > 0),
+				must_succeed: newMustSucceed
 			};
 		} else {
 			const condition: Record<string, unknown> = {
 				type: 'ConditionalToolCall',
 				tool_name: newToolName,
-				min_count: parseInt(newMinCount) || 1
+				min_count: parseInt(newMinCount) || 1,
+				must_succeed: newMustSucceed
 			};
 			const patterns = newFilePatterns
 				.split(',')
@@ -284,6 +287,7 @@
 		newMinCount = '1';
 		newFilePatterns = '';
 		newToolNames = '';
+		newMustSucceed = false;
 		newAction = 'block_push';
 		createError = '';
 	}
@@ -311,9 +315,10 @@
 
 	function conditionSummary(condition: Record<string, unknown>): string {
 		const type = condition.type as string;
+		const mustSucceed = condition.must_succeed === true;
 		if (type === 'RequiredToolCall') {
 			const tools = (condition.tool_names as string[]) || [];
-			return `Require: ${tools.join(', ')}`;
+			return `Require: ${tools.join(', ')}${mustSucceed ? ' ✓ must succeed' : ''}`;
 		} else if (type === 'ConditionalToolCall') {
 			const tool = condition.tool_name as string;
 			const min = (condition.min_count as number) || 1;
@@ -322,6 +327,7 @@
 			if (patterns && patterns.length > 0) {
 				s += ` when ${patterns.join(', ')}`;
 			}
+			if (mustSucceed) s += ' ✓ must succeed';
 			return s;
 		}
 		return JSON.stringify(condition);
@@ -462,6 +468,19 @@
 								<Input id="tool_names" bind:value={newToolNames} required placeholder="e.g., mcp__codex-cli__review, Bash" />
 							</div>
 						{/if}
+
+						<div class="flex items-center gap-2">
+							<input
+								type="checkbox"
+								id="must_succeed"
+								bind:checked={newMustSucceed}
+								class="h-4 w-4 rounded border-border accent-primary"
+							/>
+							<Label for="must_succeed" class="cursor-pointer">
+								Must succeed
+								<span class="text-muted-foreground text-xs font-normal ml-1">(only count calls where the tool did not return an error)</span>
+							</Label>
+						</div>
 
 						<div class="grid gap-2">
 							<Label>Action</Label>
