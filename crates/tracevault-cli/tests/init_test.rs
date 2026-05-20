@@ -11,7 +11,8 @@ fn tmp_git_repo() -> TempDir {
 #[tokio::test]
 async fn init_fails_without_git() {
     let tmp = TempDir::new().unwrap();
-    let result = tracevault_cli::commands::init::init_in_directory(tmp.path(), None, None).await;
+    let result =
+        tracevault_cli::commands::init::init_in_directory(tmp.path(), None, None, false).await;
     assert!(result.is_err());
     assert!(result
         .unwrap_err()
@@ -24,7 +25,7 @@ async fn init_creates_tracevault_config() {
     let tmp = tmp_git_repo();
     let config_path = tmp.path().join(".tracevault").join("config.toml");
 
-    tracevault_cli::commands::init::init_in_directory(tmp.path(), None, None)
+    tracevault_cli::commands::init::init_in_directory(tmp.path(), None, None, false)
         .await
         .unwrap();
 
@@ -37,7 +38,7 @@ async fn init_creates_tracevault_config() {
 async fn init_creates_directory_structure() {
     let tmp = tmp_git_repo();
 
-    tracevault_cli::commands::init::init_in_directory(tmp.path(), None, None)
+    tracevault_cli::commands::init::init_in_directory(tmp.path(), None, None, false)
         .await
         .unwrap();
 
@@ -55,7 +56,7 @@ async fn init_creates_directory_structure() {
 async fn init_installs_claude_hooks() {
     let tmp = tmp_git_repo();
 
-    tracevault_cli::commands::init::init_in_directory(tmp.path(), None, None)
+    tracevault_cli::commands::init::init_in_directory(tmp.path(), None, None, false)
         .await
         .unwrap();
 
@@ -79,7 +80,7 @@ async fn init_merges_into_existing_settings() {
     fs::create_dir_all(&claude_dir).unwrap();
     fs::write(claude_dir.join("settings.json"), r#"{"model": "opus"}"#).unwrap();
 
-    tracevault_cli::commands::init::init_in_directory(tmp.path(), None, None)
+    tracevault_cli::commands::init::init_in_directory(tmp.path(), None, None, false)
         .await
         .unwrap();
 
@@ -104,7 +105,7 @@ fn tracevault_hooks_has_pre_post_and_notification() {
 async fn init_installs_git_pre_push_hook() {
     let tmp = tmp_git_repo();
 
-    tracevault_cli::commands::init::init_in_directory(tmp.path(), None, None)
+    tracevault_cli::commands::init::init_in_directory(tmp.path(), None, None, false)
         .await
         .unwrap();
 
@@ -132,7 +133,7 @@ async fn init_preserves_existing_pre_push_hook() {
     )
     .unwrap();
 
-    tracevault_cli::commands::init::init_in_directory(tmp.path(), None, None)
+    tracevault_cli::commands::init::init_in_directory(tmp.path(), None, None, false)
         .await
         .unwrap();
 
@@ -149,10 +150,10 @@ async fn init_preserves_existing_pre_push_hook() {
 async fn init_does_not_duplicate_hook_on_reinit() {
     let tmp = tmp_git_repo();
 
-    tracevault_cli::commands::init::init_in_directory(tmp.path(), None, None)
+    tracevault_cli::commands::init::init_in_directory(tmp.path(), None, None, false)
         .await
         .unwrap();
-    tracevault_cli::commands::init::init_in_directory(tmp.path(), None, None)
+    tracevault_cli::commands::init::init_in_directory(tmp.path(), None, None, false)
         .await
         .unwrap();
 
@@ -168,7 +169,7 @@ async fn init_does_not_duplicate_hook_on_reinit() {
 async fn init_installs_post_commit_hook() {
     let tmp = tmp_git_repo();
 
-    tracevault_cli::commands::init::init_in_directory(tmp.path(), None, None)
+    tracevault_cli::commands::init::init_in_directory(tmp.path(), None, None, false)
         .await
         .unwrap();
 
@@ -185,10 +186,10 @@ async fn init_installs_post_commit_hook() {
 async fn init_does_not_duplicate_post_commit_hook_on_reinit() {
     let tmp = tmp_git_repo();
 
-    tracevault_cli::commands::init::init_in_directory(tmp.path(), None, None)
+    tracevault_cli::commands::init::init_in_directory(tmp.path(), None, None, false)
         .await
         .unwrap();
-    tracevault_cli::commands::init::init_in_directory(tmp.path(), None, None)
+    tracevault_cli::commands::init::init_in_directory(tmp.path(), None, None, false)
         .await
         .unwrap();
 
@@ -208,6 +209,7 @@ async fn init_local_target_writes_to_settings_local_json() {
         tmp.path(),
         None,
         Some(ClaudeSettingsTarget::Local),
+        false,
     )
     .await
     .unwrap();
@@ -233,6 +235,7 @@ async fn init_local_target_gitignores_settings_local_json() {
         tmp.path(),
         None,
         Some(ClaudeSettingsTarget::Local),
+        false,
     )
     .await
     .unwrap();
@@ -259,6 +262,7 @@ async fn init_local_target_merges_into_existing_settings_local_json() {
         tmp.path(),
         None,
         Some(ClaudeSettingsTarget::Local),
+        false,
     )
     .await
     .unwrap();
@@ -277,6 +281,7 @@ async fn init_writes_server_url_to_config() {
         tmp.path(),
         Some("https://tv.example.com"),
         None,
+        false,
     )
     .await
     .unwrap();
@@ -284,4 +289,28 @@ async fn init_writes_server_url_to_config() {
     let config_path = tmp.path().join(".tracevault/config.toml");
     let content = fs::read_to_string(&config_path).unwrap();
     assert!(content.contains("server_url = \"https://tv.example.com\""));
+}
+
+#[tokio::test]
+async fn init_no_gitignore_skips_gitignore_update() {
+    let tmp = tmp_git_repo();
+
+    tracevault_cli::commands::init::init_in_directory(tmp.path(), None, None, true)
+        .await
+        .unwrap();
+
+    // .gitignore should not exist (tmp_git_repo creates a bare repo without one)
+    // or should not contain any tracevault entries if it already existed
+    let gitignore_path = tmp.path().join(".gitignore");
+    if gitignore_path.exists() {
+        let content = fs::read_to_string(&gitignore_path).unwrap();
+        assert!(
+            !content.contains(".tracevault/"),
+            ".gitignore should not have been modified with --no-gitignore"
+        );
+        assert!(!content.contains(".claude/settings.json"));
+    }
+    // But the rest of init should still work
+    assert!(tmp.path().join(".tracevault").exists());
+    assert!(tmp.path().join(".claude/settings.json").exists());
 }

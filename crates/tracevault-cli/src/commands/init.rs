@@ -89,6 +89,7 @@ pub async fn init_in_directory(
     project_root: &Path,
     server_url: Option<&str>,
     claude_settings: Option<ClaudeSettingsTarget>,
+    no_gitignore: bool,
 ) -> Result<ClaudeSettingsTarget, io::Error> {
     // Check for git repository
     if !project_root.join(".git").exists() {
@@ -106,8 +107,10 @@ pub async fn init_in_directory(
     fs::create_dir_all(config_dir.join("sessions"))?;
     fs::create_dir_all(config_dir.join("cache"))?;
 
-    // Keep all tracevault files local — update root .gitignore
-    update_root_gitignore(project_root, target)?;
+    // Keep all tracevault files local — update root .gitignore (unless opted out)
+    if !no_gitignore {
+        update_root_gitignore(project_root, target)?;
+    }
 
     // Register repo on server if authenticated, server URL known, and git remote available
     let remote_url = git_remote_url(project_root);

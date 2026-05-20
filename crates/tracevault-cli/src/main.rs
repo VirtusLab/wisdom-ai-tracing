@@ -21,6 +21,10 @@ enum Cli {
         /// is a TTY, otherwise defaults to `shared`.
         #[arg(long, value_enum)]
         claude_settings: Option<commands::init::ClaudeSettingsTarget>,
+        /// Skip updating .gitignore. Use this when your project manages
+        /// .gitignore separately or you want to commit the Claude settings files.
+        #[arg(long)]
+        no_gitignore: bool,
     },
     /// Show current session status
     Status,
@@ -75,10 +79,16 @@ async fn main() {
         Cli::Init {
             server_url,
             claude_settings,
+            no_gitignore,
         } => {
             let cwd = env::current_dir().expect("Cannot determine current directory");
-            match commands::init::init_in_directory(&cwd, server_url.as_deref(), claude_settings)
-                .await
+            match commands::init::init_in_directory(
+                &cwd,
+                server_url.as_deref(),
+                claude_settings,
+                no_gitignore,
+            )
+            .await
             {
                 Ok(target) => {
                     let entry = target.gitignore_entry();
