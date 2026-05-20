@@ -191,7 +191,7 @@ pub async fn init_in_directory(
 
 fn update_root_gitignore(
     project_root: &Path,
-    claude_target: ClaudeSettingsTarget,
+    _claude_target: ClaudeSettingsTarget,
 ) -> Result<(), io::Error> {
     let path = project_root.join(".gitignore");
     let existing = if path.exists() {
@@ -200,11 +200,18 @@ fn update_root_gitignore(
         String::new()
     };
 
-    let needed: Vec<&str> = [".tracevault/", claude_target.gitignore_entry()]
-        .iter()
-        .copied()
-        .filter(|entry| !existing.lines().any(|line| line.trim() == *entry))
-        .collect();
+    // Always gitignore both Claude settings files regardless of which target
+    // was chosen: settings.json contains hook config (personal install), and
+    // settings.local.json is the conventional per-user override file.
+    let needed: Vec<&str> = [
+        ".tracevault/",
+        ".claude/settings.json",
+        ".claude/settings.local.json",
+    ]
+    .iter()
+    .copied()
+    .filter(|entry| !existing.lines().any(|line| line.trim() == *entry))
+    .collect();
 
     if needed.is_empty() {
         return Ok(());
