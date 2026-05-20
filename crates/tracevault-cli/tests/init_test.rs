@@ -48,6 +48,7 @@ async fn init_creates_directory_structure() {
     let gitignore = fs::read_to_string(tmp.path().join(".gitignore")).unwrap();
     assert!(gitignore.contains(".tracevault/"));
     assert!(gitignore.contains(".claude/settings.json"));
+    assert!(gitignore.contains(".claude/settings.local.json"));
 }
 
 #[tokio::test]
@@ -238,11 +239,8 @@ async fn init_local_target_gitignores_settings_local_json() {
 
     let gitignore = fs::read_to_string(tmp.path().join(".gitignore")).unwrap();
     assert!(gitignore.contains(".claude/settings.local.json"));
-    // Shared path is not added when user chose local — they may have a
-    // committed settings.json that should not be ignored.
-    assert!(!gitignore
-        .lines()
-        .any(|line| line.trim() == ".claude/settings.json"));
+    // settings.json is also always gitignored (contains hook config).
+    assert!(gitignore.contains(".claude/settings.json"));
 }
 
 #[tokio::test]
