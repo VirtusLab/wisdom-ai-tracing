@@ -45,7 +45,7 @@ import { homedir } from "os";
 
 interface Config {
   serverUrl: string;
-  token?: string;
+  token: string;
   orgSlug: string;
 }
 
@@ -75,6 +75,11 @@ function loadConfig(): Config {
   const envToken = process.env.TRACEVAULT_TOKEN;
   const envOrg = process.env.TRACEVAULT_ORG_SLUG;
   if (envUrl && envOrg) {
+    if (!envToken) {
+      throw new Error(
+        "TraceVault MCP: TRACEVAULT_TOKEN env var is required when using env var config."
+      );
+    }
     return {
       serverUrl: envUrl.replace(/\/$/, ""),
       token: envToken,
@@ -93,22 +98,22 @@ function loadConfig(): Config {
     if (!existsSync(path)) continue;
     try {
       const cfg = parseToml(readFileSync(path, "utf8"));
-      if (cfg.server_url && cfg.org_slug) {
+      if (cfg.server_url && cfg.org_slug && cfg.token) {
         return {
           serverUrl: cfg.server_url.replace(/\/$/, ""),
           token: cfg.token,
           orgSlug: cfg.org_slug,
         };
       }
-    } catch {
-      // ignore
+    } catch (err) {
+      process.stderr.write(`[tracevault-mcp] Failed to parse config at ${path}: ${err instanceof Error ? err.message : String(err)}\n`);
     }
   }
 
   throw new Error(
-    "TraceVault MCP: no configuration found.\n" +
-      "Set TRACEVAULT_SERVER_URL, TRACEVAULT_TOKEN, TRACEVAULT_ORG_SLUG env vars\n" +
-      "or create .tracevault/config.toml with server_url, token, and org_slug."
+    "TraceVault MCP: no valid configuration found.\n" +
+      "Set TRACEVAULT_SERVER_URL, TRACEVAULT_TOKEN (required), TRACEVAULT_ORG_SLUG env vars\n" +
+      "or create .tracevault/config.toml with server_url, token (required), and org_slug."
   );
 }
 
@@ -138,9 +143,7 @@ async function askTracevault(
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
   };
-  if (cfg.token) {
-    headers["Authorization"] = `Bearer ${cfg.token}`;
-  }
+  headers["Authorization"] = `Bearer ${cfg.token}`;
 
   const response = await fetch(url, {
     method: "POST",

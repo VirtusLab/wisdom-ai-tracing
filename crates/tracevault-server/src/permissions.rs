@@ -97,7 +97,7 @@ mod tests {
 
     #[test]
     fn owner_has_12_permissions() {
-        assert_eq!(role_permissions("owner").len(), 12);
+        assert_eq!(role_permissions("owner").len(), 13);
     }
 
     #[test]
@@ -108,7 +108,7 @@ mod tests {
     #[test]
     fn developer_has_5_permissions() {
         let perms = role_permissions("developer");
-        assert_eq!(perms.len(), 5);
+        assert_eq!(perms.len(), 6);
         assert!(perms.contains(&Permission::TracePush));
         assert!(perms.contains(&Permission::TraceViewOwn));
         assert!(perms.contains(&Permission::CodeBrowse));
