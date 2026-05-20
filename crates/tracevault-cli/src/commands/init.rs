@@ -109,7 +109,7 @@ pub async fn init_in_directory(
 
     // Keep all tracevault files local — update root .gitignore (unless opted out)
     if !no_gitignore {
-        update_root_gitignore(project_root, target)?;
+        update_root_gitignore(project_root)?;
     }
 
     // Register repo on server if authenticated, server URL known, and git remote available
@@ -192,10 +192,7 @@ pub async fn init_in_directory(
     Ok(target)
 }
 
-fn update_root_gitignore(
-    project_root: &Path,
-    _claude_target: ClaudeSettingsTarget,
-) -> Result<(), io::Error> {
+fn update_root_gitignore(project_root: &Path) -> Result<(), io::Error> {
     let path = project_root.join(".gitignore");
     let existing = if path.exists() {
         fs::read_to_string(&path)?
