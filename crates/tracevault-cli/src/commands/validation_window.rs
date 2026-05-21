@@ -13,7 +13,14 @@ use crate::credentials::Credentials;
 ///
 /// Only the most recent call per session matters — calling this again simply
 /// moves the window cursor forward, discarding events from the previous window.
-pub async fn open_validation_window(project_root: &Path) -> Result<(), String> {
+///
+/// `explicit_session_id` — when Some, targets that session directly.
+/// When None, the most recently modified session directory is used (suitable
+/// for single-agent setups; pass `--session-id` in multi-agent setups).
+pub async fn open_validation_window(
+    project_root: &Path,
+    explicit_session_id: Option<&str>,
+) -> Result<(), String> {
     let config = TracevaultConfig::load(project_root)
         .ok_or("TraceVault not initialized. Run `tracevault init` first.")?;
 
@@ -26,17 +33,32 @@ pub async fn open_validation_window(project_root: &Path) -> Result<(), String> {
         .as_deref()
         .ok_or("No repo_id configured. Run `tracevault init`.")?;
 
-    // Find the most recently modified session directory
     let sessions_dir = project_root.join(".tracevault").join("sessions");
-    let session_dir = find_latest_session(&sessions_dir)
-        .ok_or("No active session found. Start a session by running an AI coding agent first.")?;
 
-    let session_id = session_dir
-        .file_name()
-        .and_then(|n| n.to_str())
-        .ok_or("Could not determine session ID")?
-        .to_string();
+    let session_id = if let Some(id) = explicit_session_id {
+        // Verify the session directory exists when an explicit ID is given.
+        let dir = sessions_dir.join(id);
+        if !dir.is_dir() {
+            return Err(format!(
+                "Session directory not found: {}. Check the session ID.",
+                dir.display()
+            ));
+        }
+        id.to_string()
+    } else {
+        // Auto-detect: use the most recently modified session directory.
+        let session_dir = find_latest_session(&sessions_dir).ok_or(
+            "No active session found. Start a session by running an AI coding agent first, \
+             or pass --session-id to target a specific session.",
+        )?;
+        session_dir
+            .file_name()
+            .and_then(|n| n.to_str())
+            .ok_or("Could not determine session ID")?
+            .to_string()
+    };
 
+    let session_dir = sessions_dir.join(&session_id);
     let counter_path = session_dir.join(".event_counter");
     let event_index = next_event_index(&counter_path)
         .map_err(|e| format!("Failed to read event counter: {e}"))?;

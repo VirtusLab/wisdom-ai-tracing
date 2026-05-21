@@ -11,10 +11,9 @@ ALTER TABLE sessions
     ADD COLUMN IF NOT EXISTS validation_window_started_at TIMESTAMPTZ;
 
 ALTER TABLE policies
-    ADD COLUMN IF NOT EXISTS scope TEXT NOT NULL DEFAULT 'session';
-
--- 'allow' is a new action value; existing CHECK constraints are TEXT columns
--- with no DB-level constraint, so no migration needed there.
+    ADD COLUMN IF NOT EXISTS scope TEXT NOT NULL DEFAULT 'session'
+        CHECK (scope IN ('session', 'validation_window', 'both'));
 
 ALTER TABLE repos
-    ADD COLUMN IF NOT EXISTS validation_window_mode TEXT NOT NULL DEFAULT 'disabled';
+    ADD COLUMN IF NOT EXISTS validation_window_mode TEXT NOT NULL DEFAULT 'disabled'
+        CHECK (validation_window_mode IN ('disabled', 'warn', 'block'));

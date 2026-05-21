@@ -130,23 +130,6 @@ impl SessionRepo {
         Ok(())
     }
 
-    /// Fetch validation_window_started_at for a session by its string session_id
-    /// within a repo. Returns None if no window has been opened.
-    pub async fn get_validation_window_started_at(
-        pool: &PgPool,
-        repo_id: Uuid,
-        session_id: &str,
-    ) -> Result<Option<DateTime<Utc>>, AppError> {
-        let ts: Option<DateTime<Utc>> =
-            sqlx::query_scalar(include_str!("sql/get_session_validation_window.sql"))
-                .bind(repo_id)
-                .bind(session_id)
-                .fetch_optional(pool)
-                .await?
-                .flatten();
-        Ok(ts)
-    }
-
     /// Mark session completed with only an ended_at timestamp (no stats).
     pub async fn complete_minimal(
         pool: &PgPool,

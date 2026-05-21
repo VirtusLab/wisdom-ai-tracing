@@ -76,8 +76,16 @@ enum Cli {
     /// and is now running quality checks. Only tool calls made after this point
     /// are evaluated by validation_window-scoped policies. Calling this again
     /// resets the window, discarding earlier window events.
+    ///
+    /// In single-agent setups the current session is detected automatically.
+    /// In multi-agent setups, pass --session-id to target the correct session.
     #[command(name = "validation-start")]
-    ValidationStart,
+    ValidationStart {
+        /// Explicit session ID to open the window for. When omitted, the most
+        /// recently active session under .tracevault/sessions/ is used.
+        #[arg(long)]
+        session_id: Option<String>,
+    },
 }
 
 #[tokio::main]
@@ -180,9 +188,12 @@ async fn main() {
                 std::process::exit(1);
             }
         }
-        Cli::ValidationStart => {
+        Cli::ValidationStart { session_id } => {
             let cwd = env::current_dir().expect("Cannot determine current directory");
-            if let Err(e) = commands::validation_window::open_validation_window(&cwd).await {
+            if let Err(e) =
+                commands::validation_window::open_validation_window(&cwd, session_id.as_deref())
+                    .await
+            {
                 eprintln!("Error: {e}");
                 std::process::exit(1);
             }

@@ -354,13 +354,6 @@ pub async fn check_policies(
             .fetch_all(&state.pool)
             .await?;
 
-    // Deduplicate: keep the most recent row per session_id string
-    let mut seen = std::collections::HashSet::new();
-    let window_rows: Vec<_> = window_rows
-        .into_iter()
-        .filter(|(sid, _, _)| seen.insert(sid.clone()))
-        .collect();
-
     let mut window_tool_calls: std::collections::HashMap<String, ToolCallStats> =
         std::collections::HashMap::new();
     let mut has_any_window = false;
@@ -388,47 +381,95 @@ pub async fn check_policies(
     let mut results = Vec::new();
     let mut has_block_failure = false;
 
-    // Evaluate per-policy results based on scope
+    // Evaluate per-policy results based on scope.
+    // `allow` policies are recorded as pass (they gate the window but never fail).
+    // `both`-scoped policies are evaluated twice: once against session stats,
+    // once against window stats (if a window exists). The stricter result wins.
     for (policy_id, name, condition, action, severity, scope) in &rows {
-        // Determine which tool call set to evaluate against
-        let effective_tool_calls = match scope.as_str() {
-            "validation_window" => {
-                if !has_any_window {
-                    // No window opened — skip validation_window policies entirely
-                    results.push(CheckResult {
-                        rule_name: name.clone(),
-                        result: "skip".into(),
-                        action: action.clone(),
-                        severity: severity.clone(),
-                        details: "Skipped: no validation window was opened this push".into(),
-                    });
-                    continue;
-                }
-                &window_tool_calls
-            }
-            "both" => {
-                // Evaluate against session stats; window gate is separate below
-                &all_tool_calls
-            }
-            _ => &all_tool_calls, // "session" (default)
-        };
-
-        // `allow` action policies are never failures — they only affect the window gate
+        // `allow` — record as pass and move on; these only affect the window gate.
         if action == "allow" {
+            let details = "Tool explicitly allowed in validation window".to_string();
+            if let Err(e) = PolicyRepo::insert_evaluation(
+                &state.pool,
+                auth.org_id,
+                repo_id,
+                *policy_id,
+                name,
+                session_id_for_log,
+                req.commit_sha.as_deref(),
+                "pass",
+                action,
+                &details,
+                "cli_check",
+                actor_for_log,
+            )
+            .await
+            {
+                tracing::warn!(policy_id = %policy_id, error = %e, "failed to record policy evaluation");
+            }
             results.push(CheckResult {
                 rule_name: name.clone(),
                 result: "pass".into(),
                 action: action.clone(),
                 severity: severity.clone(),
-                details: "Tool explicitly allowed in validation window".into(),
+                details,
             });
             continue;
         }
 
-        let check_result = evaluate_condition(condition, effective_tool_calls, &all_files);
-        let result_str = classify_result(&check_result);
+        // Collect the evaluation datasets based on scope.
+        // `both` produces two evaluations; the worse result is reported.
+        let datasets: &[(&std::collections::HashMap<String, ToolCallStats>, &str)] =
+            match scope.as_str() {
+                "validation_window" => {
+                    if !has_any_window {
+                        // No window opened — skip entirely.
+                        results.push(CheckResult {
+                            rule_name: name.clone(),
+                            result: "skip".into(),
+                            action: action.clone(),
+                            severity: severity.clone(),
+                            details: "Skipped: no validation window was opened this push".into(),
+                        });
+                        continue;
+                    }
+                    &[(&window_tool_calls, "window")]
+                }
+                "both" => {
+                    if has_any_window {
+                        &[(&all_tool_calls, "session"), (&window_tool_calls, "window")]
+                    } else {
+                        &[(&all_tool_calls, "session")]
+                    }
+                }
+                _ => &[(&all_tool_calls, "session")], // "session" (default)
+            };
 
-        if !check_result.passed && action == "block_push" {
+        // Evaluate against each dataset; pick the worst outcome.
+        let mut worst_result_str = "pass";
+        let mut worst_details = String::new();
+
+        for (tool_calls, label) in datasets {
+            let check_result = evaluate_condition(condition, tool_calls, &all_files);
+            let result_str = classify_result(&check_result);
+            // fail > warn > skip > pass
+            let is_worse = matches!(
+                (worst_result_str, result_str),
+                (_, "fail") | ("pass" | "skip", "warn")
+            );
+            if is_worse {
+                worst_result_str = result_str;
+                worst_details = if datasets.len() > 1 {
+                    format!("[{label}] {}", check_result.details)
+                } else {
+                    check_result.details
+                };
+            } else if worst_details.is_empty() {
+                worst_details = check_result.details;
+            }
+        }
+
+        if worst_result_str == "fail" && action == "block_push" {
             has_block_failure = true;
         }
 
@@ -440,9 +481,9 @@ pub async fn check_policies(
             name,
             session_id_for_log,
             req.commit_sha.as_deref(),
-            result_str,
+            worst_result_str,
             action,
-            &check_result.details,
+            &worst_details,
             "cli_check",
             actor_for_log,
         )
@@ -453,10 +494,10 @@ pub async fn check_policies(
 
         results.push(CheckResult {
             rule_name: name.clone(),
-            result: result_str.into(),
+            result: worst_result_str.into(),
             action: action.clone(),
             severity: severity.clone(),
-            details: check_result.details,
+            details: worst_details,
         });
     }
 
