@@ -489,7 +489,7 @@
 						<div class="grid gap-2">
 							<Label>Action</Label>
 							<Select.Root type="single" value={newAction} onValueChange={(v) => { if (v) newAction = v; }}>
-								<Select.Trigger>{newAction === 'block_push' ? 'Block Push' : newAction === 'warn' ? 'Warn' : 'Allow'}</Select.Trigger>
+								<Select.Trigger>{{ block_push: 'Block Push', warn: 'Warn', allow: 'Allow' }[newAction] ?? newAction}</Select.Trigger>
 								<Select.Content>
 									<Select.Item value="block_push">Block Push</Select.Item>
 									<Select.Item value="warn">Warn</Select.Item>

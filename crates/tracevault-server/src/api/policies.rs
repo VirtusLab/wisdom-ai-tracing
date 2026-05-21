@@ -306,7 +306,6 @@ pub async fn check_policies(
     Json(req): Json<CheckRequest>,
 ) -> Result<Json<CheckResponse>, AppError> {
     use crate::repo::events::EventRepo;
-    use crate::repo::sessions::SessionRepo;
     use tracevault_core::policy_eval::{evaluate_condition, evaluate_window_gate, ToolCallStats};
 
     // Verify repo belongs to org
@@ -325,10 +324,7 @@ pub async fn check_policies(
         std::collections::HashMap::new();
     let mut all_files: Vec<String> = Vec::new();
 
-    // Aggregate window-level tool calls: events after validation_window_started_at
-    let mut window_tool_calls: std::collections::HashMap<String, ToolCallStats> =
-        std::collections::HashMap::new();
-    let mut has_any_window = false;
+    let session_ids: Vec<&str> = req.sessions.iter().map(|s| s.session_id.as_str()).collect();
 
     for session in &req.sessions {
         // Session-scoped aggregation (existing behaviour)
@@ -345,35 +341,44 @@ pub async fn check_policies(
         if let Some(files) = &session.files_modified {
             all_files.extend(files.iter().cloned());
         }
+    }
 
-        // Window-scoped aggregation: pull from DB if a window was opened
-        let window_ts = SessionRepo::get_validation_window_started_at(
-            &state.pool,
-            repo_id,
-            &session.session_id,
-        )
-        .await?;
+    // Batch-resolve window stats: single query fetches (session_id, db_id,
+    // validation_window_started_at) for all sessions in this push, then a
+    // second query aggregates window tool-call stats for all sessions that
+    // have an open window. This avoids N+1 round-trips.
+    let window_rows: Vec<(String, Uuid, Option<chrono::DateTime<chrono::Utc>>)> = sqlx::query_as(
+        "SELECT session_id, id, validation_window_started_at
+             FROM sessions
+             WHERE repo_id = $1 AND session_id = ANY($2)
+             ORDER BY started_at DESC",
+    )
+    .bind(repo_id)
+    .bind(&session_ids)
+    .fetch_all(&state.pool)
+    .await?;
 
-        if let Some(ts) = window_ts {
-            has_any_window = true;
-            // Resolve the session DB id to query events
-            let session_db_id: Option<Uuid> = sqlx::query_scalar(
-                "SELECT id FROM sessions WHERE repo_id = $1 AND session_id = $2
-                 ORDER BY started_at DESC LIMIT 1",
-            )
-            .bind(repo_id)
-            .bind(&session.session_id)
-            .fetch_optional(&state.pool)
-            .await?;
+    // Deduplicate: keep the most recent row per session_id string
+    let mut seen = std::collections::HashSet::new();
+    let window_rows: Vec<_> = window_rows
+        .into_iter()
+        .filter(|(sid, _, _)| seen.insert(sid.clone()))
+        .collect();
 
-            if let Some(db_id) = session_db_id {
-                let stats = EventRepo::get_window_tool_call_stats(&state.pool, db_id, ts).await?;
-                for (name, s) in stats {
-                    let entry = window_tool_calls.entry(name).or_default();
-                    entry.total += s.total;
-                    entry.successful += s.successful;
-                }
-            }
+    let mut window_tool_calls: std::collections::HashMap<String, ToolCallStats> =
+        std::collections::HashMap::new();
+    let mut has_any_window = false;
+
+    for (_, db_id, window_ts) in &window_rows {
+        let Some(ts) = window_ts else {
+            continue;
+        };
+        has_any_window = true;
+        let stats = EventRepo::get_window_tool_call_stats(&state.pool, *db_id, *ts).await?;
+        for (name, s) in stats {
+            let entry = window_tool_calls.entry(name).or_default();
+            entry.total += s.total;
+            entry.successful += s.successful;
         }
     }
 
