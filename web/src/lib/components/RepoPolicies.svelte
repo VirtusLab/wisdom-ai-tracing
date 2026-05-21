@@ -112,24 +112,28 @@
 		createError = '';
 	}
 
+	let actionError = $state('');
+
 	async function togglePolicy(policy: Policy) {
+		actionError = '';
 		try {
 			await api.put(`/api/v1/orgs/${slug}/policies/${policy.id}`, {
 				enabled: !policy.enabled
 			});
 			onchange();
-		} catch {
-			// error surfaced via parent reload
+		} catch (err) {
+			actionError = err instanceof Error ? err.message : 'Failed to update policy';
 		}
 	}
 
 	async function deletePolicy(id: string) {
 		if (!confirm('Delete this policy? This cannot be undone.')) return;
+		actionError = '';
 		try {
 			await api.delete(`/api/v1/orgs/${slug}/policies/${id}`);
 			onchange();
-		} catch {
-			// error surfaced via parent reload
+		} catch (err) {
+			actionError = err instanceof Error ? err.message : 'Failed to delete policy';
 		}
 	}
 
@@ -237,7 +241,7 @@
 					<div class="grid gap-2">
 						<Label>Scope</Label>
 						<Select.Root type="single" value={newScope} onValueChange={(v) => { if (v) newScope = v; }}>
-							<Select.Trigger>{newScope === 'session' ? 'Session (whole push)' : newScope === 'validation_window' ? 'Validation Window only' : 'Both'}</Select.Trigger>
+							<Select.Trigger>{{ session: 'Session (whole push)', validation_window: 'Validation Window only', both: 'Both' }[newScope] ?? newScope}</Select.Trigger>
 							<Select.Content>
 								<Select.Item value="session">Session — evaluated over entire push window (default)</Select.Item>
 								<Select.Item value="validation_window">Validation Window — evaluated only inside declared window</Select.Item>
@@ -257,6 +261,9 @@
 		</Dialog.Root>
 	</div>
 	<div class="p-4">
+		{#if actionError}
+			<p class="text-destructive text-sm mb-2">{actionError}</p>
+		{/if}
 		{#if loading}
 			<div class="text-muted-foreground flex items-center justify-center gap-2 py-12 text-sm">
 				<span class="inline-block h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent"></span>
