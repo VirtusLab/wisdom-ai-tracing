@@ -37,7 +37,7 @@ async fn create_and_list_for_repo(pool: sqlx::PgPool) {
         &json!({"type": "TraceCompleteness"}),
         "warn",
         "medium",
-            "session",
+        "session",
         true,
     )
     .await
@@ -64,7 +64,7 @@ async fn update_partial_coalesces(pool: sqlx::PgPool) {
         &json!({"type": "TraceCompleteness"}),
         "warn",
         "medium",
-            "session",
+        "session",
         true,
     )
     .await
@@ -80,7 +80,6 @@ async fn update_partial_coalesces(pool: sqlx::PgPool) {
         &None,
         &None,
         &None,
-
         None,
     )
     .await
@@ -126,7 +125,7 @@ async fn delete_returns_rows_affected(pool: sqlx::PgPool) {
         &json!({"type": "TraceCompleteness"}),
         "warn",
         "low",
-            "session",
+        "session",
         true,
     )
     .await
@@ -150,7 +149,7 @@ async fn list_enabled_for_check_filters_disabled(pool: sqlx::PgPool) {
         &json!({"type": "TraceCompleteness"}),
         "warn",
         "medium",
-            "session",
+        "session",
         true,
     )
     .await
@@ -165,7 +164,7 @@ async fn list_enabled_for_check_filters_disabled(pool: sqlx::PgPool) {
         &json!({"type": "TraceCompleteness"}),
         "warn",
         "medium",
-            "session",
+        "session",
         false,
     )
     .await
@@ -196,7 +195,7 @@ async fn insert_and_list_evaluations(pool: sqlx::PgPool) {
         &json!({"type": "TraceCompleteness"}),
         "warn",
         "medium",
-            "session",
+        "session",
         true,
     )
     .await
@@ -286,7 +285,7 @@ async fn evaluation_row_survives_policy_delete(pool: sqlx::PgPool) {
         &json!({"type": "TraceCompleteness"}),
         "warn",
         "low",
-            "session",
+        "session",
         true,
     )
     .await
