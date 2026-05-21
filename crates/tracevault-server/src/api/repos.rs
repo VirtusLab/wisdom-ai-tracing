@@ -213,6 +213,7 @@ pub struct RepoSettingsResponse {
     pub has_deploy_key: bool,
     pub has_webhook_secret: bool,
     pub last_fetched_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub validation_window_mode: String,
 }
 
 pub async fn get_settings(
@@ -220,8 +221,8 @@ pub async fn get_settings(
     auth: OrgAuth,
     Path((_slug, id)): Path<(String, Uuid)>,
 ) -> Result<Json<RepoSettingsResponse>, AppError> {
-    let row = sqlx::query_as::<_, (Option<String>, String, Option<String>, Option<String>, Option<chrono::DateTime<chrono::Utc>>)>(
-        "SELECT github_url, clone_status, deploy_key_encrypted, webhook_secret_encrypted, last_fetched_at FROM repos WHERE id = $1 AND org_id = $2",
+    let row = sqlx::query_as::<_, (Option<String>, String, Option<String>, Option<String>, Option<chrono::DateTime<chrono::Utc>>, String)>(
+        "SELECT github_url, clone_status, deploy_key_encrypted, webhook_secret_encrypted, last_fetched_at, validation_window_mode FROM repos WHERE id = $1 AND org_id = $2",
     )
     .bind(id)
     .bind(auth.org_id)
@@ -235,6 +236,7 @@ pub async fn get_settings(
         has_deploy_key: row.2.is_some(),
         has_webhook_secret: row.3.is_some(),
         last_fetched_at: row.4,
+        validation_window_mode: row.5,
     }))
 }
 
@@ -243,6 +245,7 @@ pub struct UpdateSettingsRequest {
     pub github_url: Option<String>,
     pub deploy_key: Option<String>,
     pub webhook_secret: Option<String>,
+    pub validation_window_mode: Option<String>,
 }
 
 pub async fn update_settings(
@@ -291,6 +294,22 @@ pub async fn update_settings(
         .await?;
     }
 
+    // Update validation_window_mode if provided
+    const VALID_WINDOW_MODES: &[&str] = &["disabled", "warn", "block"];
+    if let Some(ref mode) = req.validation_window_mode {
+        if !VALID_WINDOW_MODES.contains(&mode.as_str()) {
+            return Err(AppError::BadRequest(format!(
+                "validation_window_mode must be one of: {}",
+                VALID_WINDOW_MODES.join(", ")
+            )));
+        }
+        sqlx::query("UPDATE repos SET validation_window_mode = $1 WHERE id = $2")
+            .bind(mode)
+            .bind(id)
+            .execute(&state.pool)
+            .await?;
+    }
+
     // Encrypt and store webhook secret if provided (ignore empty strings)
     if let Some(ref secret) = req.webhook_secret.filter(|s| !s.trim().is_empty()) {
         let (ct, nonce) = state
@@ -310,8 +329,8 @@ pub async fn update_settings(
     }
 
     // Read back current state to decide whether to trigger clone
-    let row = sqlx::query_as::<_, (Option<String>, String, Option<String>, Option<String>, Option<String>, Option<chrono::DateTime<chrono::Utc>>)>(
-        "SELECT github_url, clone_status, deploy_key_encrypted, deploy_key_nonce, webhook_secret_encrypted, last_fetched_at FROM repos WHERE id = $1",
+    let row = sqlx::query_as::<_, (Option<String>, String, Option<String>, Option<String>, Option<String>, Option<chrono::DateTime<chrono::Utc>>, String)>(
+        "SELECT github_url, clone_status, deploy_key_encrypted, deploy_key_nonce, webhook_secret_encrypted, last_fetched_at, validation_window_mode FROM repos WHERE id = $1",
     )
     .bind(id)
     .fetch_one(&state.pool)
@@ -322,6 +341,7 @@ pub async fn update_settings(
     let has_deploy_key = row.2.is_some();
     let has_webhook_secret = row.4.is_some();
     let last_fetched_at = row.5;
+    let validation_window_mode = row.6.clone();
 
     // Auto-trigger clone/sync if both github_url and deploy_key are set
     if let Some(url) = &github_url {
@@ -346,6 +366,7 @@ pub async fn update_settings(
                     has_deploy_key,
                     has_webhook_secret,
                     last_fetched_at,
+                    validation_window_mode,
                 }));
             }
             "ready" => {
@@ -372,5 +393,6 @@ pub async fn update_settings(
         has_deploy_key,
         has_webhook_secret,
         last_fetched_at,
+        validation_window_mode,
     }))
 }

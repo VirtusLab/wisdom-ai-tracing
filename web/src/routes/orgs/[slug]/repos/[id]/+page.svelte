@@ -44,6 +44,7 @@
 		condition: Record<string, unknown>;
 		action: string;
 		severity: string;
+		scope: string;
 		enabled: boolean;
 		created_at: string;
 		updated_at: string;
@@ -112,6 +113,7 @@
 	let newMinCount = $state('1');
 	let newFilePatterns = $state('');
 	let newAction = $state('block_push');
+	let newScope = $state('session');
 
 	// For RequiredToolCall type
 	let newToolNames = $state('');
@@ -267,7 +269,8 @@
 				name: newName,
 				description: newDescription || undefined,
 				condition: buildCondition(),
-				action: newAction
+				action: newAction,
+				scope: newScope
 			});
 			createOpen = false;
 			resetCreateForm();
@@ -289,6 +292,7 @@
 		newToolNames = '';
 		newMustSucceed = false;
 		newAction = 'block_push';
+		newScope = 'session';
 		createError = '';
 	}
 
@@ -485,12 +489,26 @@
 						<div class="grid gap-2">
 							<Label>Action</Label>
 							<Select.Root type="single" value={newAction} onValueChange={(v) => { if (v) newAction = v; }}>
-								<Select.Trigger>{newAction === 'block_push' ? 'Block Push' : 'Warn'}</Select.Trigger>
+								<Select.Trigger>{newAction === 'block_push' ? 'Block Push' : newAction === 'warn' ? 'Warn' : 'Allow'}</Select.Trigger>
 								<Select.Content>
 									<Select.Item value="block_push">Block Push</Select.Item>
 									<Select.Item value="warn">Warn</Select.Item>
+									<Select.Item value="allow">Allow (permitted in validation window, no count required)</Select.Item>
 								</Select.Content>
 							</Select.Root>
+						</div>
+
+						<div class="grid gap-2">
+							<Label>Scope</Label>
+							<Select.Root type="single" value={newScope} onValueChange={(v) => { if (v) newScope = v; }}>
+								<Select.Trigger>{newScope === 'session' ? 'Session (whole push)' : newScope === 'validation_window' ? 'Validation Window only' : 'Both'}</Select.Trigger>
+								<Select.Content>
+									<Select.Item value="session">Session — evaluated over entire push window (default)</Select.Item>
+									<Select.Item value="validation_window">Validation Window — evaluated only inside declared window</Select.Item>
+									<Select.Item value="both">Both — evaluated in session and validation window</Select.Item>
+								</Select.Content>
+							</Select.Root>
+							<p class="text-xs text-muted-foreground">Use <em>Validation Window</em> with <code>tracevault validation-start</code> to enforce checks run after code changes.</p>
 						</div>
 
 						<Dialog.Footer>
@@ -532,12 +550,20 @@
 								<Table.Cell class="text-xs">
 									{#if policy.action === 'block_push'}
 										<span class="rounded-full px-2 py-0.5 text-[10px]" style="background: rgba(240,101,101,0.12); color: #f06565; border: 1px solid rgba(240,101,101,0.25)">Block</span>
+									{:else if policy.action === 'allow'}
+										<span class="rounded-full px-2 py-0.5 text-[10px]" style="background: rgba(52,211,153,0.12); color: #34d399; border: 1px solid rgba(52,211,153,0.25)">Allow</span>
 									{:else}
 										<span class="rounded-full px-2 py-0.5 text-[10px]" style="background: rgba(246,177,68,0.12); color: #f6b144; border: 1px solid rgba(246,177,68,0.25)">Warn</span>
 									{/if}
 								</Table.Cell>
 								<Table.Cell class="text-xs">
-									<span class="rounded-full px-2 py-0.5 text-[10px]" style="background: rgba(167,139,250,0.12); color: #a78bfa; border: 1px solid rgba(167,139,250,0.25)">{policy.repo_id ? 'repo' : 'org'}</span>
+									{#if policy.scope === 'validation_window'}
+										<span class="rounded-full px-2 py-0.5 text-[10px]" style="background: rgba(99,179,237,0.12); color: #63b3ed; border: 1px solid rgba(99,179,237,0.25)">Window</span>
+									{:else if policy.scope === 'both'}
+										<span class="rounded-full px-2 py-0.5 text-[10px]" style="background: rgba(167,139,250,0.12); color: #a78bfa; border: 1px solid rgba(167,139,250,0.25)">Both</span>
+									{:else}
+										<span class="rounded-full px-2 py-0.5 text-[10px]" style="background: rgba(156,163,175,0.12); color: #9ca3af; border: 1px solid rgba(156,163,175,0.25)">Session</span>
+									{/if}
 								</Table.Cell>
 								<Table.Cell class="text-xs">
 									<Button

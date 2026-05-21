@@ -32,6 +32,7 @@ pub struct PolicyResponse {
     pub condition: serde_json::Value,
     pub action: String,
     pub severity: String,
+    pub scope: String,
     pub enabled: bool,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub updated_at: chrono::DateTime<chrono::Utc>,
@@ -45,6 +46,8 @@ pub struct CreatePolicyRequest {
     pub action: String,
     pub severity: Option<String>,
     pub enabled: Option<bool>,
+    /// Defaults to "session" if not provided.
+    pub scope: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -55,6 +58,7 @@ pub struct UpdatePolicyRequest {
     pub action: Option<String>,
     pub severity: Option<String>,
     pub enabled: Option<bool>,
+    pub scope: Option<String>,
 }
 
 /// GET /api/v1/repos/{repo_id}/policies
@@ -82,6 +86,7 @@ pub async fn list_repo_policies(
             condition: r.condition,
             action: r.action,
             severity: r.severity,
+            scope: r.scope,
             enabled: r.enabled,
             created_at: r.created_at,
             updated_at: r.updated_at,
@@ -107,6 +112,8 @@ pub async fn create_repo_policy(
     }
 
     validate_action(&req.action)?;
+    let scope = req.scope.as_deref().unwrap_or("session");
+    validate_scope(scope)?;
 
     let description = req.description.as_deref().unwrap_or("");
     let severity = req.severity.as_deref().unwrap_or("medium");
@@ -121,6 +128,7 @@ pub async fn create_repo_policy(
         &req.condition,
         &req.action,
         severity,
+        scope,
         enabled,
     )
     .await?;
@@ -149,6 +157,7 @@ pub async fn create_repo_policy(
             condition: req.condition,
             action: req.action,
             severity: req.severity.unwrap_or_else(|| "medium".into()),
+            scope: scope.to_string(),
             enabled,
             created_at,
             updated_at,
@@ -169,6 +178,9 @@ pub async fn update_policy(
     if let Some(action) = &req.action {
         validate_action(action)?;
     }
+    if let Some(scope) = &req.scope {
+        validate_scope(scope)?;
+    }
 
     let row = PolicyRepo::update(
         &state.pool,
@@ -179,6 +191,7 @@ pub async fn update_policy(
         &req.condition,
         &req.action,
         &req.severity,
+        &req.scope,
         req.enabled,
     )
     .await?;
@@ -207,6 +220,7 @@ pub async fn update_policy(
                 condition: r.condition,
                 action: r.action,
                 severity: r.severity,
+                scope: r.scope,
                 enabled: r.enabled,
                 created_at: r.created_at,
                 updated_at: r.updated_at,
@@ -291,22 +305,33 @@ pub async fn check_policies(
     Path((_slug, repo_id)): Path<(String, Uuid)>,
     Json(req): Json<CheckRequest>,
 ) -> Result<Json<CheckResponse>, AppError> {
+    use crate::repo::events::EventRepo;
+    use crate::repo::sessions::SessionRepo;
+    use tracevault_core::policy_eval::{evaluate_condition, evaluate_window_gate, ToolCallStats};
+
     // Verify repo belongs to org
     if !PolicyRepo::repo_belongs_to_org(&state.pool, repo_id, auth.org_id).await? {
         return Err(AppError::NotFound("Repo not found".into()));
     }
 
-    // Fetch all enabled policies for this repo (repo-specific + org-wide)
+    // Fetch all enabled policies (now includes scope column)
     let rows = PolicyRepo::list_enabled_for_check(&state.pool, auth.org_id, repo_id).await?;
 
-    // Aggregate session data: merge tool_calls across all sessions, union files_modified.
-    let mut all_tool_calls: std::collections::HashMap<
-        String,
-        tracevault_core::policy_eval::ToolCallStats,
-    > = std::collections::HashMap::new();
+    // Fetch validation window mode for this repo
+    let window_mode = PolicyRepo::get_validation_window_mode(&state.pool, repo_id).await?;
+
+    // Aggregate session-level tool calls and files across all sessions
+    let mut all_tool_calls: std::collections::HashMap<String, ToolCallStats> =
+        std::collections::HashMap::new();
     let mut all_files: Vec<String> = Vec::new();
 
+    // Aggregate window-level tool calls: events after validation_window_started_at
+    let mut window_tool_calls: std::collections::HashMap<String, ToolCallStats> =
+        std::collections::HashMap::new();
+    let mut has_any_window = false;
+
     for session in &req.sessions {
+        // Session-scoped aggregation (existing behaviour)
         if let Some(tc) = &session.tool_calls {
             if let Some(obj) = tc.as_object() {
                 for (k, v) in obj {
@@ -320,11 +345,38 @@ pub async fn check_policies(
         if let Some(files) = &session.files_modified {
             all_files.extend(files.iter().cloned());
         }
+
+        // Window-scoped aggregation: pull from DB if a window was opened
+        let window_ts = SessionRepo::get_validation_window_started_at(
+            &state.pool,
+            repo_id,
+            &session.session_id,
+        )
+        .await?;
+
+        if let Some(ts) = window_ts {
+            has_any_window = true;
+            // Resolve the session DB id to query events
+            let session_db_id: Option<Uuid> = sqlx::query_scalar(
+                "SELECT id FROM sessions WHERE repo_id = $1 AND session_id = $2
+                 ORDER BY started_at DESC LIMIT 1",
+            )
+            .bind(repo_id)
+            .bind(&session.session_id)
+            .fetch_optional(&state.pool)
+            .await?;
+
+            if let Some(db_id) = session_db_id {
+                let stats = EventRepo::get_window_tool_call_stats(&state.pool, db_id, ts).await?;
+                for (name, s) in stats {
+                    let entry = window_tool_calls.entry(name).or_default();
+                    entry.total += s.total;
+                    entry.successful += s.successful;
+                }
+            }
+        }
     }
 
-    // Pick a representative session id for the activity log — if sessions
-    // collapse across a push, storing each against the first one is fine
-    // and still lets users filter by session.
     let session_id_for_log = req.sessions.first().map(|s| s.session_id.as_str());
     let actor_for_log = if auth.user_id.is_nil() {
         None
@@ -335,12 +387,44 @@ pub async fn check_policies(
     let mut results = Vec::new();
     let mut has_block_failure = false;
 
-    for (policy_id, name, condition, action, severity) in &rows {
-        let check_result = tracevault_core::policy_eval::evaluate_condition(
-            condition,
-            &all_tool_calls,
-            &all_files,
-        );
+    // Evaluate per-policy results based on scope
+    for (policy_id, name, condition, action, severity, scope) in &rows {
+        // Determine which tool call set to evaluate against
+        let effective_tool_calls = match scope.as_str() {
+            "validation_window" => {
+                if !has_any_window {
+                    // No window opened — skip validation_window policies entirely
+                    results.push(CheckResult {
+                        rule_name: name.clone(),
+                        result: "skip".into(),
+                        action: action.clone(),
+                        severity: severity.clone(),
+                        details: "Skipped: no validation window was opened this push".into(),
+                    });
+                    continue;
+                }
+                &window_tool_calls
+            }
+            "both" => {
+                // Evaluate against session stats; window gate is separate below
+                &all_tool_calls
+            }
+            _ => &all_tool_calls, // "session" (default)
+        };
+
+        // `allow` action policies are never failures — they only affect the window gate
+        if action == "allow" {
+            results.push(CheckResult {
+                rule_name: name.clone(),
+                result: "pass".into(),
+                action: action.clone(),
+                severity: severity.clone(),
+                details: "Tool explicitly allowed in validation window".into(),
+            });
+            continue;
+        }
+
+        let check_result = evaluate_condition(condition, effective_tool_calls, &all_files);
         let result_str = classify_result(&check_result);
 
         if !check_result.passed && action == "block_push" {
@@ -363,11 +447,7 @@ pub async fn check_policies(
         )
         .await
         {
-            tracing::warn!(
-                policy_id = %policy_id,
-                error = %e,
-                "failed to record policy evaluation"
-            );
+            tracing::warn!(policy_id = %policy_id, error = %e, "failed to record policy evaluation");
         }
 
         results.push(CheckResult {
@@ -379,7 +459,46 @@ pub async fn check_policies(
         });
     }
 
-    let all_passed = results.iter().all(|r| r.result == "pass");
+    // Window gate: check for unknown tools called inside the window
+    if has_any_window && window_mode != "disabled" {
+        let covered_tools: Vec<String> = rows
+            .iter()
+            .filter(|(_, _, _, _, _, scope)| scope == "validation_window" || scope == "both")
+            .flat_map(|(_, _, condition, _, _, _)| extract_policy_tool_names(condition))
+            .collect();
+
+        let gate = evaluate_window_gate(&window_tool_calls, &covered_tools);
+
+        if !gate.violations.is_empty() {
+            let details = format!(
+                "Unknown tools called in validation window: {}",
+                gate.violations.join(", ")
+            );
+            let is_block = window_mode == "block";
+            if is_block {
+                has_block_failure = true;
+            }
+            results.push(CheckResult {
+                rule_name: "validation_window_gate".into(),
+                result: if is_block {
+                    "fail".into()
+                } else {
+                    "warn".into()
+                },
+                action: if is_block {
+                    "block_push".into()
+                } else {
+                    "warn".into()
+                },
+                severity: "medium".into(),
+                details,
+            });
+        }
+    }
+
+    let all_passed = results
+        .iter()
+        .all(|r| r.result == "pass" || r.result == "skip");
 
     crate::audit::log(
         &state.pool,
@@ -399,6 +518,28 @@ pub async fn check_policies(
         results,
         blocked: has_block_failure,
     }))
+}
+
+/// Extract the tool name(s) a policy condition applies to.
+/// Used to determine which tools are "covered" for the window gate.
+fn extract_policy_tool_names(condition: &serde_json::Value) -> Vec<String> {
+    match condition.get("type").and_then(|v| v.as_str()) {
+        Some("RequiredToolCall") => condition
+            .get("tool_names")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect()
+            })
+            .unwrap_or_default(),
+        Some("ConditionalToolCall") => condition
+            .get("tool_name")
+            .and_then(|v| v.as_str())
+            .map(|s| vec![s.to_string()])
+            .unwrap_or_default(),
+        _ => vec![],
+    }
 }
 
 // --- Policy Evaluation Activity (list) ---
@@ -521,13 +662,26 @@ fn classify_result(outcome: &tracevault_core::policy_eval::EvalOutcome) -> &'sta
 
 /// Actions the enforcement engine actually handles. Keep in sync with
 /// `PolicyAction` in tracevault-core.
-const VALID_ACTIONS: &[&str] = &["block_push", "warn"];
+const VALID_ACTIONS: &[&str] = &["block_push", "warn", "allow"];
+
+/// Valid scope values. Keep in sync with `PolicyScope` in tracevault-core.
+const VALID_SCOPES: &[&str] = &["session", "validation_window", "both"];
 
 fn validate_action(action: &str) -> Result<(), AppError> {
     if !VALID_ACTIONS.contains(&action) {
         return Err(AppError::BadRequest(format!(
             "action must be one of: {}",
             VALID_ACTIONS.join(", ")
+        )));
+    }
+    Ok(())
+}
+
+fn validate_scope(scope: &str) -> Result<(), AppError> {
+    if !VALID_SCOPES.contains(&scope) {
+        return Err(AppError::BadRequest(format!(
+            "scope must be one of: {}",
+            VALID_SCOPES.join(", ")
         )));
     }
     Ok(())
