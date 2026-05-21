@@ -50,7 +50,7 @@ pub enum PolicyCondition {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum PolicyScope {
-    /// Evaluated over the entire push window (default, existing behaviour).
+    /// Evaluated over the entire push window (default).
     #[default]
     Session,
     /// Evaluated only against events inside the last validation window.

@@ -137,17 +137,13 @@ impl SessionRepo {
         repo_id: Uuid,
         session_id: &str,
     ) -> Result<Option<DateTime<Utc>>, AppError> {
-        let ts: Option<DateTime<Utc>> = sqlx::query_scalar(
-            "SELECT validation_window_started_at FROM sessions
-             WHERE repo_id = $1 AND session_id = $2
-             ORDER BY started_at DESC
-             LIMIT 1",
-        )
-        .bind(repo_id)
-        .bind(session_id)
-        .fetch_optional(pool)
-        .await?
-        .flatten();
+        let ts: Option<DateTime<Utc>> =
+            sqlx::query_scalar(include_str!("sql/get_session_validation_window.sql"))
+                .bind(repo_id)
+                .bind(session_id)
+                .fetch_optional(pool)
+                .await?
+                .flatten();
         Ok(ts)
     }
 

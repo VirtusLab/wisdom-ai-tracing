@@ -140,22 +140,12 @@ impl EventRepo {
         std::collections::HashMap<String, tracevault_core::policy_eval::ToolCallStats>,
         AppError,
     > {
-        let rows: Vec<(String, i64, i64)> = sqlx::query_as(
-            "SELECT
-                tool_name,
-                COUNT(*)::bigint                                    AS total,
-                COUNT(*) FILTER (WHERE is_error = false)::bigint   AS successful
-             FROM events
-             WHERE session_id = $1
-               AND event_type = 'tool_use'
-               AND tool_name IS NOT NULL
-               AND timestamp > $2
-             GROUP BY tool_name",
-        )
-        .bind(session_db_id)
-        .bind(window_started_at)
-        .fetch_all(pool)
-        .await?;
+        let rows: Vec<(String, i64, i64)> =
+            sqlx::query_as(include_str!("sql/get_window_tool_call_stats.sql"))
+                .bind(session_db_id)
+                .bind(window_started_at)
+                .fetch_all(pool)
+                .await?;
 
         let map = rows
             .into_iter()

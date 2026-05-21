@@ -329,12 +329,14 @@ impl StreamService {
 
             // 9. ValidationWindowStart — record timestamp; only the latest matters
             StreamEventType::ValidationWindowStart => {
-                sqlx::query("UPDATE sessions SET validation_window_started_at = $1 WHERE id = $2")
-                    .bind(req.timestamp)
-                    .bind(session_db_id)
-                    .execute(&state.pool)
-                    .await
-                    .map_err(AppError::from)?;
+                sqlx::query(include_str!(
+                    "../repo/sql/update_session_validation_window.sql"
+                ))
+                .bind(req.timestamp)
+                .bind(session_db_id)
+                .execute(&state.pool)
+                .await
+                .map_err(AppError::from)?;
             }
         }
 
