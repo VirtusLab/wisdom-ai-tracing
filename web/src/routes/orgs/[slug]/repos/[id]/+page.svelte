@@ -2,16 +2,10 @@
 	import { page } from '$app/stores';
 	import { onMount, onDestroy } from 'svelte';
 	import { api } from '$lib/api';
-	import * as Table from '$lib/components/ui/table/index.js';
 	import DataTable from '$lib/components/DataTable.svelte';
-	import * as Dialog from '$lib/components/ui/dialog/index.js';
-	import * as Select from '$lib/components/ui/select/index.js';
-	import { Button } from '$lib/components/ui/button/index.js';
-	import { Input } from '$lib/components/ui/input/index.js';
-	import { Label } from '$lib/components/ui/label/index.js';
+	import RepoPolicies from '$lib/components/RepoPolicies.svelte';
+	import PolicyActivity from '$lib/components/PolicyActivity.svelte';
 	import { formatDate } from '$lib/utils/date';
-	import ChevronLeftIcon from '@lucide/svelte/icons/chevron-left';
-	import ChevronRightIcon from '@lucide/svelte/icons/chevron-right';
 
 	interface CommitListItem {
 		id: string;
@@ -22,17 +16,6 @@
 		files_changed: number | null;
 		ai_sessions_count: number | null;
 		committed_at: string | null;
-	}
-
-	let expandedCommitId: string | null = $state(null);
-
-	function firstLine(msg: string | null): string {
-		if (!msg) return '-';
-		return msg.split('\n')[0];
-	}
-
-	function toggleCommitExpand(id: string) {
-		expandedCommitId = expandedCommitId === id ? null : id;
 	}
 
 	interface Policy {
@@ -58,73 +41,28 @@
 		created_at: string;
 	}
 
-	interface PolicyEvaluation {
-		id: string;
-		policy_id: string | null;
-		policy_name: string;
-		session_id: string | null;
-		commit_sha: string | null;
-		result: string; // pass | fail | warn | skip
-		action: string;
-		details: string;
-		source: string; // cli_check | ci_verify
-		actor_id: string | null;
-		evaluated_at: string;
-	}
-
-	interface PolicyEvaluationPage {
-		items: PolicyEvaluation[];
-		total: number;
-	}
-
 	let commits: CommitListItem[] = $state([]);
 	let policies: Policy[] = $state([]);
-	let evaluations: PolicyEvaluation[] = $state([]);
-	let evaluationsTotal = $state(0);
 	let repo = $state<Repo | null>(null);
 	let repoName = $state('');
 	let loading = $state(true);
 	let policiesLoading = $state(true);
-	let evaluationsLoading = $state(true);
-	let error = $state('');
 	let policiesError = $state('');
-	let evaluationsError = $state('');
+	let error = $state('');
 	let syncing = $state(false);
-
-	// Activity filters and pagination
-	let filterResult = $state('all'); // all | pass | fail | warn | skip
-	let filterPolicyId = $state('all');
-	let evalPageSize = $state(25);
-	let evalPage = $state(0); // 0-indexed
-
-	const repoId = $derived($page.params.id ?? '');
-	const slug = $derived($page.params.slug);
-	const cloneStatus = $derived(repo ? repo.clone_status : 'pending');
+	let expandedCommitId: string | null = $state(null);
 	let pollTimer: ReturnType<typeof setInterval> | null = $state(null);
 
-	// Create policy dialog state
-	let createOpen = $state(false);
-	let createLoading = $state(false);
-	let createError = $state('');
-	let newName = $state('');
-	let newDescription = $state('');
-	let newConditionType = $state('ConditionalToolCall');
-	let newToolName = $state('');
-	let newMinCount = $state('1');
-	let newFilePatterns = $state('');
-	let newAction = $state('block_push');
-	let newScope = $state('session');
-
-	// For RequiredToolCall type
-	let newToolNames = $state('');
-	let newMustSucceed = $state(false);
+	const repoId = $derived($page.params.id ?? '');
+	const slug = $derived($page.params.slug ?? '');
+	const cloneStatus = $derived(repo ? repo.clone_status : 'pending');
 
 	onMount(async () => {
-		await Promise.all([
-			loadRepo().then(() => loadCommits()),
-			loadPolicies(),
-			loadEvaluations()
-		]);
+		await Promise.all([loadRepo().then(() => loadCommits()), loadPolicies()]);
+	});
+
+	onDestroy(() => {
+		if (pollTimer) clearInterval(pollTimer);
 	});
 
 	async function loadRepo() {
@@ -133,13 +71,32 @@
 			repo = repos.find((r) => r.id === repoId) ?? null;
 			if (repo) repoName = repo.name;
 		} catch {
-			// non-critical, name stays as id
+			// non-critical
 		}
 	}
 
-	onDestroy(() => {
-		if (pollTimer) clearInterval(pollTimer);
-	});
+	async function loadPolicies() {
+		policiesLoading = true;
+		policiesError = '';
+		try {
+			policies = (await api.get<Policy[]>(`/api/v1/orgs/${slug}/repos/${repoId}/policies`)) ?? [];
+		} catch (err) {
+			policiesError = err instanceof Error ? err.message : 'Failed to load policies';
+		} finally {
+			policiesLoading = false;
+		}
+	}
+
+	async function loadCommits() {
+		try {
+			const repoFilter = repoId ? `?repo_id=${repoId}` : '';
+			commits = await api.get<CommitListItem[]>(`/api/v1/orgs/${slug}/traces/commits${repoFilter}`);
+		} catch (err) {
+			error = err instanceof Error ? err.message : 'Failed to load commits';
+		} finally {
+			loading = false;
+		}
+	}
 
 	async function handleSync() {
 		syncing = true;
@@ -164,183 +121,9 @@
 		}
 	}
 
-	async function loadCommits() {
-		try {
-			const repoFilter = repoId ? `?repo_id=${repoId}` : '';
-			const allCommits = await api.get<CommitListItem[]>(`/api/v1/orgs/${slug}/traces/commits${repoFilter}`);
-			commits = allCommits;
-		} catch (err) {
-			error = err instanceof Error ? err.message : 'Failed to load commits';
-		} finally {
-			loading = false;
-		}
-	}
-
-	async function loadPolicies() {
-		try {
-			policies = (await api.get<Policy[]>(`/api/v1/orgs/${slug}/repos/${repoId}/policies`)) ?? [];
-		} catch (err) {
-			policiesError = err instanceof Error ? err.message : 'Failed to load policies';
-		} finally {
-			policiesLoading = false;
-		}
-	}
-
-	async function loadEvaluations() {
-		evaluationsLoading = true;
-		evaluationsError = '';
-		try {
-			const params = new URLSearchParams({
-				limit: String(evalPageSize),
-				offset: String(evalPage * evalPageSize)
-			});
-			if (filterResult !== 'all') params.set('result', filterResult);
-			if (filterPolicyId !== 'all') params.set('policy_id', filterPolicyId);
-			const evalPage_ = await api.get<PolicyEvaluationPage>(
-				`/api/v1/orgs/${slug}/repos/${repoId}/policy-evaluations?${params}`
-			);
-			evaluations = evalPage_?.items ?? [];
-			evaluationsTotal = evalPage_?.total ?? 0;
-		} catch (err) {
-			evaluationsError = err instanceof Error ? err.message : 'Failed to load policy activity';
-		} finally {
-			evaluationsLoading = false;
-		}
-	}
-
-	function setEvalPage(p: number) {
-		evalPage = p;
-		loadEvaluations();
-	}
-
-	function resetEvalPage() {
-		evalPage = 0;
-	}
-
-	function resultPillStyle(result: string): string {
-		switch (result) {
-			case 'pass':
-				return 'background: rgba(34,197,94,0.12); color: #22c55e; border: 1px solid rgba(34,197,94,0.25)';
-			case 'fail':
-				return 'background: rgba(240,101,101,0.12); color: #f06565; border: 1px solid rgba(240,101,101,0.25)';
-			case 'warn':
-				return 'background: rgba(246,177,68,0.12); color: #f6b144; border: 1px solid rgba(246,177,68,0.25)';
-			case 'skip':
-				return 'background: rgba(148,163,184,0.12); color: #94a3b8; border: 1px solid rgba(148,163,184,0.25)';
-			default:
-				return 'background: rgba(148,163,184,0.12); color: #94a3b8';
-		}
-	}
-
-	function buildCondition(): Record<string, unknown> {
-		if (newConditionType === 'RequiredToolCall') {
-			return {
-				type: 'RequiredToolCall',
-				tool_names: newToolNames
-					.split(',')
-					.map((s) => s.trim())
-					.filter((s) => s.length > 0),
-				must_succeed: newMustSucceed
-			};
-		} else {
-			const condition: Record<string, unknown> = {
-				type: 'ConditionalToolCall',
-				tool_name: newToolName,
-				min_count: parseInt(newMinCount) || 1,
-				must_succeed: newMustSucceed
-			};
-			const patterns = newFilePatterns
-				.split(',')
-				.map((s) => s.trim())
-				.filter((s) => s.length > 0);
-			if (patterns.length > 0) {
-				condition.when_files_match = patterns;
-			}
-			return condition;
-		}
-	}
-
-	async function handleCreate(e: Event) {
-		e.preventDefault();
-		createLoading = true;
-		createError = '';
-		try {
-			await api.post(`/api/v1/orgs/${slug}/repos/${repoId}/policies`, {
-				name: newName,
-				description: newDescription || undefined,
-				condition: buildCondition(),
-				action: newAction,
-				scope: newScope
-			});
-			createOpen = false;
-			resetCreateForm();
-			await loadPolicies();
-		} catch (err) {
-			createError = err instanceof Error ? err.message : 'Failed to create policy';
-		} finally {
-			createLoading = false;
-		}
-	}
-
-	function resetCreateForm() {
-		newName = '';
-		newDescription = '';
-		newConditionType = 'ConditionalToolCall';
-		newToolName = '';
-		newMinCount = '1';
-		newFilePatterns = '';
-		newToolNames = '';
-		newMustSucceed = false;
-		newAction = 'block_push';
-		newScope = 'session';
-		createError = '';
-	}
-
-	async function togglePolicy(policy: Policy) {
-		try {
-			await api.put(`/api/v1/orgs/${slug}/policies/${policy.id}`, {
-				enabled: !policy.enabled
-			});
-			await loadPolicies();
-		} catch (err) {
-			policiesError = err instanceof Error ? err.message : 'Failed to update policy';
-		}
-	}
-
-	async function deletePolicy(id: string) {
-		if (!confirm('Delete this policy? This cannot be undone.')) return;
-		try {
-			await api.delete(`/api/v1/orgs/${slug}/policies/${id}`);
-			await loadPolicies();
-		} catch (err) {
-			policiesError = err instanceof Error ? err.message : 'Failed to delete policy';
-		}
-	}
-
-	function conditionSummary(condition: Record<string, unknown>): string {
-		const type = condition.type as string;
-		const mustSucceed = condition.must_succeed === true;
-		if (type === 'RequiredToolCall') {
-			const tools = (condition.tool_names as string[]) || [];
-			return `Require: ${tools.join(', ')}${mustSucceed ? ' ✓ must succeed' : ''}`;
-		} else if (type === 'ConditionalToolCall') {
-			const tool = condition.tool_name as string;
-			const min = (condition.min_count as number) || 1;
-			const patterns = condition.when_files_match as string[] | undefined;
-			let s = `${tool} >= ${min}x`;
-			if (patterns && patterns.length > 0) {
-				s += ` when ${patterns.join(', ')}`;
-			}
-			if (mustSucceed) s += ' ✓ must succeed';
-			return s;
-		}
-		return JSON.stringify(condition);
-	}
-
-	function fmtTokens(n: number | null): string {
-		if (n == null || n === 0) return '-';
-		if (n >= 1000) return `${(n / 1000).toFixed(1)}k`;
-		return String(n);
+	function firstLine(msg: string | null): string {
+		if (!msg) return '-';
+		return msg.split('\n')[0];
 	}
 
 	const commitColumns = [
@@ -359,6 +142,7 @@
 </svelte:head>
 
 <div class="space-y-6">
+	<!-- Header -->
 	<div class="flex items-center justify-between">
 		<div class="flex items-center gap-2">
 			<a href="/orgs/{slug}/repos" class="text-muted-foreground hover:underline">Repos</a>
@@ -415,329 +199,20 @@
 		</div>
 	</div>
 
-	<!-- Policies Section -->
-	<div class="border-border overflow-hidden rounded-lg border">
-		<div class="bg-muted/30 flex items-center justify-between px-4 py-3">
-			<span class="text-sm font-semibold">Policies</span>
-			<Dialog.Root bind:open={createOpen} onOpenChange={(open) => { if (!open) resetCreateForm(); }}>
-				<Dialog.Trigger>
-					{#snippet child({ props })}
-						<Button size="sm" {...props}>Add Policy</Button>
-					{/snippet}
-				</Dialog.Trigger>
-				<Dialog.Content class="sm:max-w-lg">
-					<Dialog.Header>
-						<Dialog.Title>Create Policy</Dialog.Title>
-						<Dialog.Description>Define a tool-call requirement for this repo.</Dialog.Description>
-					</Dialog.Header>
-					<form onsubmit={handleCreate} class="grid gap-4">
-						{#if createError}
-							<p class="text-sm text-destructive">{createError}</p>
-						{/if}
-						<div class="grid gap-2">
-							<Label for="policy_name">Name</Label>
-							<Input id="policy_name" bind:value={newName} required placeholder="e.g., Code review required" />
-						</div>
-						<div class="grid gap-2">
-							<Label for="policy_desc">Description</Label>
-							<Input id="policy_desc" bind:value={newDescription} placeholder="Optional description" />
-						</div>
-						<div class="grid gap-2">
-							<Label>Condition Type</Label>
-							<Select.Root type="single" value={newConditionType} onValueChange={(v) => { if (v) newConditionType = v; }}>
-								<Select.Trigger>{newConditionType === 'ConditionalToolCall' ? 'Conditional Tool Call' : 'Required Tool Call'}</Select.Trigger>
-								<Select.Content>
-									<Select.Item value="ConditionalToolCall">Conditional Tool Call</Select.Item>
-									<Select.Item value="RequiredToolCall">Required Tool Call</Select.Item>
-								</Select.Content>
-							</Select.Root>
-						</div>
+	<!-- Policies -->
+	<RepoPolicies
+		{slug}
+		{repoId}
+		{policies}
+		loading={policiesLoading}
+		error={policiesError}
+		onchange={loadPolicies}
+	/>
 
-						{#if newConditionType === 'ConditionalToolCall'}
-							<div class="grid gap-2">
-								<Label for="tool_name">Tool Name</Label>
-								<Input id="tool_name" bind:value={newToolName} required placeholder="e.g., mcp__codex-cli__review" />
-							</div>
-							<div class="grid gap-2">
-								<Label for="min_count">Minimum Calls</Label>
-								<Input id="min_count" type="number" min="1" bind:value={newMinCount} />
-							</div>
-							<div class="grid gap-2">
-								<Label for="file_patterns">File Patterns (comma-separated, optional)</Label>
-								<Input id="file_patterns" bind:value={newFilePatterns} placeholder="e.g., src/**/*.rs, lib/**/*.ts" />
-							</div>
-						{:else}
-							<div class="grid gap-2">
-								<Label for="tool_names">Tool Names (comma-separated)</Label>
-								<Input id="tool_names" bind:value={newToolNames} required placeholder="e.g., mcp__codex-cli__review, Bash" />
-							</div>
-						{/if}
+	<!-- Policy Activity -->
+	<PolicyActivity {slug} {repoId} {policies} />
 
-						<div class="flex items-center gap-2">
-							<input
-								type="checkbox"
-								id="must_succeed"
-								bind:checked={newMustSucceed}
-								class="h-4 w-4 rounded border-border accent-primary"
-							/>
-							<Label for="must_succeed" class="cursor-pointer">
-								Must succeed
-								<span class="text-muted-foreground text-xs font-normal ml-1">(only count calls where the tool did not return an error)</span>
-							</Label>
-						</div>
-
-						<div class="grid gap-2">
-							<Label>Action</Label>
-							<Select.Root type="single" value={newAction} onValueChange={(v) => { if (v) newAction = v; }}>
-								<Select.Trigger>{{ block_push: 'Block Push', warn: 'Warn', allow: 'Allow' }[newAction] ?? newAction}</Select.Trigger>
-								<Select.Content>
-									<Select.Item value="block_push">Block Push</Select.Item>
-									<Select.Item value="warn">Warn</Select.Item>
-									<Select.Item value="allow">Allow (permitted in validation window, no count required)</Select.Item>
-								</Select.Content>
-							</Select.Root>
-						</div>
-
-						<div class="grid gap-2">
-							<Label>Scope</Label>
-							<Select.Root type="single" value={newScope} onValueChange={(v) => { if (v) newScope = v; }}>
-								<Select.Trigger>{newScope === 'session' ? 'Session (whole push)' : newScope === 'validation_window' ? 'Validation Window only' : 'Both'}</Select.Trigger>
-								<Select.Content>
-									<Select.Item value="session">Session — evaluated over entire push window (default)</Select.Item>
-									<Select.Item value="validation_window">Validation Window — evaluated only inside declared window</Select.Item>
-									<Select.Item value="both">Both — evaluated in session and validation window</Select.Item>
-								</Select.Content>
-							</Select.Root>
-							<p class="text-xs text-muted-foreground">Use <em>Validation Window</em> with <code>tracevault validation-start</code> to enforce checks run after code changes.</p>
-						</div>
-
-						<Dialog.Footer>
-							<Button type="submit" disabled={createLoading}>
-								{createLoading ? 'Creating...' : 'Create'}
-							</Button>
-						</Dialog.Footer>
-					</form>
-				</Dialog.Content>
-			</Dialog.Root>
-		</div>
-		<div class="p-4">
-			{#if policiesLoading}
-				<div class="text-muted-foreground flex items-center justify-center gap-2 py-12 text-sm">
-					<span class="inline-block h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent"></span>
-					Loading...
-				</div>
-			{:else if policiesError}
-				<p class="text-destructive">{policiesError}</p>
-			{:else if policies.length === 0}
-				<p class="text-muted-foreground text-sm">No policies configured. Add a policy to enforce tool-call requirements.</p>
-			{:else}
-				<Table.Root>
-					<Table.Header>
-						<Table.Row>
-							<Table.Head class="text-xs">Name</Table.Head>
-							<Table.Head class="text-xs">Condition</Table.Head>
-							<Table.Head class="text-xs">Action</Table.Head>
-							<Table.Head class="text-xs">Scope</Table.Head>
-							<Table.Head class="text-xs">Enabled</Table.Head>
-							<Table.Head class="text-xs"></Table.Head>
-						</Table.Row>
-					</Table.Header>
-					<Table.Body>
-						{#each policies as policy}
-							<Table.Row class="hover:bg-muted/40 transition-colors">
-								<Table.Cell class="text-xs font-medium">{policy.name}</Table.Cell>
-								<Table.Cell class="font-mono text-xs max-w-xs truncate">{conditionSummary(policy.condition)}</Table.Cell>
-								<Table.Cell class="text-xs">
-									{#if policy.action === 'block_push'}
-										<span class="rounded-full px-2 py-0.5 text-[10px]" style="background: rgba(240,101,101,0.12); color: #f06565; border: 1px solid rgba(240,101,101,0.25)">Block</span>
-									{:else if policy.action === 'allow'}
-										<span class="rounded-full px-2 py-0.5 text-[10px]" style="background: rgba(52,211,153,0.12); color: #34d399; border: 1px solid rgba(52,211,153,0.25)">Allow</span>
-									{:else}
-										<span class="rounded-full px-2 py-0.5 text-[10px]" style="background: rgba(246,177,68,0.12); color: #f6b144; border: 1px solid rgba(246,177,68,0.25)">Warn</span>
-									{/if}
-								</Table.Cell>
-								<Table.Cell class="text-xs">
-									{#if policy.scope === 'validation_window'}
-										<span class="rounded-full px-2 py-0.5 text-[10px]" style="background: rgba(99,179,237,0.12); color: #63b3ed; border: 1px solid rgba(99,179,237,0.25)">Window</span>
-									{:else if policy.scope === 'both'}
-										<span class="rounded-full px-2 py-0.5 text-[10px]" style="background: rgba(167,139,250,0.12); color: #a78bfa; border: 1px solid rgba(167,139,250,0.25)">Both</span>
-									{:else}
-										<span class="rounded-full px-2 py-0.5 text-[10px]" style="background: rgba(156,163,175,0.12); color: #9ca3af; border: 1px solid rgba(156,163,175,0.25)">Session</span>
-									{/if}
-								</Table.Cell>
-								<Table.Cell class="text-xs">
-									<Button
-										variant="ghost"
-										size="sm"
-										onclick={() => togglePolicy(policy)}
-									>
-										{policy.enabled ? 'On' : 'Off'}
-									</Button>
-								</Table.Cell>
-								<Table.Cell class="text-xs">
-									{#if policy.repo_id}
-										<Button variant="destructive" size="sm" onclick={() => deletePolicy(policy.id)}>
-											Delete
-										</Button>
-									{/if}
-								</Table.Cell>
-							</Table.Row>
-						{/each}
-					</Table.Body>
-				</Table.Root>
-			{/if}
-		</div>
-	</div>
-
-	<!-- Policy Activity Section -->
-	<div class="border-border overflow-hidden rounded-lg border">
-		<div class="bg-muted/30 flex items-center justify-between gap-3 px-4 py-3">
-			<span class="text-sm font-semibold">Policy Activity</span>
-			<div class="flex items-center gap-2">
-				<Select.Root type="single" value={filterResult} onValueChange={(v) => { if (v) { filterResult = v; resetEvalPage(); loadEvaluations(); } }}>
-					<Select.Trigger class="h-8 w-[120px] text-xs">
-						{filterResult === 'all' ? 'All results' : filterResult}
-					</Select.Trigger>
-					<Select.Content>
-						<Select.Item value="all">All results</Select.Item>
-						<Select.Item value="pass">pass</Select.Item>
-						<Select.Item value="fail">fail</Select.Item>
-						<Select.Item value="warn">warn</Select.Item>
-						<Select.Item value="skip">skip</Select.Item>
-					</Select.Content>
-				</Select.Root>
-				<Select.Root type="single" value={filterPolicyId} onValueChange={(v) => { if (v) { filterPolicyId = v; resetEvalPage(); loadEvaluations(); } }}>
-					<Select.Trigger class="h-8 w-[180px] text-xs">
-						{filterPolicyId === 'all' ? 'All rules' : (policies.find((p) => p.id === filterPolicyId)?.name ?? filterPolicyId.slice(0, 8))}
-					</Select.Trigger>
-					<Select.Content>
-						<Select.Item value="all">All rules</Select.Item>
-						{#each policies as p}
-							<Select.Item value={p.id}>{p.name}</Select.Item>
-						{/each}
-					</Select.Content>
-				</Select.Root>
-				<Button size="sm" variant="outline" onclick={loadEvaluations}>Refresh</Button>
-			</div>
-		</div>
-		<div class="p-4">
-			{#if evaluationsLoading}
-				<div class="text-muted-foreground flex items-center justify-center gap-2 py-12 text-sm">
-					<span class="inline-block h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent"></span>
-					Loading...
-				</div>
-			{:else if evaluationsError}
-				<p class="text-destructive">{evaluationsError}</p>
-			{:else if evaluations.length === 0}
-				<p class="text-muted-foreground text-sm">No policy evaluations recorded yet. Run <code class="font-mono text-xs">tracevault check</code> from a repo with policies enabled to populate this view.</p>
-			{:else}
-				<div class="border-border overflow-hidden rounded-lg border">
-					<Table.Root class="text-xs">
-						<Table.Header>
-							<Table.Row class="bg-muted/30 border-border border-b">
-								<Table.Head class="text-muted-foreground text-[10px] font-semibold uppercase tracking-wider">When</Table.Head>
-								<Table.Head class="text-muted-foreground text-[10px] font-semibold uppercase tracking-wider">Rule</Table.Head>
-								<Table.Head class="text-muted-foreground text-[10px] font-semibold uppercase tracking-wider">Result</Table.Head>
-								<Table.Head class="text-muted-foreground text-[10px] font-semibold uppercase tracking-wider">Requires</Table.Head>
-								<Table.Head class="text-muted-foreground text-[10px] font-semibold uppercase tracking-wider">Action</Table.Head>
-								<Table.Head class="text-muted-foreground text-[10px] font-semibold uppercase tracking-wider">Commit</Table.Head>
-								<Table.Head class="text-muted-foreground text-[10px] font-semibold uppercase tracking-wider">Session</Table.Head>
-								<Table.Head class="text-muted-foreground text-[10px] font-semibold uppercase tracking-wider">Source</Table.Head>
-								<Table.Head class="text-muted-foreground text-[10px] font-semibold uppercase tracking-wider">Details</Table.Head>
-							</Table.Row>
-						</Table.Header>
-						<Table.Body>
-							{#each evaluations as ev}
-								<Table.Row class="hover:bg-muted/40 transition-colors">
-									<Table.Cell class="text-xs whitespace-nowrap">{formatDate(ev.evaluated_at)}</Table.Cell>
-									<Table.Cell class="text-xs font-medium">
-										{ev.policy_name}
-										{#if ev.policy_id === null}
-											<span class="text-muted-foreground text-[10px]"> (deleted)</span>
-										{/if}
-									</Table.Cell>
-									<Table.Cell class="text-xs">
-										<span class="rounded-full px-2 py-0.5 text-[10px]" style={resultPillStyle(ev.result)}>
-											{ev.result}
-										</span>
-									</Table.Cell>
-									<Table.Cell class="text-xs">
-										{@const pol = policies.find((p) => p.id === ev.policy_id)}
-										{@const mustSucceed = pol ? (pol.condition as Record<string, unknown>).must_succeed === true : false}
-										{#if mustSucceed}
-											<span class="rounded-full px-2 py-0.5 text-[10px]" style="background: rgba(79,110,247,0.12); color: #4f6ef7; border: 1px solid rgba(79,110,247,0.25)">pass</span>
-										{:else}
-											<span class="rounded-full px-2 py-0.5 text-[10px]" style="background: rgba(148,163,184,0.12); color: #94a3b8; border: 1px solid rgba(148,163,184,0.25)">call</span>
-										{/if}
-									</Table.Cell>
-									<Table.Cell class="text-xs">
-										{#if ev.action === 'block_push'}
-											<span class="rounded-full px-2 py-0.5 text-[10px]" style="background: rgba(240,101,101,0.08); color: #f06565">block</span>
-										{:else}
-											<span class="rounded-full px-2 py-0.5 text-[10px]" style="background: rgba(246,177,68,0.08); color: #f6b144">warn</span>
-										{/if}
-									</Table.Cell>
-									<Table.Cell class="font-mono text-xs">
-										{ev.commit_sha ? ev.commit_sha.slice(0, 8) : '-'}
-									</Table.Cell>
-									<Table.Cell class="font-mono text-xs max-w-[120px] truncate" title={ev.session_id ?? ''}>
-										{ev.session_id ? ev.session_id.slice(0, 8) : '-'}
-									</Table.Cell>
-									<Table.Cell class="text-xs text-muted-foreground">{ev.source}</Table.Cell>
-									<Table.Cell class="text-xs max-w-md truncate text-muted-foreground" title={ev.details}>
-										{ev.details}
-									</Table.Cell>
-								</Table.Row>
-							{/each}
-						</Table.Body>
-					</Table.Root>
-					{#if evaluationsTotal > 0}
-						{@const totalPages = Math.max(1, Math.ceil(evaluationsTotal / evalPageSize))}
-						{@const showFrom = evalPage * evalPageSize + 1}
-						{@const showTo = Math.min((evalPage + 1) * evalPageSize, evaluationsTotal)}
-						<div class="border-border text-muted-foreground flex items-center justify-between border-t px-3 py-2 text-xs">
-							<span>{showFrom}-{showTo} of {evaluationsTotal}</span>
-							<div class="flex items-center gap-3">
-								<span>Per page:</span>
-								{#each [10, 25, 50] as size}
-									<button
-										class="rounded px-1.5 py-0.5 transition-colors {evalPageSize === size
-											? 'bg-primary text-primary-foreground'
-											: 'hover:text-foreground'}"
-										onclick={() => {
-											evalPageSize = size;
-											evalPage = 0;
-											loadEvaluations();
-										}}
-									>
-										{size}
-									</button>
-								{/each}
-								<span class="text-border mx-1">|</span>
-								<button
-									class="hover:text-foreground disabled:opacity-30"
-									disabled={evalPage === 0}
-									onclick={() => setEvalPage(evalPage - 1)}
-								>
-									<ChevronLeftIcon class="h-4 w-4" />
-								</button>
-								<span>{evalPage + 1}/{totalPages}</span>
-								<button
-									class="hover:text-foreground disabled:opacity-30"
-									disabled={evalPage >= totalPages - 1}
-									onclick={() => setEvalPage(evalPage + 1)}
-								>
-									<ChevronRightIcon class="h-4 w-4" />
-								</button>
-							</div>
-						</div>
-					{/if}
-				</div>
-			{/if}
-		</div>
-	</div>
-
-	<!-- Commits Section -->
+	<!-- Commits -->
 	<div class="space-y-2">
 		<h2 class="text-sm font-semibold">Commits</h2>
 		{#if loading}
