@@ -255,7 +255,7 @@ impl PolicyRepo {
         repo_id: Uuid,
     ) -> Result<String, AppError> {
         let mode: Option<String> =
-            sqlx::query_scalar("SELECT validation_window_mode FROM repos WHERE id = $1")
+            sqlx::query_scalar(include_str!("sql/get_validation_window_mode.sql"))
                 .bind(repo_id)
                 .fetch_optional(pool)
                 .await?

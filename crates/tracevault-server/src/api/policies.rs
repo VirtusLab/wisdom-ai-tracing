@@ -313,7 +313,7 @@ pub async fn check_policies(
         return Err(AppError::NotFound("Repo not found".into()));
     }
 
-    // Fetch all enabled policies (now includes scope column)
+    // Fetch all enabled policies for this repo (repo-specific + org-wide)
     let rows = PolicyRepo::list_enabled_for_check(&state.pool, auth.org_id, repo_id).await?;
 
     // Fetch validation window mode for this repo
@@ -347,16 +347,12 @@ pub async fn check_policies(
     // validation_window_started_at) for all sessions in this push, then a
     // second query aggregates window tool-call stats for all sessions that
     // have an open window. This avoids N+1 round-trips.
-    let window_rows: Vec<(String, Uuid, Option<chrono::DateTime<chrono::Utc>>)> = sqlx::query_as(
-        "SELECT session_id, id, validation_window_started_at
-             FROM sessions
-             WHERE repo_id = $1 AND session_id = ANY($2)
-             ORDER BY started_at DESC",
-    )
-    .bind(repo_id)
-    .bind(&session_ids)
-    .fetch_all(&state.pool)
-    .await?;
+    let window_rows: Vec<(String, Uuid, Option<chrono::DateTime<chrono::Utc>>)> =
+        sqlx::query_as(include_str!("../repo/sql/get_sessions_window_data.sql"))
+            .bind(repo_id)
+            .bind(&session_ids)
+            .fetch_all(&state.pool)
+            .await?;
 
     // Deduplicate: keep the most recent row per session_id string
     let mut seen = std::collections::HashSet::new();

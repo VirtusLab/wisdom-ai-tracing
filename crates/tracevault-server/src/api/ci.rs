@@ -223,7 +223,7 @@ pub async fn verify_commits(
             Some(auth.user_id)
         };
 
-        for (policy_id, name, condition, action, severity, _scope) in &policies {
+        for (policy_id, name, condition, action, severity, _) in &policies {
             let EvalOutcome { passed, details } =
                 evaluate_condition(condition, &all_tool_calls, &all_files);
             let result_str = if !passed {

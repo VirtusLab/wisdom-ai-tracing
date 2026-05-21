@@ -221,9 +221,17 @@ pub async fn get_settings(
     auth: OrgAuth,
     Path((_slug, id)): Path<(String, Uuid)>,
 ) -> Result<Json<RepoSettingsResponse>, AppError> {
-    let row = sqlx::query_as::<_, (Option<String>, String, Option<String>, Option<String>, Option<chrono::DateTime<chrono::Utc>>, String)>(
-        "SELECT github_url, clone_status, deploy_key_encrypted, webhook_secret_encrypted, last_fetched_at, validation_window_mode FROM repos WHERE id = $1 AND org_id = $2",
-    )
+    let row = sqlx::query_as::<
+        _,
+        (
+            Option<String>,
+            String,
+            Option<String>,
+            Option<String>,
+            Option<chrono::DateTime<chrono::Utc>>,
+            String,
+        ),
+    >(include_str!("../repo/sql/get_repo_settings.sql"))
     .bind(id)
     .bind(auth.org_id)
     .fetch_optional(&state.pool)
@@ -303,11 +311,13 @@ pub async fn update_settings(
                 VALID_WINDOW_MODES.join(", ")
             )));
         }
-        sqlx::query("UPDATE repos SET validation_window_mode = $1 WHERE id = $2")
-            .bind(mode)
-            .bind(id)
-            .execute(&state.pool)
-            .await?;
+        sqlx::query(include_str!(
+            "../repo/sql/update_repo_validation_window_mode.sql"
+        ))
+        .bind(mode)
+        .bind(id)
+        .execute(&state.pool)
+        .await?;
     }
 
     // Encrypt and store webhook secret if provided (ignore empty strings)
@@ -329,9 +339,18 @@ pub async fn update_settings(
     }
 
     // Read back current state to decide whether to trigger clone
-    let row = sqlx::query_as::<_, (Option<String>, String, Option<String>, Option<String>, Option<String>, Option<chrono::DateTime<chrono::Utc>>, String)>(
-        "SELECT github_url, clone_status, deploy_key_encrypted, deploy_key_nonce, webhook_secret_encrypted, last_fetched_at, validation_window_mode FROM repos WHERE id = $1",
-    )
+    let row = sqlx::query_as::<
+        _,
+        (
+            Option<String>,
+            String,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+            Option<chrono::DateTime<chrono::Utc>>,
+            String,
+        ),
+    >(include_str!("../repo/sql/get_repo_settings_by_id.sql"))
     .bind(id)
     .fetch_one(&state.pool)
     .await?;
