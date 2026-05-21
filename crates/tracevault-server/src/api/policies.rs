@@ -455,7 +455,7 @@ pub async fn check_policies(
             // fail > warn > skip > pass
             let is_worse = matches!(
                 (worst_result_str, result_str),
-                (_, "fail") | ("pass" | "skip", "warn")
+                (_, "fail") | ("pass" | "skip", "warn") | ("pass", "skip")
             );
             if is_worse {
                 worst_result_str = result_str;
