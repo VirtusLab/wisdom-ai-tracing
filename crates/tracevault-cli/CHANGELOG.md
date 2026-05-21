@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.13.0](https://github.com/softwaremill/tracevault/compare/v0.12.0...v0.13.0) - 2026-05-21
+
+### Added
+
+- *(init)* add --no-gitignore flag to skip .gitignore updates
+- *(policies)* add must_succeed flag to tool call policies
+
+### Changed
+
+- *(init)* remove unused claude_target param from update_root_gitignore
+
+### Fixed
+
+- *(auth)* move device status poll off strict rate limiter and handle 429 in CLI
+- *(init)* always gitignore both .claude/settings.json and settings.local.json
+
 ## [0.12.0](https://github.com/softwaremill/tracevault/compare/v0.11.3...v0.12.0) - 2026-05-08
 
 ### Added

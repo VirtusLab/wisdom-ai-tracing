@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.13.0](https://github.com/softwaremill/tracevault/compare/v0.12.0...v0.13.0) - 2026-05-21
+
+### Added
+
+- *(policies)* add must_succeed flag to tool call policies
+
+### Changed
+
+- address review comments
+
 ## [0.11.1](https://github.com/softwaremill/tracevault/compare/v0.11.0...v0.11.1) - 2026-04-23
 
 ### Fixed
