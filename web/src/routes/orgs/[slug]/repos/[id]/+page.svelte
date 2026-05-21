@@ -176,7 +176,7 @@
 
 	async function loadPolicies() {
 		try {
-			policies = await api.get<Policy[]>(`/api/v1/orgs/${slug}/repos/${repoId}/policies`);
+			policies = (await api.get<Policy[]>(`/api/v1/orgs/${slug}/repos/${repoId}/policies`)) ?? [];
 		} catch (err) {
 			policiesError = err instanceof Error ? err.message : 'Failed to load policies';
 		} finally {
@@ -194,11 +194,11 @@
 			});
 			if (filterResult !== 'all') params.set('result', filterResult);
 			if (filterPolicyId !== 'all') params.set('policy_id', filterPolicyId);
-			const page = await api.get<PolicyEvaluationPage>(
+			const evalPage_ = await api.get<PolicyEvaluationPage>(
 				`/api/v1/orgs/${slug}/repos/${repoId}/policy-evaluations?${params}`
 			);
-			evaluations = page.items;
-			evaluationsTotal = page.total;
+			evaluations = evalPage_?.items ?? [];
+			evaluationsTotal = evalPage_?.total ?? 0;
 		} catch (err) {
 			evaluationsError = err instanceof Error ? err.message : 'Failed to load policy activity';
 		} finally {
