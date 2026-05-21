@@ -97,7 +97,8 @@ Fails only if cargo itself cannot run (e.g. toolchain not installed).`,
 
 server.tool(
   "cargo_check",
-  `Run \`cargo clippy\` and \`cargo test\` on the repository. Both steps must pass.
+  `Run \`cargo clippy\` and unit tests (\`cargo test --lib --bins\`) on the repository.
+Both steps must pass. Integration tests that require a live database are excluded.
 
 Returns isError=true if either clippy or tests fail, which TraceVault's must_succeed
 policy uses to determine whether quality gates were actually met (not just invoked).
@@ -122,8 +123,12 @@ failures before pushing.`,
       );
     }
 
-    // Step 2: tests
-    const test = await run("cargo", ["test"], REPO_ROOT);
+    // Step 2: unit tests (--lib excludes integration tests that require a live DB)
+    const test = await run(
+      "cargo",
+      ["test", "--lib", "--bins", "-p", "tracevault-core", "-p", "tracevault-cli", "-p", "tracevault-server"],
+      REPO_ROOT
+    );
 
     if (test.code !== 0) {
       const details = [test.stderr, test.stdout].filter(Boolean).join("\n").trim();
