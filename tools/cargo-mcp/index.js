@@ -2,18 +2,24 @@
 /**
  * cargo-mcp — project-local MCP server for TraceVault.
  *
- * Exposes two tools for use with AI coding agents:
+ * Exposes three tools for use with AI coding agents:
  *
- *   cargo_fmt  — runs `cargo fmt` to format all Rust files in place.
- *                TraceVault policy: require this tool to be called (any result).
- *                Rationale: the agent must format the code before committing.
+ *   cargo_fmt   — runs `cargo fmt` to format all Rust files in place.
+ *                 TraceVault policy: RequiredToolCall (any result).
+ *                 Rationale: the agent must format the code before committing.
  *
  *   cargo_check — runs `cargo clippy` then `cargo test`.
- *                Returns isError=true when either step fails so TraceVault's
- *                must_succeed policy can distinguish "ran but failed" from
- *                "ran and passed".
- *                TraceVault policy: require this tool to be called AND must_succeed=true.
- *                Rationale: enforces that linting and tests actually pass before pushing.
+ *                 Returns isError=true when either step fails so TraceVault's
+ *                 must_succeed policy can distinguish "ran but failed" from
+ *                 "ran and passed".
+ *                 TraceVault policy: RequiredToolCall, must_succeed=true.
+ *                 Rationale: enforces that linting and tests actually pass before pushing.
+ *
+ *   cargo_audit — runs `cargo audit` to check Cargo.lock for known CVEs.
+ *                 Returns isError=true when vulnerabilities are found or tool missing.
+ *                 TraceVault policy: ConditionalToolCall, must_succeed=true,
+ *                   when_files_match: ["Cargo.lock"].
+ *                 Rationale: security scan is only required when dependencies changed.
  *
  * Both tools run in the repo root (parent of tools/cargo-mcp/).
  */
@@ -146,6 +152,56 @@ failures before pushing.`,
 
     return buildMcpResponse(
       `✅ clippy and tests passed.\n\n${summary || "All tests OK."}`
+    );
+  }
+);
+
+// ── Tool: cargo_audit ─────────────────────────────────────────────────────────
+
+server.tool(
+  "cargo_audit",
+  `Run \`cargo audit\` to check all dependencies in Cargo.lock for known security
+vulnerabilities (CVEs) using the RustSec advisory database.
+
+Call this tool whenever Cargo.lock has changed — i.e. after adding, removing, or
+updating any dependency. The TraceVault policy for this repo requires this tool to be
+called AND to succeed (must_succeed=true) when Cargo.lock is modified.
+
+Returns isError=true if any vulnerabilities are found or if cargo-audit is not
+installed. Install with: cargo install cargo-audit`,
+  {},
+  async () => {
+    // Check cargo-audit is available before running.
+    const which = await run("cargo", ["audit", "--version"], REPO_ROOT);
+    if (which.code !== 0) {
+      return buildMcpResponse(
+        "❌ cargo-audit is not installed.\n\nInstall it with:\n  cargo install cargo-audit\n\nThen re-run this tool.",
+        true
+      );
+    }
+
+    const { code, stdout, stderr } = await run(
+      "cargo",
+      ["audit"],
+      REPO_ROOT
+    );
+
+    if (code === 0) {
+      // Extract the summary line ("0 vulnerabilities found") for a clean output.
+      const summary = stdout
+        .split("\n")
+        .filter((l) => l.includes("vulnerabilit") || l.includes("warning"))
+        .join("\n")
+        .trim();
+      return buildMcpResponse(
+        `✅ cargo audit passed — no known vulnerabilities.\n\n${summary || stdout.trim()}`
+      );
+    }
+
+    const details = [stdout, stderr].filter(Boolean).join("\n").trim();
+    return buildMcpResponse(
+      `❌ cargo audit found vulnerabilities in Cargo.lock.\n\nReview and update the affected dependencies before pushing.\n\n${details}`,
+      true
     );
   }
 );

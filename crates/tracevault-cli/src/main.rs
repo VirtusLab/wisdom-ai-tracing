@@ -70,6 +70,14 @@ enum Cli {
         #[arg(long)]
         range: Option<String>,
     },
+    /// Open (or re-open) a validation window for the current session.
+    ///
+    /// A validation window declares that the agent has finished making changes
+    /// and is now running quality checks. Only tool calls made after this point
+    /// are evaluated by validation_window-scoped policies. Calling this again
+    /// resets the window, discarding earlier window events.
+    #[command(name = "validation-start")]
+    ValidationStart,
 }
 
 #[tokio::main]
@@ -169,6 +177,13 @@ async fn main() {
                 commands::verify::verify(&cwd, commits.as_deref(), range.as_deref()).await
             {
                 eprintln!("Verify error: {e}");
+                std::process::exit(1);
+            }
+        }
+        Cli::ValidationStart => {
+            let cwd = env::current_dir().expect("Cannot determine current directory");
+            if let Err(e) = commands::validation_window::open_validation_window(&cwd).await {
+                eprintln!("Error: {e}");
                 std::process::exit(1);
             }
         }

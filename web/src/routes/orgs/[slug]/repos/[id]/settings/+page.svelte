@@ -5,6 +5,7 @@
 	import { Button } from '$lib/components/ui/button/index.js';
 	import { Input } from '$lib/components/ui/input/index.js';
 	import { Label } from '$lib/components/ui/label/index.js';
+	import * as Select from '$lib/components/ui/select/index.js';
 	import { formatDateTime } from '$lib/utils/date';
 
 	interface RepoSettings {
@@ -12,6 +13,7 @@
 		clone_status: string;
 		has_deploy_key: boolean;
 		last_fetched_at: string | null;
+		validation_window_mode: string;
 	}
 
 	interface Repo {
@@ -34,6 +36,7 @@
 
 	let githubUrl = $state('');
 	let deployKey = $state('');
+	let validationWindowMode = $state('disabled');
 	let pollTimer: ReturnType<typeof setInterval> | null = $state(null);
 
 	onMount(async () => {
@@ -58,6 +61,7 @@
 		try {
 			settings = await api.get<RepoSettings>(`/api/v1/orgs/${slug}/repos/${repoId}/settings`);
 			githubUrl = settings.github_url ?? '';
+			validationWindowMode = settings.validation_window_mode ?? 'disabled';
 		} catch (err) {
 			error = err instanceof Error ? err.message : 'Failed to load settings';
 		} finally {
@@ -73,6 +77,7 @@
 			const body: Record<string, string> = {};
 			if (githubUrl) body.github_url = githubUrl;
 			if (deployKey.trim()) body.deploy_key = deployKey.trim();
+			body.validation_window_mode = validationWindowMode;
 
 			settings = await api.put<RepoSettings>(`/api/v1/orgs/${slug}/repos/${repoId}/settings`, body);
 
@@ -260,6 +265,31 @@
 							Browse Code
 						</a>
 					{/if}
+				</div>
+			</div>
+		</div>
+
+		<!-- Validation Window Mode -->
+		<div class="border-border overflow-hidden rounded-lg border">
+			<div class="bg-muted/30 px-4 py-3 text-sm font-semibold">Validation Window</div>
+			<div class="p-4 space-y-3">
+				<p class="text-xs text-muted-foreground">
+					Controls what happens when an unknown tool (not covered by any
+					<code>validation_window</code>-scoped policy) is called inside a declared validation window.
+					Agents open a window with <code>tracevault validation-start</code>.
+				</p>
+				<div class="grid gap-2">
+					<Label>Unknown Tool Mode</Label>
+					<Select.Root type="single" value={validationWindowMode} onValueChange={(v) => { if (v) validationWindowMode = v; }}>
+						<Select.Trigger>
+							{validationWindowMode === 'disabled' ? 'Disabled' : validationWindowMode === 'warn' ? 'Warn' : 'Block Push'}
+						</Select.Trigger>
+						<Select.Content>
+							<Select.Item value="disabled">Disabled — no window enforcement (default)</Select.Item>
+							<Select.Item value="warn">Warn — flag unknown tools but allow push</Select.Item>
+							<Select.Item value="block">Block Push — unknown tools block the push</Select.Item>
+						</Select.Content>
+					</Select.Root>
 				</div>
 			</div>
 		</div>

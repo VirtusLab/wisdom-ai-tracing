@@ -8,4 +8,5 @@ pub mod stats;
 pub mod status;
 pub mod stream;
 pub mod sync;
+pub mod validation_window;
 pub mod verify;

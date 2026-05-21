@@ -11,6 +11,8 @@ pub struct PolicyRule {
     pub action: PolicyAction,
     pub severity: PolicySeverity,
     pub enabled: bool,
+    #[serde(default)]
+    pub scope: PolicyScope,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -44,11 +46,42 @@ pub enum PolicyCondition {
     },
 }
 
+/// Which evaluation window this policy applies to.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum PolicyScope {
+    /// Evaluated over the entire push window (default, existing behaviour).
+    #[default]
+    Session,
+    /// Evaluated only against events inside the last validation window.
+    ValidationWindow,
+    /// Evaluated in both contexts.
+    Both,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PolicyAction {
     BlockPush,
     Warn,
+    /// Tool is explicitly permitted inside a validation window without a count
+    /// requirement. Prevents it from triggering the unknown-tool gate.
+    Allow,
+}
+
+/// Org/repo-level setting controlling what happens when an unknown tool
+/// (not covered by any validation_window-scoped policy) is called inside
+/// the validation window.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ValidationWindowMode {
+    /// No window enforcement (default).
+    #[default]
+    Disabled,
+    /// Unknown tool call is flagged but push succeeds.
+    Warn,
+    /// Unknown tool call blocks the push.
+    Block,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -190,6 +190,7 @@ fn default_policies() -> Vec<PolicyRule> {
             condition: PolicyCondition::TraceCompleteness,
             action: PolicyAction::Warn,
             severity: PolicySeverity::Medium,
+            scope: Default::default(),
             enabled: true,
         },
         PolicyRule {
@@ -200,6 +201,7 @@ fn default_policies() -> Vec<PolicyRule> {
             condition: PolicyCondition::AiPercentageThreshold { threshold: 90.0 },
             action: PolicyAction::Warn,
             severity: PolicySeverity::Medium,
+            scope: Default::default(),
             enabled: true,
         },
         PolicyRule {
@@ -216,6 +218,7 @@ fn default_policies() -> Vec<PolicyRule> {
             },
             action: PolicyAction::BlockPush,
             severity: PolicySeverity::High,
+            scope: Default::default(),
             enabled: true,
         },
         PolicyRule {
@@ -233,6 +236,7 @@ fn default_policies() -> Vec<PolicyRule> {
             },
             action: PolicyAction::Warn,
             severity: PolicySeverity::High,
+            scope: Default::default(),
             enabled: true,
         },
         PolicyRule {
@@ -246,6 +250,7 @@ fn default_policies() -> Vec<PolicyRule> {
             },
             action: PolicyAction::Warn,
             severity: PolicySeverity::Low,
+            scope: Default::default(),
             enabled: true,
         },
         PolicyRule {
@@ -259,6 +264,7 @@ fn default_policies() -> Vec<PolicyRule> {
             },
             action: PolicyAction::Warn,
             severity: PolicySeverity::Medium,
+            scope: Default::default(),
             enabled: true,
         },
     ]
@@ -460,6 +466,7 @@ mod tests {
                 condition: PolicyCondition::TraceCompleteness,
                 action: PolicyAction::Warn,
                 severity: PolicySeverity::Low,
+                scope: Default::default(),
                 enabled: true,
             },
             PolicyRule {
@@ -470,6 +477,7 @@ mod tests {
                 condition: PolicyCondition::TraceCompleteness,
                 action: PolicyAction::Warn,
                 severity: PolicySeverity::Low,
+                scope: Default::default(),
                 enabled: false,
             },
         ];

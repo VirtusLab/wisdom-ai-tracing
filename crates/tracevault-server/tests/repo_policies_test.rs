@@ -37,6 +37,7 @@ async fn create_and_list_for_repo(pool: sqlx::PgPool) {
         &json!({"type": "TraceCompleteness"}),
         "warn",
         "medium",
+            "session",
         true,
     )
     .await
@@ -63,6 +64,7 @@ async fn update_partial_coalesces(pool: sqlx::PgPool) {
         &json!({"type": "TraceCompleteness"}),
         "warn",
         "medium",
+            "session",
         true,
     )
     .await
@@ -77,6 +79,8 @@ async fn update_partial_coalesces(pool: sqlx::PgPool) {
         &None,
         &None,
         &None,
+        &None,
+
         None,
     )
     .await
@@ -95,6 +99,7 @@ async fn update_nonexistent_returns_none(pool: sqlx::PgPool) {
         &pool,
         Uuid::new_v4(),
         org_id,
+        &None,
         &None,
         &None,
         &None,
@@ -121,6 +126,7 @@ async fn delete_returns_rows_affected(pool: sqlx::PgPool) {
         &json!({"type": "TraceCompleteness"}),
         "warn",
         "low",
+            "session",
         true,
     )
     .await
@@ -144,6 +150,7 @@ async fn list_enabled_for_check_filters_disabled(pool: sqlx::PgPool) {
         &json!({"type": "TraceCompleteness"}),
         "warn",
         "medium",
+            "session",
         true,
     )
     .await
@@ -158,6 +165,7 @@ async fn list_enabled_for_check_filters_disabled(pool: sqlx::PgPool) {
         &json!({"type": "TraceCompleteness"}),
         "warn",
         "medium",
+            "session",
         false,
     )
     .await
@@ -168,10 +176,10 @@ async fn list_enabled_for_check_filters_disabled(pool: sqlx::PgPool) {
         .unwrap();
     assert!(enabled
         .iter()
-        .all(|(_, name, _, _, _)| name != "disabled-policy"));
+        .all(|(_, name, _, _, _, _)| name != "disabled-policy"));
     assert!(enabled
         .iter()
-        .any(|(_, name, _, _, _)| name == "enabled-policy"));
+        .any(|(_, name, _, _, _, _)| name == "enabled-policy"));
 }
 
 #[sqlx::test(migrations = "./migrations")]
@@ -188,6 +196,7 @@ async fn insert_and_list_evaluations(pool: sqlx::PgPool) {
         &json!({"type": "TraceCompleteness"}),
         "warn",
         "medium",
+            "session",
         true,
     )
     .await
@@ -277,6 +286,7 @@ async fn evaluation_row_survives_policy_delete(pool: sqlx::PgPool) {
         &json!({"type": "TraceCompleteness"}),
         "warn",
         "low",
+            "session",
         true,
     )
     .await

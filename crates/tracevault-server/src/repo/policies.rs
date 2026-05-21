@@ -13,6 +13,7 @@ pub struct PolicyRow {
     pub condition: serde_json::Value,
     pub action: String,
     pub severity: String,
+    pub scope: String,
     pub enabled: bool,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
@@ -78,12 +79,13 @@ impl PolicyRepo {
                 serde_json::Value,
                 String,
                 String,
+                String,
                 bool,
                 DateTime<Utc>,
                 DateTime<Utc>,
             ),
         >(
-            "SELECT id, org_id, repo_id, name, description, condition, action, severity, enabled, created_at, updated_at
+            "SELECT id, org_id, repo_id, name, description, condition, action, severity, scope, enabled, created_at, updated_at
              FROM policies
              WHERE org_id = $1 AND (repo_id = $2 OR repo_id IS NULL)
              ORDER BY created_at",
@@ -104,9 +106,10 @@ impl PolicyRepo {
                 condition: r.5,
                 action: r.6,
                 severity: r.7,
-                enabled: r.8,
-                created_at: r.9,
-                updated_at: r.10,
+                scope: r.8,
+                enabled: r.9,
+                created_at: r.10,
+                updated_at: r.11,
             })
             .collect())
     }
@@ -122,11 +125,12 @@ impl PolicyRepo {
         condition: &serde_json::Value,
         action: &str,
         severity: &str,
+        scope: &str,
         enabled: bool,
     ) -> Result<(Uuid, DateTime<Utc>, DateTime<Utc>), AppError> {
         let row = sqlx::query_as::<_, (Uuid, DateTime<Utc>, DateTime<Utc>)>(
-            "INSERT INTO policies (org_id, repo_id, name, description, condition, action, severity, enabled)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+            "INSERT INTO policies (org_id, repo_id, name, description, condition, action, severity, scope, enabled)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
              RETURNING id, created_at, updated_at",
         )
         .bind(org_id)
@@ -136,6 +140,7 @@ impl PolicyRepo {
         .bind(condition)
         .bind(action)
         .bind(severity)
+        .bind(scope)
         .bind(enabled)
         .fetch_one(pool)
         .await?;
@@ -154,6 +159,7 @@ impl PolicyRepo {
         condition: &Option<serde_json::Value>,
         action: &Option<String>,
         severity: &Option<String>,
+        scope: &Option<String>,
         enabled: Option<bool>,
     ) -> Result<Option<PolicyRow>, AppError> {
         let row = sqlx::query_as::<
@@ -164,6 +170,7 @@ impl PolicyRepo {
                 String,
                 String,
                 serde_json::Value,
+                String,
                 String,
                 String,
                 bool,
@@ -177,10 +184,11 @@ impl PolicyRepo {
                 condition = COALESCE($5, condition),
                 action = COALESCE($6, action),
                 severity = COALESCE($7, severity),
-                enabled = COALESCE($8, enabled),
+                scope = COALESCE($8, scope),
+                enabled = COALESCE($9, enabled),
                 updated_at = NOW()
              WHERE id = $1 AND org_id = $2
-             RETURNING org_id, repo_id, name, description, condition, action, severity, enabled, created_at, updated_at",
+             RETURNING org_id, repo_id, name, description, condition, action, severity, scope, enabled, created_at, updated_at",
         )
         .bind(id)
         .bind(org_id)
@@ -189,6 +197,7 @@ impl PolicyRepo {
         .bind(condition)
         .bind(action)
         .bind(severity)
+        .bind(scope)
         .bind(enabled)
         .fetch_optional(pool)
         .await?;
@@ -202,9 +211,10 @@ impl PolicyRepo {
             condition: r.4,
             action: r.5,
             severity: r.6,
-            enabled: r.7,
-            created_at: r.8,
-            updated_at: r.9,
+            scope: r.7,
+            enabled: r.8,
+            created_at: r.9,
+            updated_at: r.10,
         }))
     }
 
@@ -224,9 +234,9 @@ impl PolicyRepo {
         pool: &PgPool,
         org_id: Uuid,
         repo_id: Uuid,
-    ) -> Result<Vec<(Uuid, String, serde_json::Value, String, String)>, AppError> {
-        let rows = sqlx::query_as::<_, (Uuid, String, serde_json::Value, String, String)>(
-            "SELECT id, name, condition, action, severity
+    ) -> Result<Vec<(Uuid, String, serde_json::Value, String, String, String)>, AppError> {
+        let rows = sqlx::query_as::<_, (Uuid, String, serde_json::Value, String, String, String)>(
+            "SELECT id, name, condition, action, severity, scope
              FROM policies
              WHERE org_id = $1 AND (repo_id = $2 OR repo_id IS NULL) AND enabled = true
              ORDER BY created_at",
@@ -237,6 +247,20 @@ impl PolicyRepo {
         .await?;
 
         Ok(rows)
+    }
+
+    /// Fetch the validation_window_mode for a repo.
+    pub async fn get_validation_window_mode(
+        pool: &PgPool,
+        repo_id: Uuid,
+    ) -> Result<String, AppError> {
+        let mode: Option<String> =
+            sqlx::query_scalar("SELECT validation_window_mode FROM repos WHERE id = $1")
+                .bind(repo_id)
+                .fetch_optional(pool)
+                .await?
+                .flatten();
+        Ok(mode.unwrap_or_else(|| "disabled".into()))
     }
 
     /// List recent policy evaluations for a repo with optional filters.

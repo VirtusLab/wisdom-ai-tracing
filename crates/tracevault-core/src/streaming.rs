@@ -9,6 +9,9 @@ pub enum StreamEventType {
     Transcript,
     SessionStart,
     SessionEnd,
+    /// Client declares the start of a validation window. Only the most recent
+    /// event of this type per session is meaningful — re-opening is idempotent.
+    ValidationWindowStart,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

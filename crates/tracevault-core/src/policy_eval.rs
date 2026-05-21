@@ -9,6 +9,31 @@ pub struct EvalOutcome {
     pub details: String,
 }
 
+/// Result of checking whether an unknown tool was called inside the
+/// validation window.
+pub struct WindowGateOutcome {
+    pub violations: Vec<String>,
+}
+
+/// Check all tool calls that happened inside the validation window against
+/// the set of tools that have a window-scoped policy. Any tool not covered
+/// is an "unknown tool" violation.
+///
+/// `window_tool_calls` — tool name → stats for calls *inside* the window.
+/// `covered_tools` — tool names that have a `validation_window` or `both`
+///   scoped policy (regardless of action — even `allow` covers the tool).
+pub fn evaluate_window_gate(
+    window_tool_calls: &HashMap<String, ToolCallStats>,
+    covered_tools: &[String],
+) -> WindowGateOutcome {
+    let violations = window_tool_calls
+        .keys()
+        .filter(|name| !covered_tools.iter().any(|c| c == *name))
+        .cloned()
+        .collect();
+    WindowGateOutcome { violations }
+}
+
 /// Per-tool call statistics used during policy evaluation.
 #[derive(Debug, Default, Clone)]
 pub struct ToolCallStats {
