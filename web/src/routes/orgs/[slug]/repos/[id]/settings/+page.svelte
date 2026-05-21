@@ -282,7 +282,7 @@
 					<Label>Unknown Tool Mode</Label>
 					<Select.Root type="single" value={validationWindowMode} onValueChange={(v) => { if (v) validationWindowMode = v; }}>
 						<Select.Trigger>
-							{validationWindowMode === 'disabled' ? 'Disabled' : validationWindowMode === 'warn' ? 'Warn' : 'Block Push'}
+							{{ disabled: 'Disabled', warn: 'Warn', block: 'Block Push' }[validationWindowMode] ?? validationWindowMode}
 						</Select.Trigger>
 						<Select.Content>
 							<Select.Item value="disabled">Disabled — no window enforcement (default)</Select.Item>
