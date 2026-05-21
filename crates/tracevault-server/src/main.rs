@@ -176,16 +176,16 @@ async fn main() {
         .route("/api/v1/auth/register", post(api::auth::register))
         .route("/api/v1/auth/login", post(api::auth::login))
         .route("/api/v1/auth/device", post(api::auth::device_start))
-        .route(
-            "/api/v1/auth/device/{token}/status",
-            get(api::auth::device_status),
-        )
         .layer(GovernorLayer::new(auth_rate_limit));
 
     // Public routes (moderate: 60 req/min per IP)
     let public_routes = Router::new()
         .route("/health", get(|| async { "ok" }))
         .route("/api/v1/features", get(api::features::get_features))
+        .route(
+            "/api/v1/auth/device/{token}/status",
+            get(api::auth::device_status),
+        )
         .route("/api/v1/orgs/public", get(api::auth::list_public_orgs))
         .route(
             "/api/v1/invitation-requests",
