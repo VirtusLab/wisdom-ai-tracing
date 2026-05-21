@@ -280,6 +280,21 @@ tracevault init
 
 That's it. From this point on, every Claude Code session in this repo is automatically traced — tool calls, file edits, token usage, and model info are captured and streamed to the TraceVault server as they happen. When you `git push`, the pre-push hook evaluates policies and blocks the push if any rule fails.
 
+### 4. Install project-local MCP tools
+
+This repo ships a project-local MCP server (`tools/cargo-mcp/`) that Claude Code picks up automatically via `.mcp.json`. It exposes two tools used by TraceVault policies:
+
+- **`cargo_fmt`** — runs `cargo fmt` to format all Rust files in place. The policy requires this tool to be called before committing.
+- **`cargo_check`** — runs `cargo clippy` then `cargo test`. Returns an error result if either fails. The policy requires this tool to be called *and* to succeed before pushing.
+
+Install the dependencies once after cloning:
+
+```sh
+npm install --prefix tools/cargo-mcp
+```
+
+Claude Code will automatically offer the tools in any session inside this repo. No further configuration is needed.
+
 ## Keys & Secrets
 
 ### Encryption key (`TRACEVAULT_ENCRYPTION_KEY`)
