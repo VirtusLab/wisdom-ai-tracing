@@ -73,8 +73,10 @@ pub async fn login(server_url: &str, no_browser: bool) -> Result<(), Box<dyn std
     use std::io::Write;
     let _ = std::io::stdout().flush();
 
-    let poll_interval = std::time::Duration::from_secs(2);
-    let max_attempts = 150; // 5 minutes at 2s intervals
+    let poll_interval = std::time::Duration::from_secs(3);
+    let max_attempts = 100; // 5 minutes at 3s intervals
+    let mut consecutive_errors = 0u32;
+    let max_consecutive_errors = 5;
 
     for _ in 0..max_attempts {
         tokio::time::sleep(poll_interval).await;
@@ -83,6 +85,7 @@ pub async fn login(server_url: &str, no_browser: bool) -> Result<(), Box<dyn std
 
         match client.device_status(&device.token).await {
             Ok(status) => {
+                consecutive_errors = 0;
                 if status.status == "approved" {
                     let token = status
                         .token
@@ -107,8 +110,19 @@ pub async fn login(server_url: &str, no_browser: bool) -> Result<(), Box<dyn std
                 // Still pending, continue polling
             }
             Err(e) => {
-                eprintln!("\nError polling status: {e}");
-                return Err(e);
+                let msg = e.to_string();
+                // 429 Too Many Requests: back off and retry silently
+                if msg.contains("429") || msg.to_lowercase().contains("too many requests") {
+                    tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                    continue;
+                }
+                consecutive_errors += 1;
+                if consecutive_errors >= max_consecutive_errors {
+                    eprintln!("\nError polling status: {e}");
+                    return Err(e);
+                }
+                // Transient error — back off briefly and retry
+                tokio::time::sleep(std::time::Duration::from_secs(2)).await;
             }
         }
     }
