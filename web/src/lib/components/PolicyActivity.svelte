@@ -25,6 +25,7 @@
 		source: string;
 		actor_id: string | null;
 		evaluated_at: string;
+		is_synthetic: boolean;
 	}
 
 	interface PolicyEvaluationPage {
@@ -152,7 +153,7 @@
 								<Table.Cell class="text-xs whitespace-nowrap">{formatDate(ev.evaluated_at)}</Table.Cell>
 								<Table.Cell class="text-xs font-medium">
 									{ev.policy_name}
-									{#if ev.policy_id === null && ev.policy_name !== 'validation_window_gate'}
+									{#if ev.policy_id === null && !ev.is_synthetic}
 										<span class="text-muted-foreground text-[10px]"> (deleted)</span>
 									{/if}
 								</Table.Cell>

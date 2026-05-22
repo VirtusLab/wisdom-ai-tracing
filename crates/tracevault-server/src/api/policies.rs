@@ -402,6 +402,7 @@ pub async fn check_policies(
                 &details,
                 "cli_check",
                 actor_for_log,
+                false,
             )
             .await
             {
@@ -486,6 +487,7 @@ pub async fn check_policies(
             &worst_details,
             "cli_check",
             actor_for_log,
+            false,
         )
         .await
         {
@@ -545,6 +547,7 @@ pub async fn check_policies(
             &gate_details,
             "cli_check",
             actor_for_log,
+            true,
         )
         .await
         {
@@ -631,6 +634,7 @@ pub struct PolicyEvaluationItem {
     pub source: String,
     pub actor_id: Option<Uuid>,
     pub evaluated_at: DateTime<Utc>,
+    pub is_synthetic: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -684,6 +688,7 @@ pub async fn list_policy_evaluations(
                 source: r.source,
                 actor_id: r.actor_id,
                 evaluated_at: r.evaluated_at,
+                is_synthetic: r.is_synthetic,
             })
             .collect(),
         total,

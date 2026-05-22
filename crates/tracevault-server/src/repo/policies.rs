@@ -32,6 +32,7 @@ pub struct PolicyEvaluationRow {
     pub source: String,
     pub actor_id: Option<Uuid>,
     pub evaluated_at: DateTime<Utc>,
+    pub is_synthetic: bool,
 }
 
 #[derive(Debug, Default)]
@@ -264,10 +265,11 @@ impl PolicyRepo {
                 String,
                 Option<Uuid>,
                 DateTime<Utc>,
+                bool,
             ),
         >(
             "SELECT id, policy_id, policy_name, session_id, commit_sha,
-                    result, action, details, source, actor_id, evaluated_at
+                    result, action, details, source, actor_id, evaluated_at, is_synthetic
              FROM policy_evaluations
              WHERE org_id = $1 AND repo_id = $2
                AND ($3::uuid IS NULL OR policy_id = $3)
@@ -302,6 +304,7 @@ impl PolicyRepo {
                 source: r.8,
                 actor_id: r.9,
                 evaluated_at: r.10,
+                is_synthetic: r.11,
             })
             .collect())
     }
@@ -342,12 +345,13 @@ impl PolicyRepo {
         details: &str,
         source: &str,
         actor_id: Option<Uuid>,
+        is_synthetic: bool,
     ) -> Result<(), sqlx::Error> {
         sqlx::query(
             "INSERT INTO policy_evaluations
                (org_id, repo_id, policy_id, policy_name, session_id, commit_sha,
-                result, action, details, source, actor_id)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)",
+                result, action, details, source, actor_id, is_synthetic)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)",
         )
         .bind(org_id)
         .bind(repo_id)
@@ -360,6 +364,7 @@ impl PolicyRepo {
         .bind(details)
         .bind(source)
         .bind(actor_id)
+        .bind(is_synthetic)
         .execute(pool)
         .await?;
         Ok(())
