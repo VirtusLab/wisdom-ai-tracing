@@ -459,7 +459,7 @@ async fn window_tool_call_stats_after_timestamp(pool: sqlx::PgPool) {
             session_id: "test-window-sess".into(),
             model: None,
             cwd: None,
-            tool: None,
+            tool: Some("claude-code".into()),
             timestamp: Some(chrono::Utc::now()),
         },
     )
@@ -511,7 +511,7 @@ async fn window_tool_call_stats_excludes_pre_window_events(pool: sqlx::PgPool) {
             session_id: "test-pre-window-sess".into(),
             model: None,
             cwd: None,
-            tool: None,
+            tool: Some("claude-code".into()),
             timestamp: Some(chrono::Utc::now()),
         },
     )
