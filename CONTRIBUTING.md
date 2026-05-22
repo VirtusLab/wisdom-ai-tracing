@@ -1,6 +1,6 @@
-# Contributing to TraceVault
+# Contributing to Visdom Trace
 
-Thank you for your interest in contributing to TraceVault! This document explains how to contribute.
+Thank you for your interest in contributing to Visdom Trace! This document explains how to contribute.
 
 ## Before You Start
 
@@ -58,4 +58,4 @@ Follow the conventional commits style used in this project:
 
 ## Enterprise Features
 
-TraceVault has an enterprise edition. Contributions to the open-source project are welcome, but please note that the enterprise module (`enterprise/`) is not part of the open-source distribution.
+Visdom Trace has an enterprise edition. Contributions to the open-source project are welcome, but please note that the enterprise module (`enterprise/`) is not part of the open-source distribution.
