@@ -333,7 +333,7 @@ impl PolicyRepo {
         pool: &PgPool,
         org_id: Uuid,
         repo_id: Uuid,
-        policy_id: Uuid,
+        policy_id: Option<Uuid>,
         policy_name: &str,
         session_id: Option<&str>,
         commit_sha: Option<&str>,

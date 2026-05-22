@@ -393,7 +393,7 @@ pub async fn check_policies(
                 &state.pool,
                 auth.org_id,
                 repo_id,
-                *policy_id,
+                Some(*policy_id),
                 name,
                 session_id_for_log,
                 req.commit_sha.as_deref(),
@@ -477,7 +477,7 @@ pub async fn check_policies(
             &state.pool,
             auth.org_id,
             repo_id,
-            *policy_id,
+            Some(*policy_id),
             name,
             session_id_for_log,
             req.commit_sha.as_deref(),
@@ -511,31 +511,53 @@ pub async fn check_policies(
 
         let gate = evaluate_window_gate(&window_tool_calls, &covered_tools);
 
-        if !gate.violations.is_empty() {
-            let details = format!(
-                "Unknown tools called in validation window: {}",
-                gate.violations.join(", ")
-            );
-            let is_block = window_mode == "block";
+        let is_block = window_mode == "block";
+        let (gate_result, gate_action, gate_details) = if !gate.violations.is_empty() {
             if is_block {
                 has_block_failure = true;
             }
-            results.push(CheckResult {
-                rule_name: "validation_window_gate".into(),
-                result: if is_block {
-                    "fail".into()
-                } else {
-                    "warn".into()
-                },
-                action: if is_block {
-                    "block_push".into()
-                } else {
-                    "warn".into()
-                },
-                severity: "medium".into(),
-                details,
-            });
+            (
+                if is_block { "fail" } else { "warn" },
+                if is_block { "block_push" } else { "warn" },
+                format!(
+                    "Unknown tools called in validation window: {}",
+                    gate.violations.join(", ")
+                ),
+            )
+        } else {
+            (
+                "pass",
+                if is_block { "block_push" } else { "warn" },
+                "All tools called in validation window are covered by policies".to_string(),
+            )
+        };
+
+        if let Err(e) = PolicyRepo::insert_evaluation(
+            &state.pool,
+            auth.org_id,
+            repo_id,
+            None,
+            "validation_window_gate",
+            session_id_for_log,
+            req.commit_sha.as_deref(),
+            gate_result,
+            gate_action,
+            &gate_details,
+            "cli_check",
+            actor_for_log,
+        )
+        .await
+        {
+            tracing::warn!(error = %e, "failed to record validation_window_gate evaluation");
         }
+
+        results.push(CheckResult {
+            rule_name: "validation_window_gate".into(),
+            result: gate_result.into(),
+            action: gate_action.into(),
+            severity: "medium".into(),
+            details: gate_details,
+        });
     }
 
     let all_passed = results

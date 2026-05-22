@@ -242,7 +242,7 @@ pub async fn verify_commits(
                 &state.pool,
                 auth.org_id,
                 repo_id,
-                *policy_id,
+                Some(*policy_id),
                 name,
                 None,
                 Some(commit_sha),
