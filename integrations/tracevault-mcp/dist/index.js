@@ -11,8 +11,9 @@
  * Configuration (searched in order):
  *   1. Environment variables: TRACEVAULT_SERVER_URL, TRACEVAULT_TOKEN,
  *      TRACEVAULT_ORG_SLUG
- *   2. .tracevault/config.toml in the current working directory
- *   3. ~/.config/tracevault/config.toml
+ *   2. ~/.config/tracevault/credentials.json (written by `tracevault login`)
+ *      combined with .tracevault/config.toml for org_slug
+ *   3. TRACEVAULT_API_KEY env var + .tracevault/config.toml (API key auth)
  *
  * Usage:
  *   # Add to .mcp.json or .claude/settings.json:
@@ -51,59 +52,94 @@ function parseToml(content) {
     }
     return result;
 }
+function loadCredentials() {
+    const path = join(homedir(), ".config", "tracevault", "credentials.json");
+    if (!existsSync(path))
+        return null;
+    try {
+        return JSON.parse(readFileSync(path, "utf8"));
+    }
+    catch {
+        return null;
+    }
+}
+function loadTomlConfig(filePath) {
+    if (!existsSync(filePath))
+        return null;
+    try {
+        return parseToml(readFileSync(filePath, "utf8"));
+    }
+    catch (err) {
+        process.stderr.write(`[tracevault-mcp] Failed to parse ${filePath}: ${err instanceof Error ? err.message : String(err)}\n`);
+        return null;
+    }
+}
 function loadConfig() {
-    // 1. Environment variables take precedence
+    // 1. Explicit env vars take full precedence
     const envUrl = process.env.TRACEVAULT_SERVER_URL;
-    const envToken = process.env.TRACEVAULT_TOKEN;
+    const envToken = process.env.TRACEVAULT_TOKEN ?? process.env.TRACEVAULT_API_KEY;
     const envOrg = process.env.TRACEVAULT_ORG_SLUG;
-    if (envUrl && envOrg) {
-        if (!envToken) {
-            throw new Error("TraceVault MCP: TRACEVAULT_TOKEN env var is required when using env var config.");
-        }
+    if (envUrl && envToken && envOrg) {
         return {
             serverUrl: envUrl.replace(/\/$/, ""),
             token: envToken,
             orgSlug: envOrg,
         };
     }
-    // 2. Config file
+    // 2. credentials.json (written by `tracevault login`) + config.toml for org_slug
+    const creds = loadCredentials();
     const cwd = process.cwd();
-    const candidates = [
-        join(cwd, ".tracevault", "config.toml"),
-        join(homedir(), ".config", "tracevault", "config.toml"),
-    ];
-    for (const path of candidates) {
-        if (!existsSync(path))
-            continue;
-        try {
-            const cfg = parseToml(readFileSync(path, "utf8"));
-            if (cfg.server_url && cfg.org_slug && cfg.token) {
-                return {
-                    serverUrl: cfg.server_url.replace(/\/$/, ""),
-                    token: cfg.token,
-                    orgSlug: cfg.org_slug,
-                };
-            }
-        }
-        catch (err) {
-            process.stderr.write(`[tracevault-mcp] Failed to parse config at ${path}: ${err instanceof Error ? err.message : String(err)}\n`);
+    const localCfg = loadTomlConfig(join(cwd, ".tracevault", "config.toml"));
+    if (creds) {
+        // org_slug comes from local config.toml; fall back to env var
+        const orgSlug = localCfg?.org_slug ?? envOrg;
+        if (orgSlug) {
+            return {
+                serverUrl: (envUrl ?? creds.server_url).replace(/\/$/, ""),
+                token: envToken ?? creds.token,
+                orgSlug,
+            };
         }
     }
-    throw new Error("TraceVault MCP: no valid configuration found.\n" +
-        "Set TRACEVAULT_SERVER_URL, TRACEVAULT_TOKEN (required), TRACEVAULT_ORG_SLUG env vars\n" +
-        "or create .tracevault/config.toml with server_url, token (required), and org_slug.");
+    // 3. config.toml with api_key (non-interactive / CI setup)
+    if (localCfg?.server_url && localCfg?.org_slug && (envToken ?? localCfg?.api_key)) {
+        return {
+            serverUrl: localCfg.server_url.replace(/\/$/, ""),
+            token: envToken ?? localCfg.api_key,
+            orgSlug: localCfg.org_slug,
+        };
+    }
+    throw new Error("TraceVault MCP: no valid configuration found.\n\n" +
+        "Option A — run `tracevault login` in the repo directory (recommended).\n" +
+        "Option B — set env vars: TRACEVAULT_SERVER_URL, TRACEVAULT_TOKEN, TRACEVAULT_ORG_SLUG.\n" +
+        "Option C — add api_key and org_slug to .tracevault/config.toml.");
 }
 async function askTracevault(cfg, question) {
     const url = `${cfg.serverUrl}/api/v1/orgs/${cfg.orgSlug}/chat/ask`;
     const headers = {
         "Content-Type": "application/json",
+        "Authorization": `Bearer ${cfg.token}`,
     };
-    headers["Authorization"] = `Bearer ${cfg.token}`;
-    const response = await fetch(url, {
-        method: "POST",
-        headers,
-        body: JSON.stringify({ question }),
-    });
+    const abort = new AbortController();
+    const timeout = setTimeout(() => abort.abort(), 30_000);
+    let response;
+    try {
+        response = await fetch(url, {
+            method: "POST",
+            headers,
+            body: JSON.stringify({ question }),
+            signal: abort.signal,
+        });
+    }
+    catch (err) {
+        if (err.name === "AbortError") {
+            throw new McpError(ErrorCode.InternalError, "TraceVault request timed out after 30s");
+        }
+        throw err;
+    }
+    finally {
+        clearTimeout(timeout);
+    }
     if (!response.ok) {
         const text = await response.text().catch(() => "");
         if (response.status === 403) {
@@ -123,8 +159,10 @@ async function askTracevault(cfg, question) {
 function formatResponse(resp) {
     let out = resp.answer;
     if (resp.sources.length > 0) {
-        out += "\n\n---\n**Sources**\n";
-        for (const s of resp.sources.slice(0, 5)) {
+        const shown = resp.sources.slice(0, 5);
+        const extra = resp.sources.length - shown.length;
+        out += `\n\n---\n**Sources** (${shown.length}${extra > 0 ? ` of ${resp.sources.length}` : ""})\n`;
+        for (const s of shown) {
             const when = s.started_at
                 ? new Date(s.started_at).toLocaleDateString()
                 : "unknown date";
