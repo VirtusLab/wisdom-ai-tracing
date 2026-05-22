@@ -28,7 +28,7 @@
  */
 
 import { readFileSync, writeFileSync, mkdirSync, existsSync, appendFileSync } from "fs";
-import { resolve, dirname } from "path";
+import { resolve, relative, dirname, isAbsolute } from "path";
 import { fileURLToPath } from "url";
 import { randomUUID } from "crypto";
 import { spawnSync } from "child_process";
@@ -54,7 +54,13 @@ function getOrCreateSessionId() {
 
 /** Full path to the local session directory inside .tracevault/sessions/<id>/ */
 function sessionDir(sessionId) {
-  return resolve(REPO_ROOT, ".tracevault/sessions", sessionId);
+  const base = resolve(REPO_ROOT, ".tracevault/sessions");
+  const target = resolve(base, sessionId);
+  const rel = relative(base, target);
+  if (rel.startsWith("..") || isAbsolute(rel)) {
+    throw new Error(`Invalid session identifier: ${sessionId}`);
+  }
+  return target;
 }
 
 /** Full path to the synthetic transcript file for this session. */

@@ -25,7 +25,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod";
 import { spawn } from "child_process";
 import { readFileSync, existsSync } from "fs";
-import { resolve, dirname } from "path";
+import { resolve, relative, dirname, isAbsolute } from "path";
 import { fileURLToPath } from "url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -73,6 +73,11 @@ async function getDiff(range) {
 /** Read a file relative to repo root, return content or an error note. */
 function readFile(relPath) {
   const abs = resolve(REPO_ROOT, relPath);
+  // Guard against path traversal: resolved path must stay within REPO_ROOT
+  const rel = relative(REPO_ROOT, abs);
+  if (rel.startsWith("..") || isAbsolute(rel)) {
+    return `(file path rejected: ${relPath})`;
+  }
   if (!existsSync(abs)) return `(file not found: ${relPath})`;
   try {
     const content = readFileSync(abs, "utf8");
@@ -167,8 +172,12 @@ Parameters:
     }
 
     // Build the file context section
+    // Filter out any paths that would escape the repo root before reading
     const fileContext = files
       .map((f) => {
+        if (isAbsolute(f) || f.includes("..")) {
+          return `### ${f}\n\`\`\`\n(file path rejected)\n\`\`\``;
+        }
         const content = readFile(f);
         return `### ${f}\n\`\`\`\n${content}\n\`\`\``;
       })
