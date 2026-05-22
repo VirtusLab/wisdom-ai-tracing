@@ -91,17 +91,23 @@ function loadTomlConfig(filePath: string): Record<string, string> | null {
   try {
     return parseToml(readFileSync(filePath, "utf8"));
   } catch (err) {
-    process.stderr.write(`[tracevault-mcp] Failed to parse ${filePath}: ${err instanceof Error ? err.message : String(err)}\n`);
+    // Config file exists but failed to read or parse — log and continue
+    process.stderr.write(`[tracevault-mcp] Failed to load config from ${filePath}: ${err instanceof Error ? err.message : String(err)}\n`);
     return null;
   }
 }
 
 function loadConfig(): Config {
-  // 1. Explicit env vars take full precedence
+  // 1. Explicit env vars take full precedence — all three must be present
   const envUrl = process.env.TRACEVAULT_SERVER_URL;
   const envToken = process.env.TRACEVAULT_TOKEN ?? process.env.TRACEVAULT_API_KEY;
   const envOrg = process.env.TRACEVAULT_ORG_SLUG;
-  if (envUrl && envToken && envOrg) {
+  if (envUrl || envOrg) {
+    // Partial env var config — require all three to be explicit to avoid
+    // silently mixing env + file config in unexpected ways
+    if (!envUrl) throw new Error("TraceVault MCP: TRACEVAULT_SERVER_URL is required when using env var config.");
+    if (!envToken) throw new Error("TraceVault MCP: TRACEVAULT_TOKEN (or TRACEVAULT_API_KEY) is required when using env var config.");
+    if (!envOrg) throw new Error("TraceVault MCP: TRACEVAULT_ORG_SLUG is required when using env var config.");
     return {
       serverUrl: envUrl.replace(/\/$/, ""),
       token: envToken,
@@ -225,7 +231,8 @@ function formatResponse(resp: AskResponse): string {
   if (resp.sources.length > 0) {
     const shown = resp.sources.slice(0, 5);
     const extra = resp.sources.length - shown.length;
-    out += `\n\n---\n**Sources** (${shown.length}${extra > 0 ? ` of ${resp.sources.length}` : ""})\n`;
+    const countSuffix = extra > 0 ? ` of ${resp.sources.length}` : "";
+    out += `\n\n---\n**Sources** (${shown.length}${countSuffix})\n`;
     for (const s of shown) {
       const when = s.started_at
         ? new Date(s.started_at).toLocaleDateString()
