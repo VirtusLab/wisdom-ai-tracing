@@ -5,6 +5,7 @@
 	import { formatDate } from '$lib/utils/date';
 	import ChevronLeftIcon from '@lucide/svelte/icons/chevron-left';
 	import ChevronRightIcon from '@lucide/svelte/icons/chevron-right';
+	import ShieldIcon from '@lucide/svelte/icons/shield';
 	import { api } from '$lib/api';
 
 	interface Policy {
@@ -152,10 +153,15 @@
 							<Table.Row class="hover:bg-muted/40 transition-colors">
 								<Table.Cell class="text-xs whitespace-nowrap">{formatDate(ev.evaluated_at)}</Table.Cell>
 								<Table.Cell class="text-xs font-medium">
-									{ev.policy_name}
-									{#if ev.policy_id === null && !ev.is_synthetic}
-										<span class="text-muted-foreground text-[10px]"> (deleted)</span>
-									{/if}
+									<span class="inline-flex items-center gap-1">
+										{#if ev.is_synthetic}
+											<ShieldIcon class="text-muted-foreground h-3 w-3 shrink-0" />
+										{/if}
+										{ev.policy_name}
+										{#if ev.policy_id === null && !ev.is_synthetic}
+											<span class="text-muted-foreground text-[10px]">(deleted)</span>
+										{/if}
+									</span>
 								</Table.Cell>
 								<Table.Cell class="text-xs">
 									<span class="rounded-full px-2 py-0.5 text-[10px]" style={resultPillStyle(ev.result)}>
