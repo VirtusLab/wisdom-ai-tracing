@@ -251,6 +251,7 @@ pub async fn verify_commits(
                 &details,
                 "ci_verify",
                 actor_for_log,
+                false,
             )
             .await
             {
