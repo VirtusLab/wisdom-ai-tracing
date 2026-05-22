@@ -285,9 +285,9 @@
 							{{ disabled: 'Disabled', warn: 'Warn', block: 'Block Push' }[validationWindowMode] ?? validationWindowMode}
 						</Select.Trigger>
 						<Select.Content>
-							<Select.Item value="disabled">Disabled — no window enforcement (default)</Select.Item>
-							<Select.Item value="warn">Warn — flag unknown tools but allow push</Select.Item>
-							<Select.Item value="block">Block Push — unknown tools block the push</Select.Item>
+							<Select.Item value="disabled">Disabled</Select.Item>
+							<Select.Item value="warn">Warn</Select.Item>
+							<Select.Item value="block">Block Push</Select.Item>
 						</Select.Content>
 					</Select.Root>
 				</div>
