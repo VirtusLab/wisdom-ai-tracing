@@ -233,7 +233,7 @@
 							<Select.Content>
 								<Select.Item value="block_push">Block Push</Select.Item>
 								<Select.Item value="warn">Warn</Select.Item>
-								<Select.Item value="allow">Allow (permitted in validation window, no count required)</Select.Item>
+								<Select.Item value="allow">Allow</Select.Item>
 							</Select.Content>
 						</Select.Root>
 					</div>
@@ -241,11 +241,11 @@
 					<div class="grid gap-2">
 						<Label>Scope</Label>
 						<Select.Root type="single" value={newScope} onValueChange={(v) => { if (v) newScope = v; }}>
-							<Select.Trigger>{{ session: 'Session (whole push)', validation_window: 'Validation Window only', both: 'Both' }[newScope] ?? newScope}</Select.Trigger>
+							<Select.Trigger>{{ session: 'Session', validation_window: 'Validation Window', both: 'Both' }[newScope] ?? newScope}</Select.Trigger>
 							<Select.Content>
-								<Select.Item value="session">Session — evaluated over entire push window (default)</Select.Item>
-								<Select.Item value="validation_window">Validation Window — evaluated only inside declared window</Select.Item>
-								<Select.Item value="both">Both — evaluated in session and validation window</Select.Item>
+								<Select.Item value="session">Session</Select.Item>
+								<Select.Item value="validation_window">Validation Window</Select.Item>
+								<Select.Item value="both">Both</Select.Item>
 							</Select.Content>
 						</Select.Root>
 						<p class="text-xs text-muted-foreground">Use <em>Validation Window</em> with <code>tracevault validation-start</code> to enforce checks run after code changes.</p>
