@@ -1,4 +1,4 @@
-# TraceVault
+# Visdom Trace
 
 > **Research Preview** — This project is under heavy development. APIs, configuration, and features may change significantly between releases.
 
@@ -14,7 +14,7 @@ Built for financial institutions and regulated industries where AI-generated cod
 
 ### 1. Capture — Full Session Tracing
 
-Record every AI interaction with full fidelity. TraceVault hooks into AI coding agents and automatically captures session transcripts, token breakdowns (input/output/cache per model), every tool call invocation, file modifications with diffs, and cost estimates. Secrets and credentials are redacted before storage.
+Record every AI interaction with full fidelity. Visdom Trace hooks into AI coding agents and automatically captures session transcripts, token breakdowns (input/output/cache per model), every tool call invocation, file modifications with diffs, and cost estimates. Secrets and credentials are redacted before storage.
 
 Nothing to configure — once initialized, capture is automatic and invisible.
 
@@ -106,7 +106,7 @@ This starts three containers:
 | Service | URL | Description |
 |---------|-----|-------------|
 | `db` | `localhost:5432` | PostgreSQL 16 |
-| `server` | `localhost:3000` | TraceVault API server |
+| `server` | `localhost:3000` | Visdom Trace API server |
 | `web` | `localhost:5173` | SvelteKit web dashboard |
 
 Database migrations run automatically on startup. Open `http://localhost:5173` to access the dashboard.
@@ -180,7 +180,7 @@ docker compose -f docker-compose.test.yml down
 
 The test database runs on port **5433** with separate credentials (`tracevault_test`), so it won't conflict with the dev database on port 5432.
 
-### 6. Initialize TraceVault in a repository
+### 6. Initialize Visdom Trace in a repository
 
 ```sh
 cd /path/to/your/repo
@@ -232,7 +232,7 @@ The command also installs the Claude Code hook configuration. By default it writ
 ### 7. Authenticate
 
 ```sh
-# Log in to a TraceVault server.
+# Log in to a Visdom Trace server.
 # Prints an auth URL and attempts to open it in your default browser.
 # In Docker/CI/SSH-without-X11 the browser open is skipped automatically —
 # copy the printed URL into a browser on your workstation. You can also
@@ -254,7 +254,7 @@ tracevault verify --range HEAD~5..HEAD
 
 ## Using with Claude Code
 
-TraceVault is designed to work with [Claude Code](https://docs.anthropic.com/en/docs/claude-code) (Anthropic's CLI for Claude). Here's how to get started:
+Visdom Trace is designed to work with [Claude Code](https://docs.anthropic.com/en/docs/claude-code) (Anthropic's CLI for Claude). Here's how to get started:
 
 ### 1. Install Claude Code
 
@@ -270,7 +270,7 @@ claude login
 
 This opens a browser for authentication with your Anthropic account.
 
-### 3. Initialize TraceVault in your repo
+### 3. Initialize Visdom Trace in your repo
 
 ```sh
 cd /path/to/your/repo
@@ -278,11 +278,11 @@ tracevault login --server-url https://your-tracevault-server.example.com
 tracevault init
 ```
 
-That's it. From this point on, every Claude Code session in this repo is automatically traced — tool calls, file edits, token usage, and model info are captured and streamed to the TraceVault server as they happen. When you `git push`, the pre-push hook evaluates policies and blocks the push if any rule fails.
+That's it. From this point on, every Claude Code session in this repo is automatically traced — tool calls, file edits, token usage, and model info are captured and streamed to the Visdom Trace server as they happen. When you `git push`, the pre-push hook evaluates policies and blocks the push if any rule fails.
 
 ### 4. Install project-local MCP tools
 
-This repo ships a project-local MCP server (`tools/cargo-mcp/`) that Claude Code picks up automatically via `.mcp.json`. It exposes two tools used by TraceVault policies:
+This repo ships a project-local MCP server (`tools/cargo-mcp/`) that Claude Code picks up automatically via `.mcp.json`. It exposes two tools used by Visdom Trace policies:
 
 - **`cargo_fmt`** — runs `cargo fmt` to format all Rust files in place. The policy requires this tool to be called before committing.
 - **`cargo_check`** — runs `cargo clippy` then `cargo test`. Returns an error result if either fails. The policy requires this tool to be called *and* to succeed before pushing.
@@ -347,7 +347,7 @@ export DATABASE_URL=postgres://user:password@host:5432/tracevault?sslmode=requir
 
 | Command | Description |
 |---------|-------------|
-| `tracevault init [--server-url URL] [--claude-settings shared\|local]` | Initialize TraceVault in current repo, install pre-push hook and Claude Code hooks. `--claude-settings` chooses between `.claude/settings.json` (default) and `.claude/settings.local.json`; prompts interactively if omitted on a TTY |
+| `tracevault init [--server-url URL] [--claude-settings shared\|local]` | Initialize Visdom Trace in current repo, install pre-push hook and Claude Code hooks. `--claude-settings` chooses between `.claude/settings.json` (default) and `.claude/settings.local.json`; prompts interactively if omitted on a TTY |
 | `tracevault login --server-url URL [--no-browser]` | Authenticate via device auth flow. Prints the URL and opens a browser when possible; `--no-browser` (or a headless env) skips the auto-open. |
 | `tracevault logout` | Clear local credentials |
 | `tracevault stream --event <type>` | Handle a Claude Code hook event (reads JSON from stdin) and stream it to the server |
@@ -425,7 +425,7 @@ Add to your workflow to verify that commits in a PR or push have corresponding t
     api-key: ${{ secrets.TRACEVAULT_API_KEY }}
 ```
 
-The action installs the TraceVault CLI, detects the commit range from the PR or push event, runs `tracevault verify --range`, and writes a pass/fail summary to the GitHub Actions step summary.
+The action installs the Visdom Trace CLI, detects the commit range from the PR or push event, runs `tracevault verify --range`, and writes a pass/fail summary to the GitHub Actions step summary.
 
 ## Configuration
 

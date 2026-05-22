@@ -2,7 +2,7 @@
 
 ## Reporting a Vulnerability
 
-If you discover a security vulnerability in TraceVault, please report it through GitHub's private vulnerability reporting feature.
+If you discover a security vulnerability in Visdom Trace, please report it through GitHub's private vulnerability reporting feature.
 
 **Do not open a public issue for security vulnerabilities.**
 

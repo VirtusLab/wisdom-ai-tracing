@@ -1,12 +1,12 @@
 # Individual Contributor License Agreement
 
-Thank you for your interest in contributing to TraceVault, developed by SoftwareMill sp. z o.o. ("SoftwareMill").
+Thank you for your interest in contributing to Visdom Trace, developed by SoftwareMill sp. z o.o. ("SoftwareMill").
 
 By signing this Contributor License Agreement ("Agreement"), you accept and agree to the following terms for your present and future contributions submitted to SoftwareMill. This agreement is for your protection as a contributor as well as the protection of SoftwareMill and its users; it does not change your rights to use your own contributions for any other purpose.
 
 ## 1. Definitions
 
-"Contribution" means any original work of authorship, including any modifications or additions to an existing work, that you intentionally submit to SoftwareMill for inclusion in the TraceVault project. "Submit" means any form of electronic or written communication sent to SoftwareMill, including but not limited to pull requests, issues, and comments on the project's GitHub repository.
+"Contribution" means any original work of authorship, including any modifications or additions to an existing work, that you intentionally submit to SoftwareMill for inclusion in the Visdom Trace project. "Submit" means any form of electronic or written communication sent to SoftwareMill, including but not limited to pull requests, issues, and comments on the project's GitHub repository.
 
 ## 2. Grant of Copyright License
 
