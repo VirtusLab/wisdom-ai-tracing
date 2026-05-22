@@ -84,7 +84,7 @@ pub fn drain_pending(pending_path: &Path) -> Result<Vec<String>, io::Error> {
     Ok(lines)
 }
 
-pub async fn run_stream(_cwd: &Path, event_type: &str) -> Result<(), Box<dyn std::error::Error>> {
+pub async fn run_stream(event_type: &str) -> Result<(), Box<dyn std::error::Error>> {
     // 1. Read HookEvent from stdin
     let mut input = String::new();
     io::stdin().read_to_string(&mut input)?;
