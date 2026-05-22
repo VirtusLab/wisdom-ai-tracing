@@ -84,14 +84,19 @@ pub fn drain_pending(pending_path: &Path) -> Result<Vec<String>, io::Error> {
     Ok(lines)
 }
 
-pub async fn run_stream(
-    project_root: &Path,
-    event_type: &str,
-) -> Result<(), Box<dyn std::error::Error>> {
+pub async fn run_stream(_cwd: &Path, event_type: &str) -> Result<(), Box<dyn std::error::Error>> {
     // 1. Read HookEvent from stdin
     let mut input = String::new();
     io::stdin().read_to_string(&mut input)?;
     let hook_event = parse_hook_event(&input)?;
+
+    // Resolve project_root from hook_event.cwd (the repo directory Claude Code reports),
+    // walking up to find the nearest .tracevault/ directory. Falls back to cwd if not found.
+    let hook_cwd = Path::new(&hook_event.cwd);
+    let project_root = hook_cwd
+        .ancestors()
+        .find(|p| p.join(".tracevault").exists())
+        .unwrap_or(hook_cwd);
 
     // 2. Create session dir
     let session_dir = project_root
