@@ -84,12 +84,7 @@ impl PolicyRepo {
                 DateTime<Utc>,
                 DateTime<Utc>,
             ),
-        >(
-            "SELECT id, org_id, repo_id, name, description, condition, action, severity, scope, enabled, created_at, updated_at
-             FROM policies
-             WHERE org_id = $1 AND (repo_id = $2 OR repo_id IS NULL)
-             ORDER BY created_at",
-        )
+        >(include_str!("sql/list_policies_for_repo.sql"))
         .bind(org_id)
         .bind(repo_id)
         .fetch_all(pool)
@@ -128,11 +123,9 @@ impl PolicyRepo {
         scope: &str,
         enabled: bool,
     ) -> Result<(Uuid, DateTime<Utc>, DateTime<Utc>), AppError> {
-        let row = sqlx::query_as::<_, (Uuid, DateTime<Utc>, DateTime<Utc>)>(
-            "INSERT INTO policies (org_id, repo_id, name, description, condition, action, severity, scope, enabled)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-             RETURNING id, created_at, updated_at",
-        )
+        let row = sqlx::query_as::<_, (Uuid, DateTime<Utc>, DateTime<Utc>)>(include_str!(
+            "sql/insert_policy.sql"
+        ))
         .bind(org_id)
         .bind(repo_id)
         .bind(name)
@@ -177,19 +170,7 @@ impl PolicyRepo {
                 DateTime<Utc>,
                 DateTime<Utc>,
             ),
-        >(
-            "UPDATE policies SET
-                name = COALESCE($3, name),
-                description = COALESCE($4, description),
-                condition = COALESCE($5, condition),
-                action = COALESCE($6, action),
-                severity = COALESCE($7, severity),
-                scope = COALESCE($8, scope),
-                enabled = COALESCE($9, enabled),
-                updated_at = NOW()
-             WHERE id = $1 AND org_id = $2
-             RETURNING org_id, repo_id, name, description, condition, action, severity, scope, enabled, created_at, updated_at",
-        )
+        >(include_str!("sql/update_policy.sql"))
         .bind(id)
         .bind(org_id)
         .bind(name)
@@ -236,10 +217,7 @@ impl PolicyRepo {
         repo_id: Uuid,
     ) -> Result<Vec<(Uuid, String, serde_json::Value, String, String, String)>, AppError> {
         let rows = sqlx::query_as::<_, (Uuid, String, serde_json::Value, String, String, String)>(
-            "SELECT id, name, condition, action, severity, scope
-             FROM policies
-             WHERE org_id = $1 AND (repo_id = $2 OR repo_id IS NULL) AND enabled = true
-             ORDER BY created_at",
+            include_str!("sql/list_enabled_policies_for_check.sql"),
         )
         .bind(org_id)
         .bind(repo_id)
