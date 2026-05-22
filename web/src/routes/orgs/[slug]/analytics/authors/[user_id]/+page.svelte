@@ -3,6 +3,7 @@
 	import { useFetch } from '$lib/hooks/use-fetch.svelte';
 	import { fmtNum, fmtCost, fmtDuration, fmtRelativeTime } from '$lib/utils/format';
 	import StatCard from '$lib/components/StatCard.svelte';
+	import SplitStatCard from '$lib/components/SplitStatCard.svelte';
 	import HelpTip from '$lib/components/HelpTip.svelte';
 	import DataTable from '$lib/components/DataTable.svelte';
 	import LoadingState from '$lib/components/LoadingState.svelte';
@@ -38,6 +39,10 @@
 		user: { user_id: string; email: string; name: string | null };
 		sessions: number;
 		tokens: number;
+		input_tokens: number;
+		output_tokens: number;
+		cache_read_tokens: number;
+		cache_write_tokens: number;
 		cost_usd: number;
 		avg_duration_ms: number | null;
 		total_tool_calls: number;
@@ -46,6 +51,9 @@
 		top_ai_tools: AiToolEntry[];
 		recent_sessions: RecentSession[];
 	}
+
+	// Sonnet rate weights for proportional cost split (same as main analytics page)
+	const rates = { input: 3, output: 15, cacheWrite: 3.75, cacheRead: 0.3 };
 
 	let expandedSessionId = $state<string | null>(null);
 
@@ -86,10 +94,28 @@
 			{/if}
 		</div>
 
+		{@const tokenRows = [
+				{ label: 'Input', value: fmtNum(data.input_tokens) },
+				{ label: 'Output', value: fmtNum(data.output_tokens) },
+				{ label: 'Cache write', value: fmtNum(data.cache_write_tokens) },
+				{ label: 'Cache read', value: fmtNum(data.cache_read_tokens) }
+			]}
+		{@const weighted =
+				data.input_tokens * rates.input +
+				data.output_tokens * rates.output +
+				data.cache_write_tokens * rates.cacheWrite +
+				data.cache_read_tokens * rates.cacheRead}
+		{@const c = data.cost_usd}
+		{@const costRows = weighted > 0 ? [
+				{ label: 'Input', value: fmtCost((data.input_tokens * rates.input / weighted) * c) },
+				{ label: 'Output', value: fmtCost((data.output_tokens * rates.output / weighted) * c) },
+				{ label: 'Cache write', value: fmtCost((data.cache_write_tokens * rates.cacheWrite / weighted) * c) },
+				{ label: 'Cache read', value: fmtCost((data.cache_read_tokens * rates.cacheRead / weighted) * c) }
+			] : []}
 		<div class="grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-5">
 			<StatCard label="Sessions" value={fmtNum(data.sessions)} icon={MonitorPlayIcon} color="#3b82f6" tooltip="Total AI coding sessions." />
-			<StatCard label="Tokens" value={fmtNum(data.tokens)} icon={CoinsIcon} color="#f59e0b" tooltip="Total tokens consumed." />
-			<StatCard label="Cost" value={fmtCost(data.cost_usd)} icon={DollarSignIcon} color="#dc2626" tooltip="Total estimated cost." />
+			<SplitStatCard label="Tokens" value={fmtNum(data.tokens)} icon={CoinsIcon} color="#f59e0b" tooltip="Total tokens consumed across all sessions." rows={tokenRows} />
+			<SplitStatCard label="Cost" value={fmtCost(data.cost_usd)} icon={DollarSignIcon} color="#dc2626" tooltip="Total estimated cost based on token usage and model pricing." rows={costRows} />
 			<StatCard label="Avg Duration" value={fmtDuration(data.avg_duration_ms)} icon={ClockIcon} color="#06b6d4" tooltip="Average session duration." />
 			<StatCard label="Tool Calls" value={fmtNum(data.total_tool_calls)} icon={WrenchIcon} color="#10b981" tooltip="Total tool invocations." />
 		</div>
