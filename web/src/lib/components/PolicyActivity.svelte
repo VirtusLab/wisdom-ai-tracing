@@ -107,7 +107,7 @@
 		evaluations.filter((ev) => {
 			if (selectedResults.length > 0 && !selectedResults.includes(ev.result)) return false;
 			if (selectedActions.length > 0 && !selectedActions.includes(ev.action)) return false;
-			if (selectedPolicyIds.length > 0 && ev.policy_id && !selectedPolicyIds.includes(ev.policy_id)) return false;
+			if (selectedPolicyIds.length > 0 && (ev.policy_id === null || !selectedPolicyIds.includes(ev.policy_id))) return false;
 			return true;
 		})
 	);
