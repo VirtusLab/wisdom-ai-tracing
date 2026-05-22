@@ -152,7 +152,7 @@
 								<Table.Cell class="text-xs whitespace-nowrap">{formatDate(ev.evaluated_at)}</Table.Cell>
 								<Table.Cell class="text-xs font-medium">
 									{ev.policy_name}
-									{#if ev.policy_id === null}
+									{#if ev.policy_id === null && ev.policy_name !== 'validation_window_gate'}
 										<span class="text-muted-foreground text-[10px]"> (deleted)</span>
 									{/if}
 								</Table.Cell>
