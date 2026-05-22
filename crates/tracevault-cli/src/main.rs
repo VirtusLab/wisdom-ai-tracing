@@ -130,8 +130,7 @@ async fn main() {
             }
         }
         Cli::Stream { event } => {
-            let cwd = env::current_dir().expect("Cannot determine current directory");
-            if let Err(e) = commands::stream::run_stream(&cwd, &event).await {
+            if let Err(e) = commands::stream::run_stream(&event).await {
                 eprintln!("Stream error: {e}");
             }
         }
