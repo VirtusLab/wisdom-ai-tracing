@@ -208,7 +208,7 @@ async fn insert_and_list_evaluations(pool: sqlx::PgPool) {
             &pool,
             org_id,
             repo_id,
-            policy_id,
+            Some(policy_id),
             "trace-complete",
             Some("session-xyz"),
             Some("abcdef1234"),
@@ -217,6 +217,7 @@ async fn insert_and_list_evaluations(pool: sqlx::PgPool) {
             details,
             "cli_check",
             None,
+            false,
         )
         .await
         .unwrap();
@@ -295,7 +296,7 @@ async fn evaluation_row_survives_policy_delete(pool: sqlx::PgPool) {
         &pool,
         org_id,
         repo_id,
-        policy_id,
+        Some(policy_id),
         "will-be-deleted",
         None,
         None,
@@ -304,6 +305,7 @@ async fn evaluation_row_survives_policy_delete(pool: sqlx::PgPool) {
         "",
         "cli_check",
         None,
+        false,
     )
     .await
     .unwrap();
