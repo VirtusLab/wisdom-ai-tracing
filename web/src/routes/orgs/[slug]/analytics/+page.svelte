@@ -2,6 +2,7 @@
 	import { page } from '$app/stores';
 	import { useFetch } from '$lib/hooks/use-fetch.svelte';
 	import { fmtNum, fmtCost, fmtDuration } from '$lib/utils/format';
+	import { tokenSplitRows, costSplitRows } from '$lib/utils/token-cost';
 	import StatCard from '$lib/components/StatCard.svelte';
 	import SplitStatCard from '$lib/components/SplitStatCard.svelte';
 	import HelpTip from '$lib/components/HelpTip.svelte';
@@ -203,32 +204,26 @@
 	const tokenRows = $derived.by(() => {
 		const d = overview.data;
 		if (!d) return [];
-		return [
-			{ label: 'Input', value: fmtNum(d.total_input_tokens) },
-			{ label: 'Output', value: fmtNum(d.total_output_tokens) },
-			{ label: 'Cache write', value: fmtNum(d.total_cache_write_tokens) },
-			{ label: 'Cache read', value: fmtNum(d.total_cache_read_tokens) }
-		];
+		return tokenSplitRows({
+			input: d.total_input_tokens,
+			output: d.total_output_tokens,
+			cacheWrite: d.total_cache_write_tokens,
+			cacheRead: d.total_cache_read_tokens
+		});
 	});
 
 	const costRows = $derived.by(() => {
 		const d = overview.data;
 		if (!d) return [];
-		// Weight by Sonnet rates to apportion total cost per type (approximate — model mix varies)
-		const rates = { input: 3.0, output: 15.0, cacheWrite: 3.75, cacheRead: 0.30 };
-		const weighted =
-			d.total_input_tokens * rates.input +
-			d.total_output_tokens * rates.output +
-			d.total_cache_write_tokens * rates.cacheWrite +
-			d.total_cache_read_tokens * rates.cacheRead;
-		if (weighted === 0) return [];
-		const c = d.estimated_cost_usd;
-		return [
-			{ label: 'Input', value: fmtCost(((d.total_input_tokens * rates.input) / weighted) * c) },
-			{ label: 'Output', value: fmtCost(((d.total_output_tokens * rates.output) / weighted) * c) },
-			{ label: 'Cache write', value: fmtCost(((d.total_cache_write_tokens * rates.cacheWrite) / weighted) * c) },
-			{ label: 'Cache read', value: fmtCost(((d.total_cache_read_tokens * rates.cacheRead) / weighted) * c) }
-		];
+		return costSplitRows(
+			{
+				input: d.total_input_tokens,
+				output: d.total_output_tokens,
+				cacheWrite: d.total_cache_write_tokens,
+				cacheRead: d.total_cache_read_tokens
+			},
+			d.estimated_cost_usd
+		);
 	});
 
 	const savingsRows = $derived.by(() => {
