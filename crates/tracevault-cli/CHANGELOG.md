@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.15.0](https://github.com/softwaremill/tracevault/compare/v0.14.0...v0.15.0) - 2026-05-22
+
+### Changed
+
+- *(cli)* remove unused _cwd param from run_stream
+
+### Documentation
+
+- rename product TraceVault → Visdom Trace across all documentation
+
+### Fixed
+
+- *(cli)* resolve project_root from hook_event.cwd instead of process cwd
+
 ## [0.14.0](https://github.com/softwaremill/tracevault/compare/v0.13.0...v0.14.0) - 2026-05-22
 
 ### Added
