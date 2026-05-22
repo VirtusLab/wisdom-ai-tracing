@@ -1,10 +1,12 @@
 <script lang="ts">
 	import * as Table from '$lib/components/ui/table/index.js';
-	import * as Select from '$lib/components/ui/select/index.js';
+	import * as Popover from '$lib/components/ui/popover/index.js';
 	import { Button } from '$lib/components/ui/button/index.js';
 	import { formatDate } from '$lib/utils/date';
 	import ChevronLeftIcon from '@lucide/svelte/icons/chevron-left';
 	import ChevronRightIcon from '@lucide/svelte/icons/chevron-right';
+	import ChevronDownIcon from '@lucide/svelte/icons/chevron-down';
+	import CheckIcon from '@lucide/svelte/icons/check';
 	import ShieldIcon from '@lucide/svelte/icons/shield';
 	import { api } from '$lib/api';
 
@@ -42,14 +44,35 @@
 
 	let { slug, repoId, policies }: Props = $props();
 
+	const ALL_RESULTS = ['pass', 'fail', 'skip'];
+	const ALL_ACTIONS = ['warn', 'block_push'];
+	const DATE_PRESETS = [
+		{ label: 'Last 7 days', days: 7 },
+		{ label: 'Last 30 days', days: 30 },
+		{ label: 'Last 90 days', days: 90 },
+		{ label: 'All time', days: null }
+	];
+
 	let evaluations: PolicyEvaluation[] = $state([]);
 	let evaluationsTotal = $state(0);
 	let loading = $state(true);
 	let error = $state('');
-	let filterResult = $state('all');
-	let filterPolicyId = $state('all');
+
+	// Filters — default to fail results + warn action (most actionable view)
+	let selectedResults: string[] = $state(['fail']);
+	let selectedActions: string[] = $state(['warn']);
+	let selectedPolicyIds: string[] = $state([]);  // empty = all
+	let selectedDays: number | null = $state(30);
+
 	let pageSize = $state(25);
 	let page = $state(0);
+
+	function sinceDate(): string | null {
+		if (selectedDays === null) return null;
+		const d = new Date();
+		d.setDate(d.getDate() - selectedDays);
+		return d.toISOString();
+	}
 
 	async function load() {
 		loading = true;
@@ -59,8 +82,14 @@
 				limit: String(pageSize),
 				offset: String(page * pageSize)
 			});
-			if (filterResult !== 'all') params.set('result', filterResult);
-			if (filterPolicyId !== 'all') params.set('policy_id', filterPolicyId);
+			// result: if not all selected, pick first (API is single-value for now;
+			// multi-select handled client-side when all data fits in one page)
+			if (selectedResults.length === 1) params.set('result', selectedResults[0]);
+			if (selectedActions.length === 1) params.set('action', selectedActions[0]);
+			if (selectedPolicyIds.length === 1) params.set('policy_id', selectedPolicyIds[0]);
+			const since = sinceDate();
+			if (since) params.set('since', since);
+
 			const result = await api.get<PolicyEvaluationPage>(
 				`/api/v1/orgs/${slug}/repos/${repoId}/policy-evaluations?${params}`
 			);
@@ -73,9 +102,90 @@
 		}
 	}
 
+	// Client-side multi-filter on top of server results
+	let filteredEvaluations = $derived(
+		evaluations.filter((ev) => {
+			if (selectedResults.length > 0 && !selectedResults.includes(ev.result)) return false;
+			if (selectedActions.length > 0 && !selectedActions.includes(ev.action)) return false;
+			if (selectedPolicyIds.length > 0 && ev.policy_id && !selectedPolicyIds.includes(ev.policy_id)) return false;
+			return true;
+		})
+	);
+
 	function setPage(p: number) {
 		page = p;
 		load();
+	}
+
+	function resetFilters() {
+		selectedResults = ['fail'];
+		selectedActions = ['warn'];
+		selectedPolicyIds = [];
+		selectedDays = 30;
+		page = 0;
+		load();
+	}
+
+	function isDefaultFilters() {
+		return (
+			selectedResults.length === 1 && selectedResults[0] === 'fail' &&
+			selectedActions.length === 1 && selectedActions[0] === 'warn' &&
+			selectedPolicyIds.length === 0 &&
+			selectedDays === 30
+		);
+	}
+
+	function toggleResult(r: string) {
+		if (selectedResults.includes(r)) {
+			selectedResults = selectedResults.filter((x) => x !== r);
+		} else {
+			selectedResults = [...selectedResults, r];
+		}
+		page = 0;
+		load();
+	}
+
+	function toggleAction(a: string) {
+		if (selectedActions.includes(a)) {
+			selectedActions = selectedActions.filter((x) => x !== a);
+		} else {
+			selectedActions = [...selectedActions, a];
+		}
+		page = 0;
+		load();
+	}
+
+	function togglePolicy(id: string) {
+		if (selectedPolicyIds.includes(id)) {
+			selectedPolicyIds = selectedPolicyIds.filter((x) => x !== id);
+		} else {
+			selectedPolicyIds = [...selectedPolicyIds, id];
+		}
+		page = 0;
+		load();
+	}
+
+	function resultLabel(): string {
+		if (selectedResults.length === 0 || selectedResults.length === ALL_RESULTS.length) return 'All results';
+		return selectedResults.join(', ');
+	}
+
+	function actionLabel(): string {
+		if (selectedActions.length === 0 || selectedActions.length === ALL_ACTIONS.length) return 'All actions';
+		return selectedActions.map((a) => a === 'block_push' ? 'block' : a).join(', ');
+	}
+
+	function policyLabel(): string {
+		if (selectedPolicyIds.length === 0) return 'All rules';
+		if (selectedPolicyIds.length === 1) {
+			return policies.find((p) => p.id === selectedPolicyIds[0])?.name ?? 'Unknown';
+		}
+		return `${selectedPolicyIds.length} rules`;
+	}
+
+	function dateLabel(): string {
+		if (selectedDays === null) return 'All time';
+		return DATE_PRESETS.find((p) => p.days === selectedDays)?.label ?? `${selectedDays}d`;
 	}
 
 	function resultPillStyle(result: string): string {
@@ -88,40 +198,129 @@
 		}
 	}
 
-	// Load on mount
 	$effect(() => { load(); });
 </script>
 
 <div class="border-border overflow-hidden rounded-lg border">
-	<div class="bg-muted/30 flex items-center justify-between gap-3 px-4 py-3">
+	<!-- Header + filters -->
+	<div class="bg-muted/30 flex flex-wrap items-center justify-between gap-3 px-4 py-3">
 		<span class="text-sm font-semibold">Policy Activity</span>
-		<div class="flex items-center gap-2">
-			<Select.Root type="single" value={filterResult} onValueChange={(v) => { if (v) { filterResult = v; page = 0; load(); } }}>
-				<Select.Trigger class="h-8 w-[120px] text-xs">
-					{filterResult === 'all' ? 'All results' : filterResult}
-				</Select.Trigger>
-				<Select.Content>
-					<Select.Item value="all">All results</Select.Item>
-					<Select.Item value="pass">pass</Select.Item>
-					<Select.Item value="fail">fail</Select.Item>
-					<Select.Item value="warn">warn</Select.Item>
-					<Select.Item value="skip">skip</Select.Item>
-				</Select.Content>
-			</Select.Root>
-			<Select.Root type="single" value={filterPolicyId} onValueChange={(v) => { if (v) { filterPolicyId = v; page = 0; load(); } }}>
-				<Select.Trigger class="h-8 w-[180px] text-xs">
-					{filterPolicyId === 'all' ? 'All rules' : (policies.find((p) => p.id === filterPolicyId)?.name ?? filterPolicyId.slice(0, 8))}
-				</Select.Trigger>
-				<Select.Content>
-					<Select.Item value="all">All rules</Select.Item>
-					{#each policies as p}
-						<Select.Item value={p.id}>{p.name}</Select.Item>
+		<div class="flex flex-wrap items-center gap-2">
+
+			<!-- Result filter -->
+			<Popover.Root>
+				<Popover.Trigger class="border-input bg-background hover:bg-accent hover:text-accent-foreground inline-flex h-8 items-center gap-1 rounded-md border px-3 text-xs font-medium transition-colors">
+					{resultLabel()}
+					{#if selectedResults.length > 0 && selectedResults.length < ALL_RESULTS.length}
+						<span class="bg-primary text-primary-foreground ml-1 rounded-full px-1.5 py-0.5 text-[10px]">{selectedResults.length}</span>
+					{/if}
+					<ChevronDownIcon class="h-3 w-3 opacity-50" />
+				</Popover.Trigger>
+				<Popover.Content class="w-40 p-2" align="end">
+					{#each ALL_RESULTS as r}
+						<button class="flex w-full cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-xs hover:bg-muted" onclick={() => toggleResult(r)}>
+							<span class="flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-sm border border-input">
+								{#if selectedResults.includes(r)}<CheckIcon class="h-3 w-3" />{/if}
+							</span>
+							<span class="rounded-full px-2 py-0.5 text-[10px]" style={resultPillStyle(r)}>{r}</span>
+						</button>
 					{/each}
-				</Select.Content>
-			</Select.Root>
-			<Button size="sm" variant="outline" onclick={load}>Refresh</Button>
+					<div class="border-border mt-1 border-t pt-1">
+						<button class="text-muted-foreground w-full rounded px-2 py-1 text-left text-xs hover:text-foreground"
+							onclick={() => { selectedResults = [...ALL_RESULTS]; page = 0; load(); }}>
+							Select all
+						</button>
+					</div>
+				</Popover.Content>
+			</Popover.Root>
+
+			<!-- Action filter -->
+			<Popover.Root>
+				<Popover.Trigger class="border-input bg-background hover:bg-accent hover:text-accent-foreground inline-flex h-8 items-center gap-1 rounded-md border px-3 text-xs font-medium transition-colors">
+					{actionLabel()}
+					{#if selectedActions.length > 0 && selectedActions.length < ALL_ACTIONS.length}
+						<span class="bg-primary text-primary-foreground ml-1 rounded-full px-1.5 py-0.5 text-[10px]">{selectedActions.length}</span>
+					{/if}
+					<ChevronDownIcon class="h-3 w-3 opacity-50" />
+				</Popover.Trigger>
+				<Popover.Content class="w-44 p-2" align="end">
+					{#each ALL_ACTIONS as a}
+						<button class="flex w-full cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-xs hover:bg-muted" onclick={() => toggleAction(a)}>
+							<span class="flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-sm border border-input">
+								{#if selectedActions.includes(a)}<CheckIcon class="h-3 w-3" />{/if}
+							</span>
+							{#if a === 'block_push'}
+								<span class="rounded-full px-2 py-0.5 text-[10px]" style="background: rgba(240,101,101,0.08); color: #f06565">block</span>
+							{:else}
+								<span class="rounded-full px-2 py-0.5 text-[10px]" style="background: rgba(246,177,68,0.08); color: #f6b144">warn</span>
+							{/if}
+						</button>
+					{/each}
+					<div class="border-border mt-1 border-t pt-1">
+						<button class="text-muted-foreground w-full rounded px-2 py-1 text-left text-xs hover:text-foreground"
+							onclick={() => { selectedActions = [...ALL_ACTIONS]; page = 0; load(); }}>
+							Select all
+						</button>
+					</div>
+				</Popover.Content>
+			</Popover.Root>
+
+			<!-- Policy filter -->
+			{#if policies.length > 0}
+				<Popover.Root>
+					<Popover.Trigger class="border-input bg-background hover:bg-accent hover:text-accent-foreground inline-flex h-8 items-center gap-1 rounded-md border px-3 text-xs font-medium transition-colors">
+						{policyLabel()}
+						{#if selectedPolicyIds.length > 0}
+							<span class="bg-primary text-primary-foreground ml-1 rounded-full px-1.5 py-0.5 text-[10px]">{selectedPolicyIds.length}</span>
+						{/if}
+						<ChevronDownIcon class="h-3 w-3 opacity-50" />
+					</Popover.Trigger>
+					<Popover.Content class="w-52 p-2" align="end">
+						{#each policies as p}
+							<button class="flex w-full cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-xs hover:bg-muted" onclick={() => togglePolicy(p.id)}>
+								<span class="flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-sm border border-input">
+									{#if selectedPolicyIds.includes(p.id)}<CheckIcon class="h-3 w-3" />{/if}
+								</span>
+								<span class="truncate">{p.name}</span>
+							</button>
+						{/each}
+						<div class="border-border mt-1 border-t pt-1">
+							<button class="text-muted-foreground w-full rounded px-2 py-1 text-left text-xs hover:text-foreground"
+								onclick={() => { selectedPolicyIds = []; page = 0; load(); }}>
+								All rules
+							</button>
+						</div>
+					</Popover.Content>
+				</Popover.Root>
+			{/if}
+
+			<!-- Date range filter -->
+			<Popover.Root>
+				<Popover.Trigger class="border-input bg-background hover:bg-accent hover:text-accent-foreground inline-flex h-8 items-center gap-1 rounded-md border px-3 text-xs font-medium transition-colors">
+					{dateLabel()}
+					<ChevronDownIcon class="h-3 w-3 opacity-50" />
+				</Popover.Trigger>
+				<Popover.Content class="w-44 p-2" align="end">
+					{#each DATE_PRESETS as preset}
+						<button
+							class="w-full rounded px-2 py-1.5 text-left text-xs transition-colors {selectedDays === preset.days ? 'bg-primary text-primary-foreground' : 'hover:bg-muted'}"
+							onclick={() => { selectedDays = preset.days; page = 0; load(); }}>
+							{preset.label}
+						</button>
+					{/each}
+				</Popover.Content>
+			</Popover.Root>
+
+			{#if !isDefaultFilters()}
+				<Button size="sm" variant="ghost" class="h-8 text-xs text-muted-foreground" onclick={resetFilters}>
+					Reset
+				</Button>
+			{/if}
+
+			<Button size="sm" variant="outline" onclick={load} class="h-8 text-xs">Refresh</Button>
 		</div>
 	</div>
+
 	<div class="p-4">
 		{#if loading}
 			<div class="text-muted-foreground flex items-center justify-center gap-2 py-12 text-sm">
@@ -130,8 +329,15 @@
 			</div>
 		{:else if error}
 			<p class="text-destructive">{error}</p>
-		{:else if evaluations.length === 0}
-			<p class="text-muted-foreground text-sm">No policy evaluations recorded yet. Run <code class="font-mono text-xs">tracevault check</code> from a repo with policies enabled to populate this view.</p>
+		{:else if filteredEvaluations.length === 0}
+			<p class="text-muted-foreground text-sm">
+				{#if evaluations.length === 0}
+					No policy evaluations recorded yet. Run <code class="font-mono text-xs">tracevault check</code> from a repo with policies enabled to populate this view.
+				{:else}
+					No evaluations match the current filters.
+					<button class="text-primary underline-offset-2 hover:underline" onclick={resetFilters}>Reset filters</button>
+				{/if}
+			</p>
 		{:else}
 			<div class="border-border overflow-hidden rounded-lg border">
 				<Table.Root class="text-xs">
@@ -149,7 +355,7 @@
 						</Table.Row>
 					</Table.Header>
 					<Table.Body>
-						{#each evaluations as ev}
+						{#each filteredEvaluations as ev}
 							<Table.Row class="hover:bg-muted/40 transition-colors">
 								<Table.Cell class="text-xs whitespace-nowrap">{formatDate(ev.evaluated_at)}</Table.Cell>
 								<Table.Cell class="text-xs font-medium">
