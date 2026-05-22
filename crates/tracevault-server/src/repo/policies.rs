@@ -39,8 +39,10 @@ pub struct PolicyEvaluationRow {
 pub struct PolicyEvaluationFilter {
     pub policy_id: Option<Uuid>,
     pub result: Option<String>,
+    pub action: Option<String>,
     pub source: Option<String>,
     pub since: Option<DateTime<Utc>>,
+    pub until: Option<DateTime<Utc>>,
     pub limit: i64,
     pub offset: i64,
 }
@@ -274,17 +276,21 @@ impl PolicyRepo {
              WHERE org_id = $1 AND repo_id = $2
                AND ($3::uuid IS NULL OR policy_id = $3)
                AND ($4::text IS NULL OR result = $4)
-               AND ($5::text IS NULL OR source = $5)
-               AND ($6::timestamptz IS NULL OR evaluated_at >= $6)
+               AND ($5::text IS NULL OR action = $5)
+               AND ($6::text IS NULL OR source = $6)
+               AND ($7::timestamptz IS NULL OR evaluated_at >= $7)
+               AND ($8::timestamptz IS NULL OR evaluated_at <= $8)
              ORDER BY evaluated_at DESC
-             LIMIT $7 OFFSET $8",
+             LIMIT $9 OFFSET $10",
         )
         .bind(org_id)
         .bind(repo_id)
         .bind(filter.policy_id)
         .bind(filter.result.as_deref())
+        .bind(filter.action.as_deref())
         .bind(filter.source.as_deref())
         .bind(filter.since)
+        .bind(filter.until)
         .bind(filter.limit)
         .bind(filter.offset)
         .fetch_all(pool)
@@ -321,8 +327,10 @@ impl PolicyRepo {
             .bind(repo_id)
             .bind(filter.policy_id)
             .bind(filter.result.as_deref())
+            .bind(filter.action.as_deref())
             .bind(filter.source.as_deref())
             .bind(filter.since)
+            .bind(filter.until)
             .fetch_one(pool)
             .await?;
         Ok(count)

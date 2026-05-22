@@ -615,8 +615,10 @@ fn extract_policy_tool_names(condition: &serde_json::Value) -> Vec<String> {
 pub struct ListEvaluationsQuery {
     pub policy_id: Option<Uuid>,
     pub result: Option<String>,
+    pub action: Option<String>,
     pub source: Option<String>,
     pub since: Option<DateTime<Utc>>,
+    pub until: Option<DateTime<Utc>>,
     pub limit: Option<i64>,
     pub offset: Option<i64>,
 }
@@ -662,8 +664,10 @@ pub async fn list_policy_evaluations(
     let filter = PolicyEvaluationFilter {
         policy_id: q.policy_id,
         result: q.result,
+        action: q.action,
         source: q.source,
         since: q.since,
+        until: q.until,
         limit,
         offset,
     };
