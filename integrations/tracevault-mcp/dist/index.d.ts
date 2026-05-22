@@ -11,8 +11,9 @@
  * Configuration (searched in order):
  *   1. Environment variables: TRACEVAULT_SERVER_URL, TRACEVAULT_TOKEN,
  *      TRACEVAULT_ORG_SLUG
- *   2. .tracevault/config.toml in the current working directory
- *   3. ~/.config/tracevault/config.toml
+ *   2. ~/.config/tracevault/credentials.json (written by `tracevault login`)
+ *      combined with .tracevault/config.toml for org_slug
+ *   3. TRACEVAULT_API_KEY env var + .tracevault/config.toml (API key auth)
  *
  * Usage:
  *   # Add to .mcp.json or .claude/settings.json:
