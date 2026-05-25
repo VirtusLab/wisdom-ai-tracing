@@ -1,5 +1,9 @@
 {
   "mcpServers": {
+    "tracevault": {
+      "command": "node",
+      "args": ["integrations/tracevault-mcp/dist/index.js"]
+    },
     "review": {
       "command": "node",
       "args": ["tools/review-mcp/index.js"]
