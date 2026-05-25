@@ -310,42 +310,49 @@ When you run `tracevault init` in a repository, Visdom Trace installs the sessio
 ```
 # Visdom Trace session tracking
 
-## Session start
+## During work
 
-At the beginning of every coding session, open a validation window so that
-tool calls during this session are tracked separately from background activity:
+Work freely. No special actions needed while coding.
 
-    tracevault validation-start
+## Pre-push validation
 
-## Before finishing work
+When your work is complete and you are ready to push:
 
-Before committing or pushing, run the self-review tool to review your changes:
+1. Open a validation window — this marks the start of the validation phase:
 
-    mcp__review__agent_review
+       tracevault validation-start
 
-This assembles the diff and full context of touched files and prompts you to
-review critically — checking for bugs, vulnerabilities, and idiom violations.
-Your review findings are recorded in the session trace.
+2. Run all required validation tools. Only tools explicitly allowed by
+   validation-window policies should be called between this point and push.
+   The exact tools depend on which policies are configured for this repo.
+   Check the repo's policy list in the Visdom Trace dashboard.
 
-## Before every push
+3. If a validation tool fails and you need to fix the issue, make your fix
+   and then open a NEW validation window before rerunning the tools:
 
-Run formatting, linting, and tests (or use the project-local MCP tools):
-- Call mcp__cargo__cargo_fmt before committing
-- Call mcp__cargo__cargo_check before pushing (must succeed)
-- Call mcp__cargo__cargo_audit when Cargo.lock changes
+       tracevault validation-start   # invalidates the previous window
+
+   You must rerun ALL expected validation tools after opening a new window.
+
+4. Once all validation tools have passed, push normally:
+
+       git push
 
 ## Commit messages
 
 Use conventional commits: https://www.conventionalcommits.org/en/v1.0.0/
 ```
 
-Adjust the tool names and commands to match your stack. The key behaviors to encode:
+> **Note for project maintainers:** The specific tools required in the validation window (e.g. `mcp__review__agent_review`, `mcp__cargo__cargo_fmt`) depend on the policies configured for your repo in the Visdom Trace dashboard. Add those tool names to the "Run all required validation tools" step above when customising this template for your project.
+
+Adjust the instructions to match your stack. The key behaviors to encode:
 
 | Instruction | Why |
 |---|---|
-| `tracevault validation-start` at session start | Opens a validation window so window-scoped policies evaluate only the tools called during this work unit, not the full session |
-| Call `mcp__review__agent_review` before finishing | Required by the self-review policy; records that a review happened before code was pushed |
-| Run quality tools before pushing | Required by `RequiredToolCall` policies; blocks the push if they weren't called |
+| Work freely before the validation window | Session-scoped policies can check tools called at any point; window-scoped policies only check tools called after `tracevault validation-start` |
+| Open validation window when work is done | Marks the start of the pre-push gate phase; only allowed tools should be called between this point and push |
+| Restart the window if a fix is needed | `tracevault validation-start` invalidates previous windows; all expected tools must be rerun to satisfy window-scoped policies |
+| All validation tools must pass before pushing | Policies will block the push if required tools weren't called or didn't succeed |
 
 ### Policy types you can configure
 
@@ -420,7 +427,7 @@ export DATABASE_URL=postgres://user:password@host:5432/tracevault?sslmode=requir
 | `tracevault stream --event <type>` | Handle a Claude Code hook event (reads JSON from stdin) and stream it to the server |
 | `tracevault sync` | Sync repo metadata with the server |
 | `tracevault check` | Evaluate policies against server rules, exit non-zero if blocked |
-| `tracevault validation-start [--session-id ID]` | Open a validation window for the current session. Tool calls after this point are evaluated separately by window-scoped policies. |
+| `tracevault validation-start [--session-id ID]` | Open a validation window. Call this when work is complete and you are ready to run pre-push validation tools. Window-scoped policies only evaluate tools called after this point. Calling it again invalidates the previous window. |
 | `tracevault stats` | Show local session statistics |
 | `tracevault verify` | Verify commits are registered and sealed on the server (`--commits` or `--range`) |
 | `tracevault status` | Show current session status (not yet implemented) |
@@ -447,7 +454,11 @@ Fail-closed: if the server is unreachable, `tracevault check` blocks the push.
 
 ### Validation Windows
 
-A validation window narrows policy evaluation to tool calls made *after* a specific point in the session. Open one with `tracevault validation-start` before starting a sensitive work unit. Policies scoped to `validation_window` only evaluate tools called within that window — useful for ensuring that a code review or security scan happened specifically for the work being pushed, not just somewhere earlier in a long session.
+A validation window is a pre-push gate phase. When work is complete and the agent is ready to push, it opens a validation window with `tracevault validation-start`, then runs all tools required by window-scoped policies (formatters, linters, security scanners, code review tools). Only tools explicitly allowed by those policies should be called between the window opening and the push.
+
+If a validation tool fails and the agent needs to make a fix, it must restart the window (`tracevault validation-start` again) before rerunning the tools — the previous window is invalidated and all expected tools must be called again from scratch.
+
+This ensures the audit trail proves that every required quality gate was run against the final state of the code, not just at some earlier point in a long session.
 
 ## Compliance & Audit Trail
 
