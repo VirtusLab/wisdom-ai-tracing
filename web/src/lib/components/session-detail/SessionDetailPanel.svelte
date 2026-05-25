@@ -49,8 +49,11 @@
 	{:else if data}
 		<SessionSummaryStats
 			totalTokens={data.input_tokens + data.output_tokens + data.cache_read_tokens + data.cache_write_tokens || data.total_tokens}
-			estimatedCostUsd={data.estimated_cost_usd}
+			inputTokens={data.input_tokens}
 			outputTokens={data.output_tokens}
+			cacheReadTokens={data.cache_read_tokens}
+			cacheWriteTokens={data.cache_write_tokens}
+			estimatedCostUsd={data.estimated_cost_usd}
 			apiCalls={data.api_calls}
 			cacheSavings={data.cache_savings}
 			compactions={data.compactions}

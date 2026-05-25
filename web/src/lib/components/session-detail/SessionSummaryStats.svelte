@@ -19,8 +19,11 @@
 
 	interface Props {
 		totalTokens: number;
-		estimatedCostUsd: number;
+		inputTokens: number;
 		outputTokens: number;
+		cacheReadTokens: number;
+		cacheWriteTokens: number;
+		estimatedCostUsd: number;
 		apiCalls: number;
 		cacheSavings: CacheSavings;
 		compactions: number;
@@ -29,8 +32,11 @@
 
 	let {
 		totalTokens,
-		estimatedCostUsd,
+		inputTokens,
 		outputTokens,
+		cacheReadTokens,
+		cacheWriteTokens,
+		estimatedCostUsd,
 		apiCalls,
 		cacheSavings,
 		compactions,
@@ -65,6 +71,14 @@
 				</Tooltip.Root>
 			</div>
 			<div class="mt-1 text-xl font-semibold">{fmtNum(totalTokens)}</div>
+			{#if outputTokens > 0 || cacheReadTokens > 0}
+				<div class="text-muted-foreground mt-1 space-y-0.5 text-[10px] leading-tight">
+					<div><span class="w-6 inline-block">in:</span>{fmtNum(inputTokens)}</div>
+					<div><span class="w-6 inline-block">out:</span>{fmtNum(outputTokens)}</div>
+					<div><span class="w-6 inline-block">cr:</span>{fmtNum(cacheReadTokens)}</div>
+					<div><span class="w-6 inline-block">cw:</span>{fmtNum(cacheWriteTokens)}</div>
+				</div>
+			{/if}
 		</Card.Root>
 
 		<Card.Root class="p-3">
