@@ -102,7 +102,7 @@ pub async fn get_sso_config(
     }))
 }
 
-// --- Upsert SSO Config (OrgAuth, owner only) ---
+// --- Upsert SSO Config (OrgAuth, owner or admin) ---
 
 #[derive(Deserialize)]
 pub struct UpsertSsoConfigRequest {
@@ -214,7 +214,7 @@ pub async fn upsert_sso_config(
     Ok(StatusCode::NO_CONTENT)
 }
 
-// --- Delete SSO Config (OrgAuth, owner only) ---
+// --- Delete SSO Config (OrgAuth, owner or admin) ---
 
 #[derive(Serialize)]
 pub struct DeleteSsoResponse {
