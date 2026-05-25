@@ -52,6 +52,24 @@
 		() => `/api/v1/orgs/${slug}/traces/sessions/${sessionId}`
 	);
 
+	// Secondary fetch for cost breakdown (from analytics detail endpoint)
+	interface CostBreakdown {
+		input_cost: number;
+		output_cost: number;
+		cache_read_cost: number;
+		cache_write_cost: number;
+		total_cost: number;
+	}
+	interface AnalyticsDetail {
+		cost_breakdown: CostBreakdown;
+	}
+
+	const analyticsDetailQuery = useFetch<AnalyticsDetail>(
+		() => `/api/v1/orgs/${slug}/analytics/sessions/${sessionId}/detail`
+	);
+
+	const costBreakdown = $derived(analyticsDetailQuery.data?.cost_breakdown ?? null);
+
 	const baseUrl = $derived(`/api/v1/orgs/${slug}/traces/sessions/${sessionId}`);
 
 	async function fetchPanelData(key: keyof typeof sectionsOpen) {
@@ -253,6 +271,14 @@
 				<div class="bg-background p-3">
 					<div class="text-muted-foreground text-[11px] uppercase tracking-wide">Cost</div>
 					<div class="mt-1 text-lg font-semibold">{fmtCost(session.estimated_cost_usd)}</div>
+					{#if costBreakdown && (costBreakdown.output_cost > 0 || costBreakdown.cache_read_cost > 0 || costBreakdown.input_cost > 0)}
+						<div class="text-muted-foreground mt-1 space-y-0.5 text-[10px] leading-tight">
+							<div><span class="inline-block w-6">in:</span>{fmtCost(costBreakdown.input_cost)}</div>
+							<div><span class="inline-block w-6">out:</span>{fmtCost(costBreakdown.output_cost)}</div>
+							<div><span class="inline-block w-6">cr:</span>{fmtCost(costBreakdown.cache_read_cost)}</div>
+							<div><span class="inline-block w-6">cw:</span>{fmtCost(costBreakdown.cache_write_cost)}</div>
+						</div>
+					{/if}
 				</div>
 				<div class="bg-background p-3">
 					<div class="text-muted-foreground text-[11px] uppercase tracking-wide">Commits</div>
