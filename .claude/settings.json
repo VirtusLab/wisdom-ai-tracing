@@ -43,9 +43,9 @@
       {
         "hooks": [
           {
-            "command": "tracevault stream --event stop",
-            "statusMessage": "TraceVault: finalizing session",
-            "timeout": 10,
+            "command": "node tools/pi-tracevault-bridge/index.js session-end",
+            "statusMessage": "TraceVault: syncing transcript",
+            "timeout": 60,
             "type": "command"
           }
         ],
