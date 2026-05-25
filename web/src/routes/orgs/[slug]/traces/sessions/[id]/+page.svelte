@@ -259,7 +259,7 @@
 				<div class="bg-background p-3">
 					<div class="text-muted-foreground text-[11px] uppercase tracking-wide">Tokens</div>
 					<div class="mt-1 text-lg font-semibold">{fmtNum(((session.input_tokens ?? 0) + (session.output_tokens ?? 0) + (session.cache_read_tokens ?? 0) + (session.cache_write_tokens ?? 0)) || session.total_tokens)}</div>
-					{#if (session.output_tokens ?? 0) > 0 || (session.cache_read_tokens ?? 0) > 0}
+					{#if (session.input_tokens ?? 0) > 0 || (session.output_tokens ?? 0) > 0 || (session.cache_read_tokens ?? 0) > 0 || (session.cache_write_tokens ?? 0) > 0}
 						<div class="text-muted-foreground mt-1 space-y-0.5 text-[10px] leading-tight">
 							<div><span class="inline-block w-6">in:</span>{fmtNum(session.input_tokens)}</div>
 							<div><span class="inline-block w-6">out:</span>{fmtNum(session.output_tokens)}</div>
@@ -271,7 +271,7 @@
 				<div class="bg-background p-3">
 					<div class="text-muted-foreground text-[11px] uppercase tracking-wide">Cost</div>
 					<div class="mt-1 text-lg font-semibold">{fmtCost(session.estimated_cost_usd)}</div>
-					{#if costBreakdown && (costBreakdown.output_cost > 0 || costBreakdown.cache_read_cost > 0 || costBreakdown.input_cost > 0)}
+					{#if costBreakdown && (costBreakdown.input_cost > 0 || costBreakdown.output_cost > 0 || costBreakdown.cache_read_cost > 0 || costBreakdown.cache_write_cost > 0)}
 						<div class="text-muted-foreground mt-1 space-y-0.5 text-[10px] leading-tight">
 							<div><span class="inline-block w-6">in:</span>{fmtCost(costBreakdown.input_cost)}</div>
 							<div><span class="inline-block w-6">out:</span>{fmtCost(costBreakdown.output_cost)}</div>

@@ -171,7 +171,14 @@ function findLatestTranscript() {
 
   const files = readdirSync(projectDir)
     .filter((f) => f.endsWith(".jsonl"))
-    .map((f) => ({ path: join(projectDir, f), mtime: statSync(join(projectDir, f)).mtimeMs }))
+    .map((f) => {
+      const fullPath = join(projectDir, f);
+      // Guard: ensure the resolved path stays within the project directory
+      const rel = relative(projectDir, fullPath);
+      if (rel.startsWith("..") || isAbsolute(rel)) return null;
+      return { path: fullPath, mtime: statSync(fullPath).mtimeMs };
+    })
+    .filter(Boolean)
     .sort((a, b) => b.mtime - a.mtime);
 
   return files.length > 0 ? files[0].path : null;
@@ -187,6 +194,12 @@ function findLatestTranscript() {
  * Returns toolEvents, tokenTotals, and bytesRead (new offset for next call).
  */
 function parseTranscript(transcriptFile, byteOffset = 0) {
+  // Guard: transcript must live under the Claude projects directory
+  const claudeBase = join(homedir(), ".claude", "projects");
+  const rel = relative(claudeBase, transcriptFile);
+  if (rel.startsWith("..") || isAbsolute(rel)) {
+    throw new Error(`Transcript path rejected (outside Claude projects dir): ${transcriptFile}`);
+  }
   const fullContent = readFileSync(transcriptFile, "utf8");
   const newContent = fullContent.slice(byteOffset);
   const bytesRead = byteOffset + Buffer.byteLength(newContent, "utf8");
@@ -210,11 +223,13 @@ function parseTranscript(transcriptFile, byteOffset = 0) {
     let obj;
     try {
       obj = JSON.parse(line);
-    } catch {
+    } catch (err) {
+      process.stderr.write(`[tv] skipping malformed transcript line: ${err.message}\n`);
       continue;
     }
 
     const msgType = obj.type;
+    if (!msgType) continue; // guard: skip lines without a type
 
     if (msgType === "assistant") {
       const msg = obj.message ?? {};
@@ -230,21 +245,19 @@ function parseTranscript(transcriptFile, byteOffset = 0) {
       // Collect tool_use blocks
       const content = msg.content ?? [];
       for (const block of content) {
-        if (block?.type === "tool_use") {
-          toolUseMap.set(block.id, { ...block, timestamp: ts });
-        }
+        if (!block || block.type !== "tool_use" || !block.id) continue;
+        toolUseMap.set(block.id, { ...block, timestamp: ts });
       }
     }
 
     if (msgType === "user") {
       const content = obj.message?.content ?? [];
       for (const block of content) {
-        if (block?.type === "tool_result") {
-          toolResultMap.set(block.tool_use_id, {
-            isError: block.is_error ?? false,
-            content: block.content ?? "",
-          });
-        }
+        if (!block || block.type !== "tool_result" || !block.tool_use_id) continue;
+        toolResultMap.set(block.tool_use_id, {
+          isError: block.is_error ?? false,
+          content: block.content ?? "",
+        });
       }
     }
   }
@@ -354,9 +367,16 @@ switch (command) {
     if (transcriptFile) {
       transcriptForStop = transcriptFile;
       const offsetFile = resolve(sessionDir(sessionId), ".transcript_read_offset");
-      const readOffset = existsSync(offsetFile)
-        ? parseInt(readFileSync(offsetFile, "utf8").trim(), 10) || 0
-        : 0;
+
+      // Load stored offset — reset to 0 if the transcript file has changed
+      // (prevents skipping events when a new session uses a different file)
+      let readOffset = 0;
+      if (existsSync(offsetFile)) {
+        const stored = readFileSync(offsetFile, "utf8").trim().split("\n");
+        const storedPath = stored[0] ?? "";
+        const storedOffset = parseInt(stored[1] ?? "0", 10) || 0;
+        readOffset = storedPath === transcriptFile ? storedOffset : 0;
+      }
 
       try {
         const { toolEvents, bytesRead } = parseTranscript(transcriptFile, readOffset);
@@ -375,9 +395,9 @@ switch (command) {
           }
         }
 
-        // Persist updated offset
+        // Persist updated offset alongside the transcript path
         if (bytesRead > readOffset) {
-          writeFileSync(offsetFile, String(bytesRead));
+          writeFileSync(offsetFile, `${transcriptFile}\n${bytesRead}`);
         }
       } catch (err) {
         process.stderr.write(`[tv] ⚠️  transcript parse failed: ${err.message}\n`);

@@ -166,7 +166,7 @@
 							<Table.Cell>
 								{@const actualTotal = (s.input_tokens ?? 0) + (s.output_tokens ?? 0) + (s.cache_read_tokens ?? 0) + (s.cache_write_tokens ?? 0)}
 								<div class="font-mono text-xs">{fmtNum(actualTotal || s.total_tokens)}</div>
-								{#if (s.output_tokens ?? 0) > 0 || (s.cache_read_tokens ?? 0) > 0 || (s.cache_write_tokens ?? 0) > 0}
+								{#if (s.input_tokens ?? 0) > 0 || (s.output_tokens ?? 0) > 0 || (s.cache_read_tokens ?? 0) > 0 || (s.cache_write_tokens ?? 0) > 0}
 									<div class="text-muted-foreground mt-0.5 text-[10px] leading-tight">
 										<span>in:{fmtNum(s.input_tokens)}</span>
 										<span class="ml-1">out:{fmtNum(s.output_tokens)}</span>
