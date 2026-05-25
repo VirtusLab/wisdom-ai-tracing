@@ -31,22 +31,17 @@ pub async fn get_attribution(
     auth: OrgAuth,
     Path((_slug, commit_id, file_path)): Path<(String, Uuid, String)>,
 ) -> Result<Json<AttributionResponse>, AppError> {
-    let row = sqlx::query_as::<_, (String, Uuid)>(
-        "SELECT c.commit_sha, c.repo_id
-         FROM commits c
-         JOIN repos r ON c.repo_id = r.id
-         WHERE c.id = $1 AND r.org_id = $2",
-    )
-    .bind(commit_id)
-    .bind(auth.org_id)
-    .fetch_optional(&state.pool)
-    .await?
-    .ok_or_else(|| AppError::NotFound("Commit not found".into()))?;
+    let row = sqlx::query_as::<_, (String, Uuid)>(include_str!("sql/get_attribution_commit.sql"))
+        .bind(commit_id)
+        .bind(auth.org_id)
+        .fetch_optional(&state.pool)
+        .await?
+        .ok_or_else(|| AppError::NotFound("Commit not found".into()))?;
 
     let (commit_sha, repo_id) = row;
 
     let clone_path =
-        sqlx::query_scalar::<_, Option<String>>("SELECT clone_path FROM repos WHERE id = $1")
+        sqlx::query_scalar::<_, Option<String>>(include_str!("sql/get_repo_clone_path.sql"))
             .bind(repo_id)
             .fetch_one(&state.pool)
             .await?
@@ -82,27 +77,22 @@ pub async fn get_attribution(
         .collect();
 
     let sha_to_commit_id: std::collections::HashMap<String, Uuid> = if !blame_shas.is_empty() {
-        sqlx::query_as::<_, (String, Uuid)>(
-            "SELECT commit_sha, id FROM commits WHERE repo_id = $1 AND commit_sha = ANY($2)",
-        )
-        .bind(repo_id)
-        .bind(&blame_shas)
-        .fetch_all(&state.pool)
-        .await?
-        .into_iter()
-        .collect()
+        sqlx::query_as::<_, (String, Uuid)>(include_str!("sql/get_attribution_blame_shas.sql"))
+            .bind(repo_id)
+            .bind(&blame_shas)
+            .fetch_all(&state.pool)
+            .await?
+            .into_iter()
+            .collect()
     } else {
         std::collections::HashMap::new()
     };
 
     let all_commit_ids: Vec<Uuid> = sha_to_commit_id.values().copied().collect();
 
-    let attributions = sqlx::query_as::<_, (Uuid, Option<Uuid>, i32, i32, f32)>(
-        "SELECT ca.commit_id, ca.session_id, ca.line_start, ca.line_end, ca.confidence
-         FROM commit_attributions ca
-         JOIN sessions s ON ca.session_id = s.id
-         WHERE ca.commit_id = ANY($1) AND ca.file_path = $2",
-    )
+    let attributions = sqlx::query_as::<_, (Uuid, Option<Uuid>, i32, i32, f32)>(include_str!(
+        "sql/get_attribution_lines.sql"
+    ))
     .bind(&all_commit_ids)
     .bind(&file_path)
     .fetch_all(&state.pool)
@@ -110,14 +100,12 @@ pub async fn get_attribution(
 
     let session_ids: Vec<Uuid> = attributions.iter().filter_map(|a| a.1).collect();
     let session_short_ids: std::collections::HashMap<Uuid, String> = if !session_ids.is_empty() {
-        sqlx::query_as::<_, (Uuid, String)>(
-            "SELECT id, LEFT(session_id, 8) FROM sessions WHERE id = ANY($1)",
-        )
-        .bind(&session_ids)
-        .fetch_all(&state.pool)
-        .await?
-        .into_iter()
-        .collect()
+        sqlx::query_as::<_, (Uuid, String)>(include_str!("sql/get_attribution_session_ids.sql"))
+            .bind(&session_ids)
+            .fetch_all(&state.pool)
+            .await?
+            .into_iter()
+            .collect()
     } else {
         std::collections::HashMap::new()
     };

@@ -79,52 +79,29 @@ pub async fn get_stats(
 ) -> Result<Json<StatsResponse>, AppError> {
     let repo_filter = params.repo_id;
 
-    let active_sessions: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM sessions s
-         JOIN repos r ON s.repo_id = r.id
-         WHERE r.org_id = $1
-           AND s.status = 'active'
-           AND s.updated_at >= now() - interval '30 minutes'
-           AND ($2::UUID IS NULL OR s.repo_id = $2)",
-    )
-    .bind(auth.org_id)
-    .bind(repo_filter)
-    .fetch_one(&state.pool)
-    .await?;
+    let active_sessions: i64 = sqlx::query_scalar(include_str!("sql/stats_active_sessions.sql"))
+        .bind(auth.org_id)
+        .bind(repo_filter)
+        .fetch_one(&state.pool)
+        .await?;
 
-    let total_sessions: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM sessions s
-         JOIN repos r ON s.repo_id = r.id
-         WHERE r.org_id = $1
-           AND ($2::UUID IS NULL OR s.repo_id = $2)",
-    )
-    .bind(auth.org_id)
-    .bind(repo_filter)
-    .fetch_one(&state.pool)
-    .await?;
+    let total_sessions: i64 = sqlx::query_scalar(include_str!("sql/stats_total_sessions.sql"))
+        .bind(auth.org_id)
+        .bind(repo_filter)
+        .fetch_one(&state.pool)
+        .await?;
 
-    let total_commits: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM commits c
-         JOIN repos r ON c.repo_id = r.id
-         WHERE r.org_id = $1
-           AND ($2::UUID IS NULL OR c.repo_id = $2)",
-    )
-    .bind(auth.org_id)
-    .bind(repo_filter)
-    .fetch_one(&state.pool)
-    .await?;
+    let total_commits: i64 = sqlx::query_scalar(include_str!("sql/stats_total_commits.sql"))
+        .bind(auth.org_id)
+        .bind(repo_filter)
+        .fetch_one(&state.pool)
+        .await?;
 
-    let total_events: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM events e
-         JOIN sessions s ON e.session_id = s.id
-         JOIN repos r ON s.repo_id = r.id
-         WHERE r.org_id = $1
-           AND ($2::UUID IS NULL OR s.repo_id = $2)",
-    )
-    .bind(auth.org_id)
-    .bind(repo_filter)
-    .fetch_one(&state.pool)
-    .await?;
+    let total_events: i64 = sqlx::query_scalar(include_str!("sql/stats_total_events.sql"))
+        .bind(auth.org_id)
+        .bind(repo_filter)
+        .fetch_one(&state.pool)
+        .await?;
 
     Ok(Json(StatsResponse {
         active_sessions,
