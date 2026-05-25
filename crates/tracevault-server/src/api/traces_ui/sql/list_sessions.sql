@@ -1,7 +1,8 @@
 SELECT s.id, s.session_id, s.repo_id, r.name AS repo_name,
        s.user_id, u.email AS user_email, s.status, s.model, s.tool,
        s.total_tool_calls, s.total_tokens, s.estimated_cost_usd,
-       s.cwd, s.started_at, s.updated_at
+       s.cwd, s.started_at, s.updated_at,
+       COUNT(*) OVER() AS total_count
 FROM sessions s
 JOIN repos r ON s.repo_id = r.id
 JOIN users u ON s.user_id = u.id

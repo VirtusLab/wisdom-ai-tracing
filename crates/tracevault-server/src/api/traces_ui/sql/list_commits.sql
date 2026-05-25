@@ -1,7 +1,8 @@
 SELECT c.id, c.commit_sha, c.branch, c.author, c.message,
        COUNT(DISTINCT ca.file_path) AS files_changed,
        COUNT(DISTINCT ca.session_id) AS ai_sessions_count,
-       c.committed_at
+       c.committed_at,
+       COUNT(*) OVER() AS total_count
 FROM commits c
 JOIN repos r ON c.repo_id = r.id
 LEFT JOIN commit_attributions ca ON ca.commit_id = c.id

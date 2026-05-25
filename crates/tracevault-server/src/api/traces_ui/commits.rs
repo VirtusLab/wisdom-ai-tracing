@@ -13,7 +13,20 @@ use super::{CommitListQuery, PaginatedResponse};
 
 // ── Response types ───────────────────────────────────────────────────
 
-#[derive(Debug, Serialize, sqlx::FromRow)]
+#[derive(Debug, sqlx::FromRow)]
+struct CommitListRow {
+    pub id: Uuid,
+    pub commit_sha: String,
+    pub branch: Option<String>,
+    pub author: String,
+    pub message: Option<String>,
+    pub files_changed: Option<i64>,
+    pub ai_sessions_count: Option<i64>,
+    pub committed_at: Option<DateTime<Utc>>,
+    pub total_count: i64,
+}
+
+#[derive(Debug, Serialize)]
 pub struct CommitListItem {
     pub id: Uuid,
     pub commit_sha: String,
@@ -23,6 +36,21 @@ pub struct CommitListItem {
     pub files_changed: Option<i64>,
     pub ai_sessions_count: Option<i64>,
     pub committed_at: Option<DateTime<Utc>>,
+}
+
+impl From<CommitListRow> for CommitListItem {
+    fn from(r: CommitListRow) -> Self {
+        Self {
+            id: r.id,
+            commit_sha: r.commit_sha,
+            branch: r.branch,
+            author: r.author,
+            message: r.message,
+            files_changed: r.files_changed,
+            ai_sessions_count: r.ai_sessions_count,
+            committed_at: r.committed_at,
+        }
+    }
 }
 
 #[derive(Debug, Serialize, sqlx::FromRow)]
@@ -68,24 +96,19 @@ pub async fn list_commits(
     let limit = params.limit.unwrap_or(50).min(200);
     let offset = params.offset.unwrap_or(0);
 
-    let (rows, total) = tokio::try_join!(
-        sqlx::query_as::<_, CommitListItem>(include_str!("sql/list_commits.sql"))
-            .bind(auth.org_id)
-            .bind(params.repo_id)
-            .bind(&params.branch)
-            .bind(params.from)
-            .bind(params.to)
-            .bind(limit)
-            .bind(offset)
-            .fetch_all(&state.pool),
-        sqlx::query_scalar::<_, i64>(include_str!("sql/count_commits.sql"))
-            .bind(auth.org_id)
-            .bind(params.repo_id)
-            .bind(&params.branch)
-            .bind(params.from)
-            .bind(params.to)
-            .fetch_one(&state.pool),
-    )?;
+    let raw_rows = sqlx::query_as::<_, CommitListRow>(include_str!("sql/list_commits.sql"))
+        .bind(auth.org_id)
+        .bind(params.repo_id)
+        .bind(&params.branch)
+        .bind(params.from)
+        .bind(params.to)
+        .bind(limit)
+        .bind(offset)
+        .fetch_all(&state.pool)
+        .await?;
+
+    let total = raw_rows.first().map(|r| r.total_count).unwrap_or(0);
+    let rows: Vec<CommitListItem> = raw_rows.into_iter().map(Into::into).collect();
 
     Ok(Json(PaginatedResponse {
         items: rows,
