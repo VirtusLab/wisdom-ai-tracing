@@ -42,6 +42,7 @@
 	}
 
 	let commits: CommitListItem[] = $state([]);
+	let commitsTotal = $state(0);
 	let policies: Policy[] = $state([]);
 	let repo = $state<Repo | null>(null);
 	let repoName = $state('');
@@ -89,12 +90,13 @@
 
 	async function loadCommits() {
 		try {
-			const params = new URLSearchParams({ limit: '100', offset: '0' });
+			const params = new URLSearchParams({ limit: '200', offset: '0' });
 			if (repoId) params.set('repo_id', repoId);
 			const result = await api.get<{ items: CommitListItem[]; total: number }>(
 				`/api/v1/orgs/${slug}/traces/commits?${params}`
 			);
 			commits = result?.items ?? [];
+			commitsTotal = result?.total ?? 0;
 		} catch (err) {
 			error = err instanceof Error ? err.message : 'Failed to load commits';
 		} finally {
@@ -229,6 +231,12 @@
 		{:else if commits.length === 0}
 			<p class="text-muted-foreground text-sm">No commits found for this repo.</p>
 		{:else}
+			{#if commitsTotal > commits.length}
+				<p class="text-muted-foreground mb-2 text-xs">
+					Showing {commits.length} of {commitsTotal} commits.
+					<a href="/orgs/{slug}/traces/commits?repo_id={repoId}" class="text-primary underline-offset-2 hover:underline">View all →</a>
+				</p>
+			{/if}
 			<DataTable
 				columns={commitColumns}
 				rows={commits}
