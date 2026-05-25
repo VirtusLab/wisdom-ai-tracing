@@ -182,8 +182,15 @@ function findLatestTranscript() {
  * - toolEvents: array of { toolUseId, toolName, toolInput, toolResponse, isError, timestamp }
  * - tokenTotals: { inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens }
  */
-function parseTranscript(transcriptFile) {
-  const lines = readFileSync(transcriptFile, "utf8").split("\n").filter(Boolean);
+/**
+ * Parse transcript JSONL starting at byteOffset (default 0).
+ * Returns toolEvents, tokenTotals, and bytesRead (new offset for next call).
+ */
+function parseTranscript(transcriptFile, byteOffset = 0) {
+  const fullContent = readFileSync(transcriptFile, "utf8");
+  const newContent = fullContent.slice(byteOffset);
+  const bytesRead = byteOffset + Buffer.byteLength(newContent, "utf8");
+  const lines = newContent.split("\n").filter(Boolean);
 
   // Map tool_use_id -> tool_use block (from assistant messages)
   const toolUseMap = new Map();
@@ -256,7 +263,7 @@ function parseTranscript(transcriptFile) {
     });
   }
 
-  return { toolEvents, tokenTotals };
+  return { toolEvents, tokenTotals, bytesRead };
 }
 
 /**
@@ -336,43 +343,52 @@ switch (command) {
 
   case "session-end": {
     const sessionId = getOrCreateSessionId();
-    initLocalSession(sessionId); // ensure session dir exists
+    initLocalSession(sessionId);
 
-    // Step 1: Find and parse the Claude transcript
+    // Step 1: Incrementally parse the Claude transcript.
+    // We track a byte offset so each Stop-hook invocation only processes
+    // new lines added since the last run — O(new lines) not O(full transcript).
     const transcriptFile = findLatestTranscript();
+    let transcriptForStop = transcriptPath(sessionId); // fallback
+
     if (transcriptFile) {
-      console.log(`📄 Parsing transcript: ${transcriptFile}`);
+      transcriptForStop = transcriptFile;
+      const offsetFile = resolve(sessionDir(sessionId), ".transcript_read_offset");
+      const readOffset = existsSync(offsetFile)
+        ? parseInt(readFileSync(offsetFile, "utf8").trim(), 10) || 0
+        : 0;
+
       try {
-        const { toolEvents, tokenTotals } = parseTranscript(transcriptFile);
+        const { toolEvents, bytesRead } = parseTranscript(transcriptFile, readOffset);
 
-        console.log(
-          `   Found ${toolEvents.length} tool calls | ` +
-          `tokens: in=${tokenTotals.inputTokens} out=${tokenTotals.outputTokens} ` +
-          `cr=${tokenTotals.cacheReadTokens} cw=${tokenTotals.cacheWriteTokens}`
-        );
-
-        // Stream all tool events
         if (toolEvents.length > 0) {
-          const { streamed, failed } = streamTranscriptEvents(sessionId, toolEvents, transcriptFile);
-          console.log(`   Streamed ${streamed} events${failed > 0 ? `, ${failed} failed` : ""}`);
+          process.stderr.write(
+            `[tv] +${toolEvents.length} events from transcript\n`
+          );
+          const { streamed, failed } = streamTranscriptEvents(
+            sessionId,
+            toolEvents,
+            transcriptFile
+          );
+          if (failed > 0) {
+            process.stderr.write(`[tv] ⚠️  ${failed} events failed to stream\n`);
+          }
         }
 
-        // Log token summary (token data is captured via transcript_lines in stream events)
-        if (tokenTotals.outputTokens > 0 || tokenTotals.cacheReadTokens > 0) {
-          console.log(`   Token totals recorded from transcript`);
+        // Persist updated offset
+        if (bytesRead > readOffset) {
+          writeFileSync(offsetFile, String(bytesRead));
         }
       } catch (err) {
-        console.error(`⚠️  Failed to parse transcript: ${err.message}`);
+        process.stderr.write(`[tv] ⚠️  transcript parse failed: ${err.message}\n`);
       }
-    } else {
-      console.log(`ℹ️  No Claude transcript found for ${REPO_ROOT}`);
     }
 
-    // Step 2: Send stop event — point transcript_path at the real Claude
-    // transcript so the server can extract token usage from it
+    // Step 2: Send stop event pointing at the real transcript so the server
+    // can extract final token stats from transcript_lines.
     const stopHookEvent = {
       session_id: sessionId,
-      transcript_path: transcriptFile ?? transcriptPath(sessionId),
+      transcript_path: transcriptForStop,
       cwd: REPO_ROOT,
       permission_mode: "default",
       hook_event_name: "Stop",
@@ -382,10 +398,8 @@ switch (command) {
       tool_use_id: null,
     };
     const res = callTraceVaultStream("stop", stopHookEvent);
-    if (res.success) {
-      console.log(`✅ Session ended: ${sessionId}`);
-    } else {
-      console.error(`⚠️  tracevault stream stop failed: ${res.stderr.trim()}`);
+    if (!res.success) {
+      process.stderr.write(`[tv] ⚠️  stop event failed: ${res.stderr.trim()}\n`);
     }
     break;
   }
