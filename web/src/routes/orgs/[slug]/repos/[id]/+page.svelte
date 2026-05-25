@@ -2,7 +2,11 @@
 	import { page } from '$app/stores';
 	import { onMount, onDestroy } from 'svelte';
 	import { api } from '$lib/api';
-	import DataTable from '$lib/components/DataTable.svelte';
+	import * as Table from '$lib/components/ui/table/index.js';
+	import ChevronLeftIcon from '@lucide/svelte/icons/chevron-left';
+	import ChevronRightIcon from '@lucide/svelte/icons/chevron-right';
+	import SearchIcon from '@lucide/svelte/icons/search';
+	import XIcon from '@lucide/svelte/icons/x';
 	import RepoPolicies from '$lib/components/RepoPolicies.svelte';
 	import PolicyActivity from '$lib/components/PolicyActivity.svelte';
 	import { formatDate } from '$lib/utils/date';
@@ -43,6 +47,9 @@
 
 	let commits: CommitListItem[] = $state([]);
 	let commitsTotal = $state(0);
+	let commitsPage = $state(0);
+	let commitsPageSize = $state(10);
+	let commitsSearch = $state('');
 	let policies: Policy[] = $state([]);
 	let repo = $state<Repo | null>(null);
 	let repoName = $state('');
@@ -90,7 +97,10 @@
 
 	async function loadCommits() {
 		try {
-			const params = new URLSearchParams({ limit: '200', offset: '0' });
+			const params = new URLSearchParams({
+				limit: String(commitsPageSize),
+				offset: String(commitsPage * commitsPageSize)
+			});
 			if (repoId) params.set('repo_id', repoId);
 			const result = await api.get<{ items: CommitListItem[]; total: number }>(
 				`/api/v1/orgs/${slug}/traces/commits?${params}`
@@ -102,6 +112,17 @@
 		} finally {
 			loading = false;
 		}
+	}
+
+	function setCommitsPage(p: number) {
+		commitsPage = p;
+		loadCommits();
+	}
+
+	function setCommitsPageSize(s: number) {
+		commitsPageSize = s;
+		commitsPage = 0;
+		loadCommits();
 	}
 
 	async function handleSync() {
@@ -132,15 +153,23 @@
 		return msg.split('\n')[0];
 	}
 
-	const commitColumns = [
-		{ key: 'commit_sha', label: 'Commit', sortable: true },
-		{ key: 'message', label: 'Message', sortable: true },
-		{ key: 'author', label: 'Author', sortable: true },
-		{ key: 'branch', label: 'Branch', sortable: true },
-		{ key: 'ai_sessions_count', label: 'AI Sessions', sortable: true },
-		{ key: 'files_changed', label: 'Files', sortable: true },
-		{ key: 'committed_at', label: 'Date', sortable: true }
-	];
+	const filteredCommits = $derived(
+		commitsSearch.trim()
+			? commits.filter((c) => {
+					const q = commitsSearch.toLowerCase();
+					return (
+						c.commit_sha?.toLowerCase().includes(q) ||
+						c.author?.toLowerCase().includes(q) ||
+						(c.message ?? '').toLowerCase().includes(q) ||
+						(c.branch ?? '').toLowerCase().includes(q)
+					);
+				})
+			: commits
+	);
+
+	const commitsTotalPages = $derived(Math.max(1, Math.ceil(commitsTotal / commitsPageSize)));
+	const commitsShowFrom = $derived(commitsTotal === 0 ? 0 : commitsPage * commitsPageSize + 1);
+	const commitsShowTo = $derived(Math.min((commitsPage + 1) * commitsPageSize, commitsTotal));
 </script>
 
 <svelte:head>
@@ -231,60 +260,107 @@
 		{:else if commits.length === 0}
 			<p class="text-muted-foreground text-sm">No commits found for this repo.</p>
 		{:else}
-			{#if commitsTotal > commits.length}
-				<p class="text-muted-foreground mb-2 text-xs">
-					Showing {commits.length} of {commitsTotal} commits.
-					<a href="/orgs/{slug}/traces/commits?repo_id={repoId}" class="text-primary underline-offset-2 hover:underline">View all →</a>
-				</p>
-			{/if}
-			<DataTable
-				columns={commitColumns}
-				rows={commits}
-				searchKeys={['commit_sha', 'message', 'author', 'branch']}
-				defaultSort="committed_at"
-				defaultSortDir="desc"
-				rowIdKey="id"
-				onRowClick={(row) => {
-					const id = row.id as string;
-					expandedCommitId = expandedCommitId === id ? null : id;
-				}}
-				expandedRowId={expandedCommitId}
-			>
-				{#snippet children({ row, col })}
-					{#if col.key === 'commit_sha'}
-						<a
-							href="/orgs/{slug}/traces/commits/{row.id}"
-							class="font-mono text-sm underline"
-							onclick={(e) => e.stopPropagation()}
-						>
-							{(row.commit_sha as string).slice(0, 8)}
-						</a>
-					{:else if col.key === 'message'}
-						<span class="max-w-xs truncate text-muted-foreground">{firstLine(row.message as string | null)}</span>
-					{:else if col.key === 'branch'}
-						{#if row.branch}
-							<span class="rounded-full px-2 py-0.5 text-[10px]" style="background: rgba(167,139,250,0.12); color: #a78bfa; border: 1px solid rgba(167,139,250,0.25)">{row.branch}</span>
-						{:else}
-							<span class="text-muted-foreground">-</span>
+			<div class="border-border overflow-hidden rounded-lg border">
+				<!-- Search bar -->
+				<div class="border-border flex items-center gap-2 border-b px-3 py-2">
+					<SearchIcon class="text-muted-foreground h-3.5 w-3.5 shrink-0" />
+					<input
+						type="text"
+						placeholder="Search SHA, author, message, branch (this page)…"
+						bind:value={commitsSearch}
+						class="text-foreground placeholder:text-muted-foreground w-full bg-transparent text-sm outline-none"
+					/>
+					{#if commitsSearch}
+						<button class="text-muted-foreground hover:text-foreground" onclick={() => (commitsSearch = '')}>
+							<XIcon class="h-3.5 w-3.5" />
+						</button>
+					{/if}
+				</div>
+				<Table.Root class="text-xs">
+					<Table.Header>
+						<Table.Row class="bg-muted/30 border-border border-b">
+							<Table.Head class="text-muted-foreground text-[10px] font-semibold uppercase tracking-wider">Commit</Table.Head>
+							<Table.Head class="text-muted-foreground text-[10px] font-semibold uppercase tracking-wider">Message</Table.Head>
+							<Table.Head class="text-muted-foreground text-[10px] font-semibold uppercase tracking-wider">Author</Table.Head>
+							<Table.Head class="text-muted-foreground text-[10px] font-semibold uppercase tracking-wider">Branch</Table.Head>
+							<Table.Head class="text-muted-foreground text-[10px] font-semibold uppercase tracking-wider">AI Sessions</Table.Head>
+							<Table.Head class="text-muted-foreground text-[10px] font-semibold uppercase tracking-wider">Files</Table.Head>
+							<Table.Head class="text-muted-foreground text-[10px] font-semibold uppercase tracking-wider">Date</Table.Head>
+						</Table.Row>
+					</Table.Header>
+					<Table.Body>
+						{#each filteredCommits as c (c.id)}
+							<Table.Row
+								class="hover:bg-muted/40 cursor-pointer transition-colors"
+								onclick={() => { expandedCommitId = expandedCommitId === c.id ? null : c.id; }}
+							>
+								<Table.Cell>
+									<a
+										href="/orgs/{slug}/traces/commits/{c.id}"
+										class="font-mono text-sm underline"
+										onclick={(e) => e.stopPropagation()}
+									>
+										{c.commit_sha.slice(0, 8)}
+									</a>
+								</Table.Cell>
+								<Table.Cell class="text-muted-foreground max-w-xs truncate">{firstLine(c.message)}</Table.Cell>
+								<Table.Cell class="text-muted-foreground">{c.author}</Table.Cell>
+								<Table.Cell>
+									{#if c.branch}
+										<span class="rounded-full px-2 py-0.5 text-[10px]" style="background: rgba(167,139,250,0.12); color: #a78bfa; border: 1px solid rgba(167,139,250,0.25)">{c.branch}</span>
+									{:else}
+										<span class="text-muted-foreground">-</span>
+									{/if}
+								</Table.Cell>
+								<Table.Cell class="font-mono">{c.ai_sessions_count ?? 0}</Table.Cell>
+								<Table.Cell class="font-mono">{c.files_changed ?? 0}</Table.Cell>
+								<Table.Cell class="text-muted-foreground">{c.committed_at ? formatDate(c.committed_at) : '-'}</Table.Cell>
+							</Table.Row>
+							{#if expandedCommitId === c.id && c.message}
+								<Table.Row>
+									<Table.Cell colspan={7} class="p-0">
+										<div class="bg-muted/20 px-4 py-3">
+											<pre class="text-muted-foreground whitespace-pre-wrap font-mono text-xs">{c.message.trim()}</pre>
+										</div>
+									</Table.Cell>
+								</Table.Row>
+							{/if}
+						{/each}
+						{#if filteredCommits.length === 0}
+							<Table.Row>
+								<Table.Cell colspan={7} class="text-muted-foreground py-8 text-center text-xs">
+									No commits match your search.
+								</Table.Cell>
+							</Table.Row>
 						{/if}
-					{:else if col.key === 'ai_sessions_count'}
-						{row.ai_sessions_count ?? 0}
-					{:else if col.key === 'files_changed'}
-						<span class="font-mono">{row.files_changed ?? 0}</span>
-					{:else if col.key === 'committed_at'}
-						{row.committed_at ? formatDate(row.committed_at as string) : '-'}
-					{:else}
-						{row[col.key] ?? '-'}
-					{/if}
-				{/snippet}
-				{#snippet expandedRow({ row })}
-					{#if row.message}
-						<div class="py-3 px-4 bg-muted/20">
-							<pre class="whitespace-pre-wrap text-xs text-muted-foreground font-mono">{(row.message as string).trim()}</pre>
-						</div>
-					{/if}
-				{/snippet}
-			</DataTable>
+					</Table.Body>
+				</Table.Root>
+				<!-- Pagination footer -->
+				<div class="border-border text-muted-foreground flex items-center justify-between border-t px-3 py-2 text-xs">
+					<span>{commitsShowFrom}-{commitsShowTo} of {commitsTotal}</span>
+					<div class="flex items-center gap-3">
+						<span>Per page:</span>
+						{#each [10, 25, 50] as size}
+							<button
+								class="rounded px-1.5 py-0.5 transition-colors {commitsPageSize === size ? 'bg-primary text-primary-foreground' : 'hover:text-foreground'}"
+								onclick={() => setCommitsPageSize(size)}
+							>{size}</button>
+						{/each}
+						<span class="text-border mx-1">|</span>
+						<button
+							class="hover:text-foreground disabled:opacity-30"
+							disabled={commitsPage === 0}
+							onclick={() => setCommitsPage(commitsPage - 1)}
+						><ChevronLeftIcon class="h-4 w-4" /></button>
+						<span>{commitsPage + 1}/{commitsTotalPages}</span>
+						<button
+							class="hover:text-foreground disabled:opacity-30"
+							disabled={commitsPage >= commitsTotalPages - 1}
+							onclick={() => setCommitsPage(commitsPage + 1)}
+						><ChevronRightIcon class="h-4 w-4" /></button>
+					</div>
+				</div>
+			</div>
 		{/if}
 	</div>
 </div>

@@ -15,7 +15,27 @@ use crate::api::session_detail::{parse_transcript, TranscriptRecord};
 
 // ── Response types ───────────────────────────────────────────────────
 
-#[derive(Debug, Serialize, sqlx::FromRow)]
+#[derive(Debug, sqlx::FromRow)]
+struct SessionListRow {
+    pub id: Uuid,
+    pub session_id: String,
+    pub repo_id: Uuid,
+    pub repo_name: String,
+    pub user_id: Uuid,
+    pub user_email: String,
+    pub status: String,
+    pub model: Option<String>,
+    pub tool: Option<String>,
+    pub total_tool_calls: Option<i32>,
+    pub total_tokens: Option<i64>,
+    pub estimated_cost_usd: Option<f64>,
+    pub cwd: Option<String>,
+    pub started_at: Option<DateTime<Utc>>,
+    pub updated_at: DateTime<Utc>,
+    pub total_count: i64,
+}
+
+#[derive(Debug, Serialize)]
 pub struct SessionListItem {
     pub id: Uuid,
     pub session_id: String,
@@ -32,6 +52,28 @@ pub struct SessionListItem {
     pub cwd: Option<String>,
     pub started_at: Option<DateTime<Utc>>,
     pub updated_at: DateTime<Utc>,
+}
+
+impl From<SessionListRow> for SessionListItem {
+    fn from(r: SessionListRow) -> Self {
+        Self {
+            id: r.id,
+            session_id: r.session_id,
+            repo_id: r.repo_id,
+            repo_name: r.repo_name,
+            user_id: r.user_id,
+            user_email: r.user_email,
+            status: r.status,
+            model: r.model,
+            tool: r.tool,
+            total_tool_calls: r.total_tool_calls,
+            total_tokens: r.total_tokens,
+            estimated_cost_usd: r.estimated_cost_usd,
+            cwd: r.cwd,
+            started_at: r.started_at,
+            updated_at: r.updated_at,
+        }
+    }
 }
 
 #[derive(Debug, Serialize, sqlx::FromRow)]
@@ -109,7 +151,7 @@ pub struct TranscriptResponse {
 
 // ── Helpers ──────────────────────────────────────────────────────────
 
-pub async fn verify_session_access(
+pub(super) async fn verify_session_access(
     pool: &sqlx::PgPool,
     session_id: Uuid,
     org_id: Uuid,
@@ -142,26 +184,20 @@ pub async fn list_sessions(
         other => (other.map(String::from), false),
     };
 
-    let (rows, total) = tokio::try_join!(
-        sqlx::query_as::<_, SessionListItem>(include_str!("sql/list_sessions.sql"))
-            .bind(auth.org_id)
-            .bind(params.repo_id)
-            .bind(&status_filter)
-            .bind(use_stale)
-            .bind(params.from)
-            .bind(params.to)
-            .bind(limit)
-            .bind(offset)
-            .fetch_all(&state.pool),
-        sqlx::query_scalar::<_, i64>(include_str!("sql/count_sessions.sql"))
-            .bind(auth.org_id)
-            .bind(params.repo_id)
-            .bind(&status_filter)
-            .bind(use_stale)
-            .bind(params.from)
-            .bind(params.to)
-            .fetch_one(&state.pool),
-    )?;
+    let raw_rows = sqlx::query_as::<_, SessionListRow>(include_str!("sql/list_sessions.sql"))
+        .bind(auth.org_id)
+        .bind(params.repo_id)
+        .bind(&status_filter)
+        .bind(use_stale)
+        .bind(params.from)
+        .bind(params.to)
+        .bind(limit)
+        .bind(offset)
+        .fetch_all(&state.pool)
+        .await?;
+
+    let total = raw_rows.first().map(|r| r.total_count).unwrap_or(0);
+    let rows: Vec<SessionListItem> = raw_rows.into_iter().map(Into::into).collect();
 
     Ok(Json(PaginatedResponse {
         items: rows,
