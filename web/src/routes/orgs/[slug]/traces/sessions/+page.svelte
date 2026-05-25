@@ -56,8 +56,9 @@
 				selectedUserIds = filterOptions.users.map((u) => u.id);
 			}
 			filterOptionsLoaded = true;
-		} catch {
-			// non-critical
+		} catch (err) {
+			// non-critical: filter options are optional enhancements
+			console.warn('Failed to load filter options:', err);
 		}
 	}
 
@@ -83,11 +84,12 @@
 			if (selectedToolNames.length > 0 && !allToolsSelected) {
 				params.set('tool_names', selectedToolNames.join(','));
 			}
-			// User filter: only send if not all users are selected
+			// User filter: send only when a strict subset is selected (empty or all = no filter)
 			if (filterOptionsLoaded && selectedUserIds.length > 0 &&
 				selectedUserIds.length < filterOptions.users.length) {
 				params.set('user_ids', selectedUserIds.join(','));
 			}
+			// Note: empty selectedUserIds = same as all selected = no filter applied
 			if (hasFileChanges !== null) {
 				params.set('has_file_changes', String(hasFileChanges));
 			}
@@ -144,8 +146,8 @@
 	}
 
 	function userFilterLabel(): string {
-		if (!filterOptionsLoaded || selectedUserIds.length === filterOptions.users.length) return 'All';
-		if (selectedUserIds.length === 0) return 'No users';
+		// Empty selection treated same as all-selected: no filter applied
+		if (!filterOptionsLoaded || selectedUserIds.length === 0 || selectedUserIds.length === filterOptions.users.length) return 'All';
 		if (selectedUserIds.length === 1) {
 			const u = filterOptions.users.find((u) => u.id === selectedUserIds[0]);
 			return u?.email.split('@')[0] ?? '1 user';
