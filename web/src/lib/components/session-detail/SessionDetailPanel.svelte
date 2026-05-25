@@ -48,7 +48,7 @@
 		<div class="text-destructive py-4 text-center text-sm">{error}</div>
 	{:else if data}
 		<SessionSummaryStats
-			totalTokens={data.input_tokens + data.output_tokens + data.cache_read_tokens + data.cache_write_tokens || data.total_tokens}
+			totalTokens={(data.input_tokens ?? 0) + (data.output_tokens ?? 0) + (data.cache_read_tokens ?? 0) + (data.cache_write_tokens ?? 0) || (data.total_tokens ?? 0)}
 			inputTokens={data.input_tokens}
 			outputTokens={data.output_tokens}
 			cacheReadTokens={data.cache_read_tokens}

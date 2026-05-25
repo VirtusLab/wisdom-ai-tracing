@@ -71,7 +71,7 @@
 				</Tooltip.Root>
 			</div>
 			<div class="mt-1 text-xl font-semibold">{fmtNum(totalTokens)}</div>
-			{#if outputTokens > 0 || cacheReadTokens > 0}
+			{#if inputTokens > 0 || outputTokens > 0 || cacheReadTokens > 0 || cacheWriteTokens > 0}
 				<div class="text-muted-foreground mt-1 space-y-0.5 text-[10px] leading-tight">
 					<div><span class="w-6 inline-block">in:</span>{fmtNum(inputTokens)}</div>
 					<div><span class="w-6 inline-block">out:</span>{fmtNum(outputTokens)}</div>
