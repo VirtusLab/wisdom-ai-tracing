@@ -1,4 +1,4 @@
-SELECT * FROM (
+SELECT item_type, event_id, session_id, session_short_id, event_type, tool_name, file_path, commit_sha, branch, author, timestamp FROM (
     SELECT 'event'::text AS item_type,
            e.id AS event_id,
            e.session_id,

@@ -79,29 +79,24 @@ pub async fn get_stats(
 ) -> Result<Json<StatsResponse>, AppError> {
     let repo_filter = params.repo_id;
 
-    let active_sessions: i64 = sqlx::query_scalar(include_str!("sql/stats_active_sessions.sql"))
-        .bind(auth.org_id)
-        .bind(repo_filter)
-        .fetch_one(&state.pool)
-        .await?;
-
-    let total_sessions: i64 = sqlx::query_scalar(include_str!("sql/stats_total_sessions.sql"))
-        .bind(auth.org_id)
-        .bind(repo_filter)
-        .fetch_one(&state.pool)
-        .await?;
-
-    let total_commits: i64 = sqlx::query_scalar(include_str!("sql/stats_total_commits.sql"))
-        .bind(auth.org_id)
-        .bind(repo_filter)
-        .fetch_one(&state.pool)
-        .await?;
-
-    let total_events: i64 = sqlx::query_scalar(include_str!("sql/stats_total_events.sql"))
-        .bind(auth.org_id)
-        .bind(repo_filter)
-        .fetch_one(&state.pool)
-        .await?;
+    let (active_sessions, total_sessions, total_commits, total_events) = tokio::try_join!(
+        sqlx::query_scalar(include_str!("sql/stats_active_sessions.sql"))
+            .bind(auth.org_id)
+            .bind(repo_filter)
+            .fetch_one(&state.pool),
+        sqlx::query_scalar(include_str!("sql/stats_total_sessions.sql"))
+            .bind(auth.org_id)
+            .bind(repo_filter)
+            .fetch_one(&state.pool),
+        sqlx::query_scalar(include_str!("sql/stats_total_commits.sql"))
+            .bind(auth.org_id)
+            .bind(repo_filter)
+            .fetch_one(&state.pool),
+        sqlx::query_scalar(include_str!("sql/stats_total_events.sql"))
+            .bind(auth.org_id)
+            .bind(repo_filter)
+            .fetch_one(&state.pool),
+    )?;
 
     Ok(Json(StatsResponse {
         active_sessions,
