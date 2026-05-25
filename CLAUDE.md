@@ -4,21 +4,24 @@
 
 # Visdom Trace — pre-push validation
 
-When your work is complete and you are ready to push:
+## During work (session-scoped policies)
 
-1. Open a validation window:
-   tracevault validation-start
+These tools must be called at some point during the session before pushing:
+- mcp__cargo__cargo_fmt       (format code — call before committing)
+- mcp__cargo__cargo_check     (clippy + tests — must succeed)
 
-2. Run the required validation tools in order:
-   - mcp__cargo__cargo_fmt       (format code)
-   - mcp__cargo__cargo_check     (clippy + tests — must succeed)
-   - mcp__review__agent_review   (self-review of the diff)
+## When work is complete (validation window)
 
-   Only these tools should be called between tracevault validation-start and git push.
+When ready to push, open a validation window and run the review tool:
 
-3. If a tool fails and you need to fix something:
-   - Make the fix
-   - Run tracevault validation-start again (invalidates the previous window)
-   - Rerun ALL validation tools from step 2
+1. tracevault validation-start
+2. mcp__review__agent_review   (self-review of the diff — validation window policy)
 
-4. Once all tools pass, push normally.
+Only mcp__review__agent_review should be called between tracevault validation-start and git push.
+
+If you need to fix something after the review:
+- Make the fix
+- Run mcp__cargo__cargo_fmt and mcp__cargo__cargo_check again (session-scoped)
+- Run tracevault validation-start again (invalidates previous window)
+- Run mcp__review__agent_review again
+- Push
