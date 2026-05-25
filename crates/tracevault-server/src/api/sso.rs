@@ -120,9 +120,7 @@ pub async fn upsert_sso_config(
     auth: OrgAuth,
     Json(req): Json<UpsertSsoConfigRequest>,
 ) -> Result<StatusCode, AppError> {
-    if auth.role != "owner" {
-        return Err(AppError::Forbidden("Requires owner role".into()));
-    }
+    error::require_permission(&state.extensions, &auth.role, Permission::OrgSettingsManage)?;
 
     if !state.extensions.features.sso {
         return Err(AppError::Forbidden(
@@ -227,9 +225,7 @@ pub async fn delete_sso_config(
     State(state): State<AppState>,
     auth: OrgAuth,
 ) -> Result<Json<DeleteSsoResponse>, AppError> {
-    if auth.role != "owner" {
-        return Err(AppError::Forbidden("Requires owner role".into()));
-    }
+    error::require_permission(&state.extensions, &auth.role, Permission::OrgSettingsManage)?;
 
     // Count passwordless users that have SSO links in this org
     let affected: (i64,) = sqlx::query_as(
