@@ -78,7 +78,7 @@
 	const showFrom = $derived(total === 0 ? 0 : currentPage * pageSize + 1);
 	const showTo = $derived(Math.min((currentPage + 1) * pageSize, total));
 
-	$effect(() => { slug; load(); });
+	$effect(() => { slug; $page.url.searchParams; load(); });
 </script>
 
 <svelte:head>

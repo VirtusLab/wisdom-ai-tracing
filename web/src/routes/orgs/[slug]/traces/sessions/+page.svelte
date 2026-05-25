@@ -77,7 +77,7 @@
 	const showTo = $derived(Math.min((currentPage + 1) * pageSize, total));
 
 	$effect(() => {
-		slug; statusFilter;
+		slug; statusFilter; $page.url.searchParams;
 		load();
 	});
 </script>
