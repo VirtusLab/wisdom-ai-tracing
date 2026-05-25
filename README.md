@@ -282,10 +282,15 @@ That's it. From this point on, every Claude Code session in this repo is automat
 
 ### 4. Install project-local MCP tools
 
-This repo ships a project-local MCP server (`tools/cargo-mcp/`) that Claude Code picks up automatically via `.mcp.json`. It exposes two tools used by Visdom Trace policies:
+This repo ships two project-local MCP servers that Claude Code picks up automatically via `.mcp.json`:
+
+**`tools/cargo-mcp/`** — exposes three tools used by Visdom Trace policies:
 
 - **`cargo_fmt`** — runs `cargo fmt` to format all Rust files in place. The policy requires this tool to be called before committing.
 - **`cargo_check`** — runs `cargo clippy` then `cargo test`. Returns an error result if either fails. The policy requires this tool to be called *and* to succeed before pushing.
+- **`cargo_audit`** — runs `cargo audit` to check Cargo.lock for known CVEs. Required by policy when `Cargo.lock` changes.
+
+**`integrations/tracevault-mcp/`** — exposes the `ask_tracevault` tool, which lets agents query indexed session history using natural language (e.g. "Why was this module refactored?", "What sessions touched the auth service last month?").
 
 Install the dependencies once after cloning:
 
@@ -294,9 +299,68 @@ npm install --prefix tools/cargo-mcp
 npm install --prefix integrations/tracevault-mcp
 ```
 
-Claude Code will automatically offer the tools in any session inside this repo. No further configuration is needed.
+Claude Code will automatically offer the tools in any session inside this repo. The `ask_tracevault` tool requires a logged-in Visdom Trace session — run `tracevault login` once if you haven't already.
 
-The second package (`integrations/tracevault-mcp`) provides the `ask_tracevault` tool, which lets agents query indexed session history using natural language. It requires a logged-in Visdom Trace session — run `tracevault login` once if you haven't already.
+## Integrating Visdom Trace into your own project
+
+When you run `tracevault init` in a repository, Visdom Trace installs the session hooks automatically. To get the most out of it — and to make sure your AI agents understand the governance expectations — add a `CLAUDE.md` to your repo with instructions for the agent.
+
+### Recommended `CLAUDE.md` for a Visdom Trace–integrated project
+
+```
+# Visdom Trace session tracking
+
+## Session start
+
+At the beginning of every coding session, open a validation window so that
+tool calls during this session are tracked separately from background activity:
+
+    tracevault validation-start
+
+## Before finishing work
+
+Before committing or pushing, run the self-review tool to review your changes:
+
+    mcp__review__agent_review
+
+This assembles the diff and full context of touched files and prompts you to
+review critically — checking for bugs, vulnerabilities, and idiom violations.
+Your review findings are recorded in the session trace.
+
+## Before every push
+
+Run formatting, linting, and tests (or use the project-local MCP tools):
+- Call mcp__cargo__cargo_fmt before committing
+- Call mcp__cargo__cargo_check before pushing (must succeed)
+- Call mcp__cargo__cargo_audit when Cargo.lock changes
+
+## Commit messages
+
+Use conventional commits: https://www.conventionalcommits.org/en/v1.0.0/
+```
+
+Adjust the tool names and commands to match your stack. The key behaviors to encode:
+
+| Instruction | Why |
+|---|---|
+| `tracevault validation-start` at session start | Opens a validation window so window-scoped policies evaluate only the tools called during this work unit, not the full session |
+| Call `mcp__review__agent_review` before finishing | Required by the self-review policy; records that a review happened before code was pushed |
+| Run quality tools before pushing | Required by `RequiredToolCall` policies; blocks the push if they weren't called |
+
+### Policy types you can configure
+
+In the Visdom Trace dashboard, under **Repos → [your repo] → Policies**, you can add:
+
+| Condition | What it checks | Use case |
+|---|---|---|
+| `RequiredToolCall` | A specific tool was called during the session | Mandate code formatters, linters, test runners |
+| `ConditionalToolCall` | A tool was called when specific files changed | Require security scan only when `Cargo.lock` changes |
+| `AiPercentageThreshold` | AI-authored lines exceed a threshold | Warn when AI writes > 80% of a module |
+| `TokenBudget` | Token or cost usage exceeds a limit | Cap AI spend per session |
+
+Actions: **Block push** (exit non-zero, prevents `git push`) or **Warn** (logs but allows).
+
+Scope: **Session** (evaluate all tool calls), **Validation window** (evaluate only tools called after `tracevault validation-start`), or **Both**.
 
 ## Keys & Secrets
 
@@ -356,6 +420,7 @@ export DATABASE_URL=postgres://user:password@host:5432/tracevault?sslmode=requir
 | `tracevault stream --event <type>` | Handle a Claude Code hook event (reads JSON from stdin) and stream it to the server |
 | `tracevault sync` | Sync repo metadata with the server |
 | `tracevault check` | Evaluate policies against server rules, exit non-zero if blocked |
+| `tracevault validation-start [--session-id ID]` | Open a validation window for the current session. Tool calls after this point are evaluated separately by window-scoped policies. |
 | `tracevault stats` | Show local session statistics |
 | `tracevault verify` | Verify commits are registered and sealed on the server (`--commits` or `--range`) |
 | `tracevault status` | Show current session status (not yet implemented) |
@@ -379,6 +444,10 @@ Each policy has a configurable action:
 - **Warn** — prints a warning but allows the push
 
 Fail-closed: if the server is unreachable, `tracevault check` blocks the push.
+
+### Validation Windows
+
+A validation window narrows policy evaluation to tool calls made *after* a specific point in the session. Open one with `tracevault validation-start` before starting a sensitive work unit. Policies scoped to `validation_window` only evaluate tools called within that window — useful for ensuring that a code review or security scan happened specifically for the work being pushed, not just somewhere earlier in a long session.
 
 ## Compliance & Audit Trail
 
