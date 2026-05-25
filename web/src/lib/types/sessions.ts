@@ -11,6 +11,10 @@ export interface SessionItem {
 	tool: string | null;
 	total_tool_calls: number | null;
 	total_tokens: number | null;
+	input_tokens: number | null;
+	output_tokens: number | null;
+	cache_read_tokens: number | null;
+	cache_write_tokens: number | null;
 	estimated_cost_usd: number | null;
 	cwd: string | null;
 	started_at: string | null;

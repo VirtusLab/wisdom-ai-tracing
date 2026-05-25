@@ -1,6 +1,8 @@
 SELECT s.id, s.session_id, s.repo_id, r.name AS repo_name,
        s.user_id, u.email AS user_email, s.status, s.model, s.tool,
-       s.total_tool_calls, s.total_tokens, s.estimated_cost_usd,
+       s.total_tool_calls, s.total_tokens,
+       s.input_tokens, s.output_tokens, s.cache_read_tokens, s.cache_write_tokens,
+       s.estimated_cost_usd,
        s.cwd, s.started_at, s.updated_at,
        COUNT(*) OVER() AS total_count
 FROM sessions s

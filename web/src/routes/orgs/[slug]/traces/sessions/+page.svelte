@@ -148,7 +148,7 @@
 						<Table.Head class="text-muted-foreground text-[10px] font-semibold uppercase tracking-wider">Session ID</Table.Head>
 						<Table.Head class="text-muted-foreground text-[10px] font-semibold uppercase tracking-wider">Repo</Table.Head>
 						<Table.Head class="text-muted-foreground text-[10px] font-semibold uppercase tracking-wider">Tool Calls</Table.Head>
-						<Table.Head class="text-muted-foreground text-[10px] font-semibold uppercase tracking-wider">Tokens</Table.Head>
+						<Table.Head class="text-muted-foreground text-[10px] font-semibold uppercase tracking-wider">Tokens (total)</Table.Head>
 						<Table.Head class="text-muted-foreground text-[10px] font-semibold uppercase tracking-wider">Started</Table.Head>
 					</Table.Row>
 				</Table.Header>
@@ -163,7 +163,19 @@
 							</Table.Cell>
 							<Table.Cell>{s.repo_name ?? '-'}</Table.Cell>
 							<Table.Cell class="font-mono">{fmtNum(s.total_tool_calls)}</Table.Cell>
-							<Table.Cell class="font-mono">{fmtNum(s.total_tokens)}</Table.Cell>
+							<Table.Cell>
+								{@const actualTotal = (s.input_tokens ?? 0) + (s.output_tokens ?? 0) + (s.cache_read_tokens ?? 0) + (s.cache_write_tokens ?? 0)}
+								<div class="font-mono text-xs">{fmtNum(actualTotal || s.total_tokens)}</div>
+								{#if (s.output_tokens ?? 0) > 0 || (s.cache_read_tokens ?? 0) > 0 || (s.cache_write_tokens ?? 0) > 0}
+									<div class="text-muted-foreground mt-0.5 text-[10px] leading-tight">
+										<span>in:{fmtNum(s.input_tokens)}</span>
+										<span class="ml-1">out:{fmtNum(s.output_tokens)}</span>
+										<br />
+										<span>cr:{fmtNum(s.cache_read_tokens)}</span>
+										<span class="ml-1">cw:{fmtNum(s.cache_write_tokens)}</span>
+									</div>
+								{/if}
+							</Table.Cell>
 							<Table.Cell class="text-muted-foreground">{fmtRelativeTime(s.started_at)}</Table.Cell>
 						</Table.Row>
 					{/each}
