@@ -563,7 +563,11 @@ pub async fn list_public_orgs(
                 (s.org_id IS NOT NULL) AS sso_enabled,
                 COALESCE(s.enforce, false) AS sso_enforce
          FROM orgs o
+         -- Only show orgs that have at least one member — filters out
+         -- partially-created orgs left by aborted requests or pen-test probes.
+         JOIN user_org_memberships m ON m.org_id = o.id
          LEFT JOIN org_sso_configs s ON s.org_id = o.id
+         GROUP BY o.id, o.name, o.display_name, s.org_id, s.enforce
          ORDER BY o.name",
     )
     .fetch_all(&state.pool)
