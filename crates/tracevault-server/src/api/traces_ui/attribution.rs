@@ -102,6 +102,7 @@ pub async fn get_attribution(
     let session_short_ids: std::collections::HashMap<Uuid, String> = if !session_ids.is_empty() {
         sqlx::query_as::<_, (Uuid, String)>(include_str!("sql/get_attribution_session_ids.sql"))
             .bind(&session_ids)
+            .bind(auth.org_id)
             .fetch_all(&state.pool)
             .await?
             .into_iter()
@@ -123,33 +124,39 @@ pub async fn get_attribution(
         let mut best_session: Option<Uuid> = None;
         let mut best_confidence: Option<f32> = None;
 
+        // Pass 1: exact line range match
         for (cid, sid, start, end, conf) in &attributions {
-            if line_num as i32 >= *start && line_num as i32 <= *end {
-                let is_blame_commit = line_commit_id == Some(*cid);
-                let is_better = match best_confidence {
-                    None => true,
-                    Some(bc) => is_blame_commit || *conf > bc,
-                };
-                if is_better {
-                    best_session = *sid;
-                    best_confidence = Some(*conf);
-                }
+            if (line_num as i32) < *start || (line_num as i32) > *end {
+                continue;
             }
+            let is_blame_commit = line_commit_id == Some(*cid);
+            let is_better = match best_confidence {
+                None => true,
+                Some(bc) => is_blame_commit || *conf > bc,
+            };
+            if !is_better {
+                continue;
+            }
+            best_session = *sid;
+            best_confidence = Some(*conf);
         }
 
+        // Pass 2: fallback — if blame commit has any attribution for this file, use best
         if best_session.is_none() {
             if let Some(blame_cid) = line_commit_id {
                 for (cid, sid, _start, _end, conf) in &attributions {
-                    if *cid == blame_cid {
-                        let is_better = match best_confidence {
-                            None => true,
-                            Some(bc) => *conf > bc,
-                        };
-                        if is_better {
-                            best_session = *sid;
-                            best_confidence = Some(*conf);
-                        }
+                    if *cid != blame_cid {
+                        continue;
                     }
+                    let is_better = match best_confidence {
+                        None => true,
+                        Some(bc) => *conf > bc,
+                    };
+                    if !is_better {
+                        continue;
+                    }
+                    best_session = *sid;
+                    best_confidence = Some(*conf);
                 }
             }
         }
