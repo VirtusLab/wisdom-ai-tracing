@@ -135,7 +135,7 @@
 	}
 
 	function toolFilterLabel(): string {
-		if (selectedToolNames.length === 0) return 'Any tool';
+		if (selectedToolNames.length === 0) return 'All tools';
 		if (selectedToolNames.length === 1) return selectedToolNames[0].split('__').pop() ?? selectedToolNames[0];
 		return `${selectedToolNames.length} tools`;
 	}
@@ -216,7 +216,7 @@
 		<!-- Tool names filter -->
 		{#if filterOptions.tool_names.length > 0}
 			<Popover.Root>
-				<Popover.Trigger class="border-input bg-background hover:bg-accent hover:text-accent-foreground inline-flex h-8 items-center gap-1 rounded-md border px-3 text-xs font-medium transition-colors">
+				<Popover.Trigger class="border-input bg-background hover:bg-accent hover:text-accent-foreground inline-flex h-8 items-center gap-1 rounded-md border px-3 text-xs font-medium transition-colors {selectedToolNames.length > 0 ? 'border-primary' : ''}">
 					{toolFilterLabel()}
 					{#if selectedToolNames.length > 0}
 						<span class="bg-primary text-primary-foreground ml-1 rounded-full px-1.5 py-0.5 text-[10px]">{selectedToolNames.length}</span>
@@ -225,8 +225,8 @@
 				</Popover.Trigger>
 				<Popover.Content class="w-72 p-2" align="start">
 					<div class="mb-1 flex justify-between text-[10px] text-muted-foreground px-1">
-						<button onclick={() => { selectedToolNames = []; currentPage = 0; load(); }}>Deselect all</button>
-						<button onclick={() => { selectedToolNames = [...filterOptions.tool_names]; currentPage = 0; load(); }}>Any tool</button>
+						<button onclick={() => { selectedToolNames = []; currentPage = 0; load(); }}>All (no filter)</button>
+						<button onclick={() => { selectedToolNames = [...filterOptions.tool_names]; currentPage = 0; load(); }}>Must have a tool</button>
 					</div>
 					<div class="max-h-60 overflow-y-auto">
 						{#each filterOptions.tool_names as name}
