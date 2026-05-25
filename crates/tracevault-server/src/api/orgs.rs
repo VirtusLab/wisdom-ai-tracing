@@ -73,13 +73,22 @@ pub async fn create_org(
         }
     }
 
-    // Create org
+    // Validate provided signing key before touching the DB
+    if let Some(ref seed) = req.signing_key_seed {
+        crate::org_signing::validate_seed(seed)
+            .map_err(|e| AppError::BadRequest(format!("Invalid signing key: {e}")))?;
+    }
+
+    // All DB writes inside a single transaction so a partial failure cannot
+    // leave a memberless org visible in the login dropdown.
+    let mut tx = state.pool.begin().await?;
+
     let org_row = sqlx::query_as::<_, (Uuid,)>(
         "INSERT INTO orgs (name, display_name) VALUES ($1, $2) RETURNING id",
     )
     .bind(&req_name)
     .bind(&req.display_name)
-    .fetch_one(&state.pool)
+    .fetch_one(&mut *tx)
     .await
     .map_err(|e| {
         if e.to_string().contains("unique") {
@@ -91,13 +100,26 @@ pub async fn create_org(
 
     let org_id = org_row.0;
 
-    // Validate provided signing key if any
-    if let Some(ref seed) = req.signing_key_seed {
-        crate::org_signing::validate_seed(seed)
-            .map_err(|e| AppError::BadRequest(format!("Invalid signing key: {e}")))?;
-    }
+    // Create membership (owner) — inside transaction
+    sqlx::query(
+        "INSERT INTO user_org_memberships (user_id, org_id, role) VALUES ($1, $2, 'owner')",
+    )
+    .bind(auth.user_id)
+    .bind(org_id)
+    .execute(&mut *tx)
+    .await?;
 
-    // Store signing key (auto-generate or use provided)
+    // Create default compliance settings — inside transaction
+    sqlx::query("INSERT INTO org_compliance_settings (org_id) VALUES ($1)")
+        .bind(org_id)
+        .execute(&mut *tx)
+        .await?;
+
+    tx.commit().await?;
+
+    // Store signing key — after commit so the org row is visible to the UPDATE.
+    // If this fails the org exists but has no signing key; that is recoverable
+    // (the org is still usable, signing can be configured later).
     let signing_key_seed = if let Some(ref encryption_key) = state.encryption_key {
         Some(
             crate::org_signing::generate_and_store(
@@ -112,21 +134,6 @@ pub async fn create_org(
     } else {
         None
     };
-
-    // Create membership (owner)
-    sqlx::query(
-        "INSERT INTO user_org_memberships (user_id, org_id, role) VALUES ($1, $2, 'owner')",
-    )
-    .bind(auth.user_id)
-    .bind(org_id)
-    .execute(&state.pool)
-    .await?;
-
-    // Create default compliance settings
-    sqlx::query("INSERT INTO org_compliance_settings (org_id) VALUES ($1)")
-        .bind(org_id)
-        .execute(&state.pool)
-        .await?;
 
     crate::audit::log(
         &state.pool,
