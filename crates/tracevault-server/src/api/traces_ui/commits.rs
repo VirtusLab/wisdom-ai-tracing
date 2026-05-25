@@ -69,47 +69,22 @@ pub async fn list_commits(
     let offset = params.offset.unwrap_or(0);
 
     let (rows, total) = tokio::try_join!(
-        sqlx::query_as::<_, CommitListItem>(
-            "SELECT c.id, c.commit_sha, c.branch, c.author, c.message,
-                    COUNT(DISTINCT ca.file_path) AS files_changed,
-                    COUNT(DISTINCT ca.session_id) AS ai_sessions_count,
-                    c.committed_at
-             FROM commits c
-             JOIN repos r ON c.repo_id = r.id
-             LEFT JOIN commit_attributions ca ON ca.commit_id = c.id
-             WHERE r.org_id = $1
-               AND ($2::UUID IS NULL OR c.repo_id = $2)
-               AND ($3::TEXT IS NULL OR c.branch = $3)
-               AND ($4::TIMESTAMPTZ IS NULL OR c.committed_at >= $4)
-               AND ($5::TIMESTAMPTZ IS NULL OR c.committed_at <= $5)
-             GROUP BY c.id
-             ORDER BY c.committed_at DESC NULLS LAST
-             LIMIT $6 OFFSET $7",
-        )
-        .bind(auth.org_id)
-        .bind(params.repo_id)
-        .bind(&params.branch)
-        .bind(params.from)
-        .bind(params.to)
-        .bind(limit)
-        .bind(offset)
-        .fetch_all(&state.pool),
-        sqlx::query_scalar::<_, i64>(
-            "SELECT COUNT(DISTINCT c.id)
-             FROM commits c
-             JOIN repos r ON c.repo_id = r.id
-             WHERE r.org_id = $1
-               AND ($2::UUID IS NULL OR c.repo_id = $2)
-               AND ($3::TEXT IS NULL OR c.branch = $3)
-               AND ($4::TIMESTAMPTZ IS NULL OR c.committed_at >= $4)
-               AND ($5::TIMESTAMPTZ IS NULL OR c.committed_at <= $5)",
-        )
-        .bind(auth.org_id)
-        .bind(params.repo_id)
-        .bind(&params.branch)
-        .bind(params.from)
-        .bind(params.to)
-        .fetch_one(&state.pool),
+        sqlx::query_as::<_, CommitListItem>(include_str!("sql/list_commits.sql"))
+            .bind(auth.org_id)
+            .bind(params.repo_id)
+            .bind(&params.branch)
+            .bind(params.from)
+            .bind(params.to)
+            .bind(limit)
+            .bind(offset)
+            .fetch_all(&state.pool),
+        sqlx::query_scalar::<_, i64>(include_str!("sql/count_commits.sql"))
+            .bind(auth.org_id)
+            .bind(params.repo_id)
+            .bind(&params.branch)
+            .bind(params.from)
+            .bind(params.to)
+            .fetch_one(&state.pool),
     )?;
 
     Ok(Json(PaginatedResponse {
@@ -126,17 +101,12 @@ pub async fn get_commit(
     auth: OrgAuth,
     Path((_slug, commit_id)): Path<(String, Uuid)>,
 ) -> Result<Json<CommitDetailResponse>, AppError> {
-    let commit = sqlx::query_as::<_, CommitDetail>(
-        "SELECT c.id, c.commit_sha, c.branch, c.author, c.message, c.committed_at
-         FROM commits c
-         JOIN repos r ON c.repo_id = r.id
-         WHERE c.id = $1 AND r.org_id = $2",
-    )
-    .bind(commit_id)
-    .bind(auth.org_id)
-    .fetch_optional(&state.pool)
-    .await?
-    .ok_or_else(|| AppError::NotFound("Commit not found".into()))?;
+    let commit = sqlx::query_as::<_, CommitDetail>(include_str!("sql/get_commit.sql"))
+        .bind(commit_id)
+        .bind(auth.org_id)
+        .fetch_optional(&state.pool)
+        .await?
+        .ok_or_else(|| AppError::NotFound("Commit not found".into()))?;
 
     let diff_data: Option<serde_json::Value> =
         sqlx::query_scalar("SELECT diff_data FROM commits WHERE id = $1")
@@ -145,15 +115,7 @@ pub async fn get_commit(
             .await?;
 
     let attributions = sqlx::query_as::<_, (String, Uuid, String, f32, Option<i32>, Option<i32>)>(
-        "SELECT ca.file_path, ca.session_id, s.session_id AS session_short_id,
-                MAX(ca.confidence) AS confidence,
-                MIN(ca.line_start) AS line_start,
-                MAX(ca.line_end) AS line_end
-         FROM commit_attributions ca
-         JOIN sessions s ON ca.session_id = s.id
-         WHERE ca.commit_id = $1
-         GROUP BY ca.file_path, ca.session_id, s.session_id
-         ORDER BY ca.file_path, MIN(ca.line_start) NULLS LAST",
+        include_str!("sql/get_commit_attributions.sql"),
     )
     .bind(commit_id)
     .fetch_all(&state.pool)
