@@ -366,24 +366,28 @@ switch (command) {
 
     if (transcriptFile) {
       transcriptForStop = transcriptFile;
-      const offsetFile = resolve(sessionDir(sessionId), ".transcript_read_offset");
 
-      // Load stored offset — reset to 0 if the transcript file has changed
-      // (prevents skipping events when a new session uses a different file)
-      let readOffset = 0;
-      if (existsSync(offsetFile)) {
-        const stored = readFileSync(offsetFile, "utf8").trim().split("\n");
-        const storedPath = stored[0] ?? "";
-        const storedOffset = parseInt(stored[1] ?? "0", 10) || 0;
-        readOffset = storedPath === transcriptFile ? storedOffset : 0;
+      // Global offset file keyed by transcript path — shared across all bridge
+      // sessions so we never re-stream transcript lines already sent.
+      // Format: JSON object { "<transcriptPath>": bytesRead, ... }
+      ensureDir(PI_SESSION_DIR);
+      const globalOffsetFile = resolve(PI_SESSION_DIR, ".global_transcript_offsets.json");
+      let offsets = {};
+      if (existsSync(globalOffsetFile)) {
+        try {
+          offsets = JSON.parse(readFileSync(globalOffsetFile, "utf8"));
+        } catch {
+          offsets = {};
+        }
       }
+      const readOffset = offsets[transcriptFile] ?? 0;
 
       try {
         const { toolEvents, bytesRead } = parseTranscript(transcriptFile, readOffset);
 
         if (toolEvents.length > 0) {
           process.stderr.write(
-            `[tv] +${toolEvents.length} events from transcript\n`
+            `[tv] +${toolEvents.length} events from transcript (offset ${readOffset}→${bytesRead})\n`
           );
           const { streamed, failed } = streamTranscriptEvents(
             sessionId,
@@ -395,9 +399,10 @@ switch (command) {
           }
         }
 
-        // Persist updated offset alongside the transcript path
+        // Persist updated global offset
         if (bytesRead > readOffset) {
-          writeFileSync(offsetFile, `${transcriptFile}\n${bytesRead}`);
+          offsets[transcriptFile] = bytesRead;
+          writeFileSync(globalOffsetFile, JSON.stringify(offsets, null, 2));
         }
       } catch (err) {
         process.stderr.write(`[tv] ⚠️  transcript parse failed: ${err.message}\n`);
