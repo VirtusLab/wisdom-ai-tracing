@@ -200,6 +200,33 @@ pub async fn list_sessions(
         other => (other.map(String::from), false),
     };
 
+    // Parse comma-separated filter params into Option<Vec<_>>
+    let user_ids: Option<Vec<Uuid>> = params.user_ids.as_deref().and_then(|s| {
+        let ids: Vec<Uuid> = s
+            .split(',')
+            .filter(|p| !p.trim().is_empty())
+            .filter_map(|p| Uuid::parse_str(p.trim()).ok())
+            .collect();
+        if ids.is_empty() {
+            None
+        } else {
+            Some(ids)
+        }
+    });
+
+    let tool_names: Option<Vec<String>> = params.tool_names.as_deref().and_then(|s| {
+        let names: Vec<String> = s
+            .split(',')
+            .filter(|p| !p.trim().is_empty())
+            .map(|p| p.trim().to_string())
+            .collect();
+        if names.is_empty() {
+            None
+        } else {
+            Some(names)
+        }
+    });
+
     let raw_rows = sqlx::query_as::<_, SessionListRow>(include_str!("sql/list_sessions.sql"))
         .bind(auth.org_id)
         .bind(params.repo_id)
@@ -207,6 +234,9 @@ pub async fn list_sessions(
         .bind(use_stale)
         .bind(params.from)
         .bind(params.to)
+        .bind(&user_ids)
+        .bind(&tool_names)
+        .bind(params.has_file_changes)
         .bind(limit)
         .bind(offset)
         .fetch_all(&state.pool)
@@ -363,4 +393,53 @@ pub async fn get_session_linked_commits(
             .await?;
 
     Ok(Json(linked_commits))
+}
+
+/// GET /api/v1/orgs/{slug}/traces/sessions/filter-options
+/// Returns distinct tool names and org members for filter dropdowns.
+#[derive(Debug, serde::Serialize)]
+pub struct SessionFilterOptions {
+    pub tool_names: Vec<String>,
+    pub users: Vec<SessionFilterUser>,
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct SessionFilterUser {
+    pub id: Uuid,
+    pub email: String,
+}
+
+pub async fn get_session_filter_options(
+    State(state): State<AppState>,
+    auth: OrgAuth,
+) -> Result<Json<SessionFilterOptions>, AppError> {
+    let (tool_names_rows, users_rows) = tokio::try_join!(
+        sqlx::query_as::<_, (String,)>(
+            "SELECT DISTINCT e.tool_name
+             FROM events e
+             JOIN sessions s ON s.id = e.session_id
+             JOIN repos r ON r.id = s.repo_id
+             WHERE r.org_id = $1 AND e.tool_name IS NOT NULL
+             ORDER BY e.tool_name",
+        )
+        .bind(auth.org_id)
+        .fetch_all(&state.pool),
+        sqlx::query_as::<_, (Uuid, String)>(
+            "SELECT u.id, u.email
+             FROM users u
+             JOIN user_org_memberships m ON m.user_id = u.id
+             WHERE m.org_id = $1
+             ORDER BY u.email",
+        )
+        .bind(auth.org_id)
+        .fetch_all(&state.pool),
+    )?;
+
+    Ok(Json(SessionFilterOptions {
+        tool_names: tool_names_rows.into_iter().map(|(t,)| t).collect(),
+        users: users_rows
+            .into_iter()
+            .map(|(id, email)| SessionFilterUser { id, email })
+            .collect(),
+    }))
 }

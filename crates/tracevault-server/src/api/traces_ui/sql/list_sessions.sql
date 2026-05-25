@@ -14,5 +14,15 @@ WHERE r.org_id = $1
   AND ($4::BOOL = FALSE OR s.updated_at < now() - interval '30 minutes')
   AND ($5::TIMESTAMPTZ IS NULL OR s.started_at >= $5)
   AND ($6::TIMESTAMPTZ IS NULL OR s.started_at <= $6)
+  AND ($7::UUID[] IS NULL OR s.user_id = ANY($7))
+  AND ($8::TEXT[] IS NULL OR EXISTS (
+        SELECT 1 FROM events e
+        WHERE e.session_id = s.id AND e.tool_name = ANY($8)
+  ))
+  AND ($9::BOOL IS NULL OR (
+        CASE WHEN $9 THEN EXISTS (SELECT 1 FROM file_changes fc WHERE fc.session_id = s.id)
+             ELSE NOT EXISTS (SELECT 1 FROM file_changes fc WHERE fc.session_id = s.id)
+        END
+  ))
 ORDER BY s.updated_at DESC
-LIMIT $7 OFFSET $8
+LIMIT $10 OFFSET $11

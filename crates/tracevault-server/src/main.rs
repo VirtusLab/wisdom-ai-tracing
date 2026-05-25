@@ -337,6 +337,10 @@ async fn main() {
             get(api::traces_ui::list_sessions),
         )
         .route(
+            "/api/v1/orgs/{slug}/traces/sessions/filter-options",
+            get(api::traces_ui::get_session_filter_options),
+        )
+        .route(
             "/api/v1/orgs/{slug}/traces/sessions/{id}",
             get(api::traces_ui::get_session),
         )
