@@ -1,54 +1,85 @@
 <script lang="ts">
 	import { page } from '$app/stores';
-	import { useFetch } from '$lib/hooks/use-fetch.svelte';
+	import { api } from '$lib/api';
 	import { fmtNum, fmtRelativeTime } from '$lib/utils/format';
 	import { sessionStatus } from '$lib/utils/status';
 	import type { SessionItem } from '$lib/types';
-	import DataTable from '$lib/components/DataTable.svelte';
+	import * as Table from '$lib/components/ui/table/index.js';
 	import StatusBadge from '$lib/components/StatusBadge.svelte';
 	import LoadingState from '$lib/components/LoadingState.svelte';
 	import ErrorState from '$lib/components/ErrorState.svelte';
 	import EmptyState from '$lib/components/EmptyState.svelte';
+	import ChevronLeftIcon from '@lucide/svelte/icons/chevron-left';
+	import ChevronRightIcon from '@lucide/svelte/icons/chevron-right';
 
-	let statusFilter = $state<'all' | 'active' | 'completed' | 'stale'>('all');
+	type StatusFilter = 'all' | 'active' | 'completed' | 'stale';
 
 	const slug = $derived($page.params.slug);
 
-	const sessionsUrl = $derived.by(() => {
-		const params = new URLSearchParams();
-		const repoId = $page.url.searchParams.get('repo_id');
-		const from = $page.url.searchParams.get('from');
-		const to = $page.url.searchParams.get('to');
-		if (repoId) params.set('repo_id', repoId);
-		if (from) params.set('from', from);
-		if (to) params.set('to', to);
-		if (statusFilter !== 'all') params.set('status', statusFilter);
-		const qs = params.toString();
-		return `/api/v1/orgs/${slug}/traces/sessions${qs ? '?' + qs : ''}`;
-	});
+	let statusFilter = $state<StatusFilter>('all');
+	let pageSize = $state(25);
+	let currentPage = $state(0);
 
-	const sessionsQuery = useFetch<SessionItem[]>(() => sessionsUrl, { initial: [] });
+	let sessions = $state<SessionItem[]>([]);
+	let total = $state(0);
+	let loading = $state(true);
+	let error = $state('');
 
-	const filterButtons: { value: typeof statusFilter; label: string }[] = [
+	async function load() {
+		loading = true;
+		error = '';
+		try {
+			const params = new URLSearchParams({
+				limit: String(pageSize),
+				offset: String(currentPage * pageSize)
+			});
+			const repoId = $page.url.searchParams.get('repo_id');
+			const from = $page.url.searchParams.get('from');
+			const to = $page.url.searchParams.get('to');
+			if (repoId) params.set('repo_id', repoId);
+			if (from) params.set('from', from);
+			if (to) params.set('to', to);
+			if (statusFilter !== 'all') params.set('status', statusFilter);
+
+			const result = await api.get<{ items: SessionItem[]; total: number }>(
+				`/api/v1/orgs/${slug}/traces/sessions?${params}`
+			);
+			sessions = result?.items ?? [];
+			total = result?.total ?? 0;
+		} catch (err) {
+			error = err instanceof Error ? err.message : 'Failed to load sessions';
+		} finally {
+			loading = false;
+		}
+	}
+
+	function setFilter(f: StatusFilter) {
+		statusFilter = f;
+		currentPage = 0;
+		load();
+	}
+
+	function setPageSize(s: number) {
+		pageSize = s;
+		currentPage = 0;
+		load();
+	}
+
+	const filterButtons: { value: StatusFilter; label: string }[] = [
 		{ value: 'all', label: 'All' },
 		{ value: 'active', label: 'Active' },
 		{ value: 'completed', label: 'Completed' },
 		{ value: 'stale', label: 'Stale' }
 	];
 
-	const columns = [
-		{ key: '_status', label: 'Status' },
-		{ key: 'session_id', label: 'Session ID' },
-		{ key: 'repo_name', label: 'Repo', sortable: true },
-		{ key: 'total_tool_calls', label: 'Tool Calls', sortable: true },
-		{ key: 'total_tokens', label: 'Tokens', sortable: true },
-		{ key: 'started_at', label: 'Started', sortable: true }
-	];
+	const totalPages = $derived(Math.max(1, Math.ceil(total / pageSize)));
+	const showFrom = $derived(total === 0 ? 0 : currentPage * pageSize + 1);
+	const showTo = $derived(Math.min((currentPage + 1) * pageSize, total));
 
-	const sessions = $derived(sessionsQuery.data ?? []);
-	const tableRows = $derived(
-		sessions.map((s) => ({ ...s, _status: sessionStatus(s.status, s.updated_at) }) as Record<string, unknown>)
-	);
+	$effect(() => {
+		slug; statusFilter;
+		load();
+	});
 </script>
 
 <svelte:head>
@@ -64,44 +95,83 @@
 					{statusFilter === btn.value
 						? 'bg-primary text-primary-foreground'
 						: 'bg-muted text-muted-foreground hover:text-foreground'}"
-				onclick={() => (statusFilter = btn.value)}
+				onclick={() => setFilter(btn.value)}
 			>
 				{btn.label}
 			</button>
 		{/each}
 	</div>
 
-	{#if sessionsQuery.loading}
+	{#if loading}
 		<LoadingState />
-	{:else if sessionsQuery.error}
-		<ErrorState message={sessionsQuery.error} onRetry={sessionsQuery.refetch} />
+	{:else if error}
+		<ErrorState message={error} onRetry={load} />
 	{:else if sessions.length === 0}
 		<EmptyState message="No sessions found." />
 	{:else}
-		<DataTable
-			{columns}
-			rows={tableRows}
-			searchKeys={['session_id', 'repo_name']}
-			defaultSort="started_at"
-			rowIdKey="id"
-		>
-			{#snippet children({ row, col })}
-				{#if col.key === '_status'}
-					<StatusBadge status={String(row._status)} />
-				{:else if col.key === 'session_id'}
-					<a href="/orgs/{slug}/traces/sessions/{row.id}" class="font-mono text-sm underline">
-						{String(row.session_id).slice(0, 8)}
-					</a>
-				{:else if col.key === 'total_tool_calls'}
-					<span class="font-mono text-sm">{fmtNum(row.total_tool_calls as number | null)}</span>
-				{:else if col.key === 'total_tokens'}
-					<span class="font-mono text-sm">{fmtNum(row.total_tokens as number | null)}</span>
-				{:else if col.key === 'started_at'}
-					{fmtRelativeTime(row.started_at as string | null)}
-				{:else}
-					{row[col.key] ?? '-'}
-				{/if}
-			{/snippet}
-		</DataTable>
+		<div class="border-border overflow-hidden rounded-lg border">
+			<Table.Root class="text-xs">
+				<Table.Header>
+					<Table.Row class="bg-muted/30 border-border border-b">
+						<Table.Head class="text-muted-foreground text-[10px] font-semibold uppercase tracking-wider">Status</Table.Head>
+						<Table.Head class="text-muted-foreground text-[10px] font-semibold uppercase tracking-wider">Session ID</Table.Head>
+						<Table.Head class="text-muted-foreground text-[10px] font-semibold uppercase tracking-wider">Repo</Table.Head>
+						<Table.Head class="text-muted-foreground text-[10px] font-semibold uppercase tracking-wider">Tool Calls</Table.Head>
+						<Table.Head class="text-muted-foreground text-[10px] font-semibold uppercase tracking-wider">Tokens</Table.Head>
+						<Table.Head class="text-muted-foreground text-[10px] font-semibold uppercase tracking-wider">Started</Table.Head>
+					</Table.Row>
+				</Table.Header>
+				<Table.Body>
+					{#each sessions as s (s.id)}
+						<Table.Row class="hover:bg-muted/40 transition-colors">
+							<Table.Cell><StatusBadge status={sessionStatus(s.status, s.updated_at)} /></Table.Cell>
+							<Table.Cell>
+								<a href="/orgs/{slug}/traces/sessions/{s.id}" class="font-mono text-sm underline">
+									{String(s.session_id).slice(0, 8)}
+								</a>
+							</Table.Cell>
+							<Table.Cell>{s.repo_name ?? '-'}</Table.Cell>
+							<Table.Cell class="font-mono">{fmtNum(s.total_tool_calls)}</Table.Cell>
+							<Table.Cell class="font-mono">{fmtNum(s.total_tokens)}</Table.Cell>
+							<Table.Cell class="text-muted-foreground">{fmtRelativeTime(s.started_at)}</Table.Cell>
+						</Table.Row>
+					{/each}
+				</Table.Body>
+			</Table.Root>
+
+			<!-- Pagination footer -->
+			<div class="border-border text-muted-foreground flex items-center justify-between border-t px-3 py-2 text-xs">
+				<span>{showFrom}-{showTo} of {total}</span>
+				<div class="flex items-center gap-3">
+					<span>Per page:</span>
+					{#each [25, 50, 100] as size}
+						<button
+							class="rounded px-1.5 py-0.5 transition-colors {pageSize === size
+								? 'bg-primary text-primary-foreground'
+								: 'hover:text-foreground'}"
+							onclick={() => setPageSize(size)}
+						>
+							{size}
+						</button>
+					{/each}
+					<span class="text-border mx-1">|</span>
+					<button
+						class="hover:text-foreground disabled:opacity-30"
+						disabled={currentPage === 0}
+						onclick={() => { currentPage--; load(); }}
+					>
+						<ChevronLeftIcon class="h-4 w-4" />
+					</button>
+					<span>{currentPage + 1}/{totalPages}</span>
+					<button
+						class="hover:text-foreground disabled:opacity-30"
+						disabled={currentPage >= totalPages - 1}
+						onclick={() => { currentPage++; load(); }}
+					>
+						<ChevronRightIcon class="h-4 w-4" />
+					</button>
+				</div>
+			</div>
+		</div>
 	{/if}
 </div>

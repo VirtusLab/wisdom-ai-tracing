@@ -1,11 +1,13 @@
 <script lang="ts">
 	import { page } from '$app/stores';
-	import { useFetch } from '$lib/hooks/use-fetch.svelte';
+	import { api } from '$lib/api';
 	import { fmtRelativeTime } from '$lib/utils/format';
-	import DataTable from '$lib/components/DataTable.svelte';
+	import * as Table from '$lib/components/ui/table/index.js';
 	import LoadingState from '$lib/components/LoadingState.svelte';
 	import ErrorState from '$lib/components/ErrorState.svelte';
 	import EmptyState from '$lib/components/EmptyState.svelte';
+	import ChevronLeftIcon from '@lucide/svelte/icons/chevron-left';
+	import ChevronRightIcon from '@lucide/svelte/icons/chevron-right';
 
 	interface CommitListItem {
 		id: string;
@@ -18,7 +20,15 @@
 		committed_at: string;
 	}
 
-	let expandedId: string | null = $state(null);
+	const slug = $derived($page.params.slug);
+
+	let commits = $state<CommitListItem[]>([]);
+	let total = $state(0);
+	let loading = $state(true);
+	let error = $state('');
+	let pageSize = $state(25);
+	let currentPage = $state(0);
+	let expandedId = $state<string | null>(null);
 
 	function firstLine(msg: string | null): string {
 		if (!msg) return '-';
@@ -29,38 +39,46 @@
 		expandedId = expandedId === id ? null : id;
 	}
 
-	const slug = $derived($page.params.slug);
+	async function load() {
+		loading = true;
+		error = '';
+		try {
+			const params = new URLSearchParams({
+				limit: String(pageSize),
+				offset: String(currentPage * pageSize)
+			});
+			const repoId = $page.url.searchParams.get('repo_id');
+			const branch = $page.url.searchParams.get('branch');
+			const from = $page.url.searchParams.get('from');
+			const to = $page.url.searchParams.get('to');
+			if (repoId) params.set('repo_id', repoId);
+			if (branch) params.set('branch', branch);
+			if (from) params.set('from', from);
+			if (to) params.set('to', to);
 
-	const commitsUrl = $derived.by(() => {
-		const params = new URLSearchParams();
-		const repoId = $page.url.searchParams.get('repo_id');
-		const branch = $page.url.searchParams.get('branch');
-		const from = $page.url.searchParams.get('from');
-		const to = $page.url.searchParams.get('to');
-		if (repoId) params.set('repo_id', repoId);
-		if (branch) params.set('branch', branch);
-		if (from) params.set('from', from);
-		if (to) params.set('to', to);
-		const qs = params.toString();
-		return `/api/v1/orgs/${slug}/traces/commits${qs ? '?' + qs : ''}`;
-	});
+			const result = await api.get<{ items: CommitListItem[]; total: number }>(
+				`/api/v1/orgs/${slug}/traces/commits?${params}`
+			);
+			commits = result?.items ?? [];
+			total = result?.total ?? 0;
+		} catch (err) {
+			error = err instanceof Error ? err.message : 'Failed to load commits';
+		} finally {
+			loading = false;
+		}
+	}
 
-	const commitsQuery = useFetch<CommitListItem[]>(() => commitsUrl, { initial: [] });
+	function setPageSize(s: number) {
+		pageSize = s;
+		currentPage = 0;
+		load();
+	}
 
-	const columns = [
-		{ key: 'commit_sha', label: 'Commit' },
-		{ key: 'message', label: 'Message' },
-		{ key: 'branch', label: 'Branch' },
-		{ key: 'author', label: 'Author', sortable: true },
-		{ key: 'files_changed', label: 'Files Changed', sortable: true },
-		{ key: 'ai_sessions_count', label: 'AI Sessions', sortable: true },
-		{ key: 'committed_at', label: 'Committed', sortable: true }
-	];
+	const totalPages = $derived(Math.max(1, Math.ceil(total / pageSize)));
+	const showFrom = $derived(total === 0 ? 0 : currentPage * pageSize + 1);
+	const showTo = $derived(Math.min((currentPage + 1) * pageSize, total));
 
-	const commits = $derived(commitsQuery.data ?? []);
-	const tableRows = $derived(
-		commits.map((c) => ({ ...c }) as Record<string, unknown>)
-	);
+	$effect(() => { slug; load(); });
 </script>
 
 <svelte:head>
@@ -68,59 +86,102 @@
 </svelte:head>
 
 <div class="space-y-4">
-	{#if commitsQuery.loading}
+	{#if loading}
 		<LoadingState />
-	{:else if commitsQuery.error}
-		<ErrorState message={commitsQuery.error} onRetry={commitsQuery.refetch} />
+	{:else if error}
+		<ErrorState message={error} onRetry={load} />
 	{:else if commits.length === 0}
 		<EmptyState message="No commits yet." />
 	{:else}
-		<DataTable
-			{columns}
-			rows={tableRows}
-			searchKeys={['commit_sha', 'author', 'message', 'branch']}
-			defaultSort="committed_at"
-			rowIdKey="id"
-			onRowClick={(row) => toggleExpand(row.id as string)}
-			expandedRowId={expandedId}
-		>
-			{#snippet children({ row, col })}
-				{#if col.key === 'commit_sha'}
-					<a
-						href="/orgs/{slug}/traces/commits/{row.id}"
-						class="font-mono text-sm underline"
-						onclick={(e) => e.stopPropagation()}
+		<div class="border-border overflow-hidden rounded-lg border">
+			<Table.Root class="text-xs">
+				<Table.Header>
+					<Table.Row class="bg-muted/30 border-border border-b">
+						<Table.Head class="text-muted-foreground text-[10px] font-semibold uppercase tracking-wider">Commit</Table.Head>
+						<Table.Head class="text-muted-foreground text-[10px] font-semibold uppercase tracking-wider">Message</Table.Head>
+						<Table.Head class="text-muted-foreground text-[10px] font-semibold uppercase tracking-wider">Branch</Table.Head>
+						<Table.Head class="text-muted-foreground text-[10px] font-semibold uppercase tracking-wider">Author</Table.Head>
+						<Table.Head class="text-muted-foreground text-[10px] font-semibold uppercase tracking-wider">Files</Table.Head>
+						<Table.Head class="text-muted-foreground text-[10px] font-semibold uppercase tracking-wider">AI Sessions</Table.Head>
+						<Table.Head class="text-muted-foreground text-[10px] font-semibold uppercase tracking-wider">Committed</Table.Head>
+					</Table.Row>
+				</Table.Header>
+				<Table.Body>
+					{#each commits as c (c.id)}
+						<Table.Row
+							class="hover:bg-muted/40 cursor-pointer transition-colors"
+							onclick={() => toggleExpand(c.id)}
+						>
+							<Table.Cell>
+								<a
+									href="/orgs/{slug}/traces/commits/{c.id}"
+									class="font-mono text-sm underline"
+									onclick={(e) => e.stopPropagation()}
+								>
+									{c.commit_sha.slice(0, 8)}
+								</a>
+							</Table.Cell>
+							<Table.Cell class="text-muted-foreground max-w-xs truncate">{firstLine(c.message)}</Table.Cell>
+							<Table.Cell>
+								{#if c.branch}
+									<span class="rounded-full px-2 py-0.5 text-[10px]"
+										style="background: rgba(79,110,247,0.12); color: #4f6ef7; border: 1px solid rgba(79,110,247,0.25)"
+									>{c.branch}</span>
+								{:else}
+									<span class="text-muted-foreground">-</span>
+								{/if}
+							</Table.Cell>
+							<Table.Cell class="text-muted-foreground">{c.author}</Table.Cell>
+							<Table.Cell class="font-mono">{c.files_changed}</Table.Cell>
+							<Table.Cell class="font-mono">{c.ai_sessions_count}</Table.Cell>
+							<Table.Cell class="text-muted-foreground">{fmtRelativeTime(c.committed_at)}</Table.Cell>
+						</Table.Row>
+						{#if expandedId === c.id && c.message}
+							<Table.Row>
+								<Table.Cell colspan={7} class="p-0">
+									<div class="bg-muted/20 px-4 py-3">
+										<pre class="text-muted-foreground whitespace-pre-wrap font-mono text-xs">{c.message.trim()}</pre>
+									</div>
+								</Table.Cell>
+							</Table.Row>
+						{/if}
+					{/each}
+				</Table.Body>
+			</Table.Root>
+
+			<!-- Pagination footer -->
+			<div class="border-border text-muted-foreground flex items-center justify-between border-t px-3 py-2 text-xs">
+				<span>{showFrom}-{showTo} of {total}</span>
+				<div class="flex items-center gap-3">
+					<span>Per page:</span>
+					{#each [25, 50, 100] as size}
+						<button
+							class="rounded px-1.5 py-0.5 transition-colors {pageSize === size
+								? 'bg-primary text-primary-foreground'
+								: 'hover:text-foreground'}"
+							onclick={() => setPageSize(size)}
+						>
+							{size}
+						</button>
+					{/each}
+					<span class="text-border mx-1">|</span>
+					<button
+						class="hover:text-foreground disabled:opacity-30"
+						disabled={currentPage === 0}
+						onclick={() => { currentPage--; load(); }}
 					>
-						{String(row.commit_sha).slice(0, 8)}
-					</a>
-				{:else if col.key === 'message'}
-					<span class="max-w-xs truncate text-muted-foreground">{firstLine(row.message as string | null)}</span>
-				{:else if col.key === 'branch'}
-					{#if row.branch}
-						<span
-							class="rounded-full px-2 py-0.5 text-[10px]"
-							style="background: rgba(79,110,247,0.12); color: #4f6ef7; border: 1px solid rgba(79,110,247,0.25)"
-						>{row.branch}</span>
-					{:else}
-						<span class="text-muted-foreground">-</span>
-					{/if}
-				{:else if col.key === 'files_changed' || col.key === 'ai_sessions_count'}
-					<span class="font-mono text-sm">{row[col.key]}</span>
-				{:else if col.key === 'committed_at'}
-					<span class="text-muted-foreground">{fmtRelativeTime(row.committed_at as string | null)}</span>
-				{:else if col.key === 'author'}
-					<span class="text-muted-foreground">{row.author}</span>
-				{:else}
-					{row[col.key] ?? '-'}
-				{/if}
-			{/snippet}
-			{#snippet expandedRow({ row })}
-				{#if row.message}
-					<div class="bg-muted/20 py-3 px-4">
-						<pre class="whitespace-pre-wrap text-xs text-muted-foreground font-mono">{String(row.message).trim()}</pre>
-					</div>
-				{/if}
-			{/snippet}
-		</DataTable>
+						<ChevronLeftIcon class="h-4 w-4" />
+					</button>
+					<span>{currentPage + 1}/{totalPages}</span>
+					<button
+						class="hover:text-foreground disabled:opacity-30"
+						disabled={currentPage >= totalPages - 1}
+						onclick={() => { currentPage++; load(); }}
+					>
+						<ChevronRightIcon class="h-4 w-4" />
+					</button>
+				</div>
+			</div>
+		</div>
 	{/if}
 </div>

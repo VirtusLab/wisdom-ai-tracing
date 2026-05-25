@@ -42,6 +42,14 @@ pub struct CommitListQuery {
 // ── Response types ──────────────────────────────────────────────────
 
 #[derive(Debug, Serialize)]
+pub struct PaginatedResponse<T: Serialize> {
+    pub items: Vec<T>,
+    pub total: i64,
+    pub limit: i64,
+    pub offset: i64,
+}
+
+#[derive(Debug, Serialize)]
 pub struct StatsResponse {
     pub active_sessions: i64,
     pub total_sessions: i64,
@@ -280,7 +288,7 @@ pub async fn list_sessions(
     State(state): State<AppState>,
     auth: OrgAuth,
     Query(params): Query<SessionListQuery>,
-) -> Result<Json<Vec<SessionListItem>>, AppError> {
+) -> Result<Json<PaginatedResponse<SessionListItem>>, AppError> {
     let limit = params.limit.unwrap_or(50).min(200);
     let offset = params.offset.unwrap_or(0);
 
@@ -290,35 +298,59 @@ pub async fn list_sessions(
         other => (other.map(String::from), false),
     };
 
-    let rows = sqlx::query_as::<_, SessionListItem>(
-        "SELECT s.id, s.session_id, s.repo_id, r.name AS repo_name,
-                s.user_id, u.email AS user_email, s.status, s.model, s.tool,
-                s.total_tool_calls, s.total_tokens, s.estimated_cost_usd,
-                s.cwd, s.started_at, s.updated_at
-         FROM sessions s
-         JOIN repos r ON s.repo_id = r.id
-         JOIN users u ON s.user_id = u.id
-         WHERE r.org_id = $1
-           AND ($2::UUID IS NULL OR s.repo_id = $2)
-           AND ($3::TEXT IS NULL OR s.status = $3)
-           AND ($4::BOOL = FALSE OR s.updated_at < now() - interval '30 minutes')
-           AND ($5::TIMESTAMPTZ IS NULL OR s.started_at >= $5)
-           AND ($6::TIMESTAMPTZ IS NULL OR s.started_at <= $6)
-         ORDER BY s.updated_at DESC
-         LIMIT $7 OFFSET $8",
-    )
-    .bind(auth.org_id)
-    .bind(params.repo_id)
-    .bind(&status_filter)
-    .bind(use_stale)
-    .bind(params.from)
-    .bind(params.to)
-    .bind(limit)
-    .bind(offset)
-    .fetch_all(&state.pool)
-    .await?;
+    let (rows, total) = tokio::try_join!(
+        sqlx::query_as::<_, SessionListItem>(
+            "SELECT s.id, s.session_id, s.repo_id, r.name AS repo_name,
+                    s.user_id, u.email AS user_email, s.status, s.model, s.tool,
+                    s.total_tool_calls, s.total_tokens, s.estimated_cost_usd,
+                    s.cwd, s.started_at, s.updated_at
+             FROM sessions s
+             JOIN repos r ON s.repo_id = r.id
+             JOIN users u ON s.user_id = u.id
+             WHERE r.org_id = $1
+               AND ($2::UUID IS NULL OR s.repo_id = $2)
+               AND ($3::TEXT IS NULL OR s.status = $3)
+               AND ($4::BOOL = FALSE OR s.updated_at < now() - interval '30 minutes')
+               AND ($5::TIMESTAMPTZ IS NULL OR s.started_at >= $5)
+               AND ($6::TIMESTAMPTZ IS NULL OR s.started_at <= $6)
+             ORDER BY s.updated_at DESC
+             LIMIT $7 OFFSET $8",
+        )
+        .bind(auth.org_id)
+        .bind(params.repo_id)
+        .bind(&status_filter)
+        .bind(use_stale)
+        .bind(params.from)
+        .bind(params.to)
+        .bind(limit)
+        .bind(offset)
+        .fetch_all(&state.pool),
+        sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*)
+             FROM sessions s
+             JOIN repos r ON s.repo_id = r.id
+             WHERE r.org_id = $1
+               AND ($2::UUID IS NULL OR s.repo_id = $2)
+               AND ($3::TEXT IS NULL OR s.status = $3)
+               AND ($4::BOOL = FALSE OR s.updated_at < now() - interval '30 minutes')
+               AND ($5::TIMESTAMPTZ IS NULL OR s.started_at >= $5)
+               AND ($6::TIMESTAMPTZ IS NULL OR s.started_at <= $6)",
+        )
+        .bind(auth.org_id)
+        .bind(params.repo_id)
+        .bind(&status_filter)
+        .bind(use_stale)
+        .bind(params.from)
+        .bind(params.to)
+        .fetch_one(&state.pool),
+    )?;
 
-    Ok(Json(rows))
+    Ok(Json(PaginatedResponse {
+        items: rows,
+        total,
+        limit,
+        offset,
+    }))
 }
 
 /// GET /api/v1/orgs/{slug}/traces/sessions/{id}
@@ -506,38 +538,60 @@ pub async fn list_commits(
     State(state): State<AppState>,
     auth: OrgAuth,
     Query(params): Query<CommitListQuery>,
-) -> Result<Json<Vec<CommitListItem>>, AppError> {
+) -> Result<Json<PaginatedResponse<CommitListItem>>, AppError> {
     let limit = params.limit.unwrap_or(50).min(200);
     let offset = params.offset.unwrap_or(0);
 
-    let rows = sqlx::query_as::<_, CommitListItem>(
-        "SELECT c.id, c.commit_sha, c.branch, c.author, c.message,
-                COUNT(DISTINCT ca.file_path) AS files_changed,
-                COUNT(DISTINCT ca.session_id) AS ai_sessions_count,
-                c.committed_at
-         FROM commits c
-         JOIN repos r ON c.repo_id = r.id
-         LEFT JOIN commit_attributions ca ON ca.commit_id = c.id
-         WHERE r.org_id = $1
-           AND ($2::UUID IS NULL OR c.repo_id = $2)
-           AND ($3::TEXT IS NULL OR c.branch = $3)
-           AND ($4::TIMESTAMPTZ IS NULL OR c.committed_at >= $4)
-           AND ($5::TIMESTAMPTZ IS NULL OR c.committed_at <= $5)
-         GROUP BY c.id
-         ORDER BY c.committed_at DESC NULLS LAST
-         LIMIT $6 OFFSET $7",
-    )
-    .bind(auth.org_id)
-    .bind(params.repo_id)
-    .bind(&params.branch)
-    .bind(params.from)
-    .bind(params.to)
-    .bind(limit)
-    .bind(offset)
-    .fetch_all(&state.pool)
-    .await?;
+    let (rows, total) = tokio::try_join!(
+        sqlx::query_as::<_, CommitListItem>(
+            "SELECT c.id, c.commit_sha, c.branch, c.author, c.message,
+                    COUNT(DISTINCT ca.file_path) AS files_changed,
+                    COUNT(DISTINCT ca.session_id) AS ai_sessions_count,
+                    c.committed_at
+             FROM commits c
+             JOIN repos r ON c.repo_id = r.id
+             LEFT JOIN commit_attributions ca ON ca.commit_id = c.id
+             WHERE r.org_id = $1
+               AND ($2::UUID IS NULL OR c.repo_id = $2)
+               AND ($3::TEXT IS NULL OR c.branch = $3)
+               AND ($4::TIMESTAMPTZ IS NULL OR c.committed_at >= $4)
+               AND ($5::TIMESTAMPTZ IS NULL OR c.committed_at <= $5)
+             GROUP BY c.id
+             ORDER BY c.committed_at DESC NULLS LAST
+             LIMIT $6 OFFSET $7",
+        )
+        .bind(auth.org_id)
+        .bind(params.repo_id)
+        .bind(&params.branch)
+        .bind(params.from)
+        .bind(params.to)
+        .bind(limit)
+        .bind(offset)
+        .fetch_all(&state.pool),
+        sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(DISTINCT c.id)
+             FROM commits c
+             JOIN repos r ON c.repo_id = r.id
+             WHERE r.org_id = $1
+               AND ($2::UUID IS NULL OR c.repo_id = $2)
+               AND ($3::TEXT IS NULL OR c.branch = $3)
+               AND ($4::TIMESTAMPTZ IS NULL OR c.committed_at >= $4)
+               AND ($5::TIMESTAMPTZ IS NULL OR c.committed_at <= $5)",
+        )
+        .bind(auth.org_id)
+        .bind(params.repo_id)
+        .bind(&params.branch)
+        .bind(params.from)
+        .bind(params.to)
+        .fetch_one(&state.pool),
+    )?;
 
-    Ok(Json(rows))
+    Ok(Json(PaginatedResponse {
+        items: rows,
+        total,
+        limit,
+        offset,
+    }))
 }
 
 /// GET /api/v1/orgs/{slug}/traces/commits/{id}
