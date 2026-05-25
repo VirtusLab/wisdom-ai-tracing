@@ -11,6 +11,8 @@
 	import EmptyState from '$lib/components/EmptyState.svelte';
 	import ChevronLeftIcon from '@lucide/svelte/icons/chevron-left';
 	import ChevronRightIcon from '@lucide/svelte/icons/chevron-right';
+	import SearchIcon from '@lucide/svelte/icons/search';
+	import XIcon from '@lucide/svelte/icons/x';
 
 	type StatusFilter = 'all' | 'active' | 'completed' | 'stale';
 
@@ -72,6 +74,20 @@
 		{ value: 'stale', label: 'Stale' }
 	];
 
+	let search = $state('');
+
+	const filteredSessions = $derived(
+		search.trim()
+			? sessions.filter((s) => {
+					const q = search.toLowerCase();
+					return (
+						s.session_id?.toLowerCase().includes(q) ||
+						s.repo_name?.toLowerCase().includes(q)
+					);
+				})
+			: sessions
+	);
+
 	const totalPages = $derived(Math.max(1, Math.ceil(total / pageSize)));
 	const showFrom = $derived(total === 0 ? 0 : currentPage * pageSize + 1);
 	const showTo = $derived(Math.min((currentPage + 1) * pageSize, total));
@@ -110,6 +126,21 @@
 		<EmptyState message="No sessions found." />
 	{:else}
 		<div class="border-border overflow-hidden rounded-lg border">
+			<!-- Search bar -->
+			<div class="border-border flex items-center gap-2 border-b px-3 py-2">
+				<SearchIcon class="text-muted-foreground h-3.5 w-3.5 shrink-0" />
+				<input
+					type="text"
+					placeholder="Search session ID or repo (this page)…"
+					bind:value={search}
+					class="text-foreground placeholder:text-muted-foreground w-full bg-transparent text-sm outline-none"
+				/>
+				{#if search}
+					<button class="text-muted-foreground hover:text-foreground" onclick={() => (search = '')}>
+						<XIcon class="h-3.5 w-3.5" />
+					</button>
+				{/if}
+			</div>
 			<Table.Root class="text-xs">
 				<Table.Header>
 					<Table.Row class="bg-muted/30 border-border border-b">
@@ -122,7 +153,7 @@
 					</Table.Row>
 				</Table.Header>
 				<Table.Body>
-					{#each sessions as s (s.id)}
+					{#each filteredSessions as s (s.id)}
 						<Table.Row class="hover:bg-muted/40 transition-colors">
 							<Table.Cell><StatusBadge status={sessionStatus(s.status, s.updated_at)} /></Table.Cell>
 							<Table.Cell>

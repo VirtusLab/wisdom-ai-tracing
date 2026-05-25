@@ -8,6 +8,8 @@
 	import EmptyState from '$lib/components/EmptyState.svelte';
 	import ChevronLeftIcon from '@lucide/svelte/icons/chevron-left';
 	import ChevronRightIcon from '@lucide/svelte/icons/chevron-right';
+	import SearchIcon from '@lucide/svelte/icons/search';
+	import XIcon from '@lucide/svelte/icons/x';
 
 	interface CommitListItem {
 		id: string;
@@ -74,6 +76,22 @@
 		load();
 	}
 
+	let search = $state('');
+
+	const filteredCommits = $derived(
+		search.trim()
+			? commits.filter((c) => {
+					const q = search.toLowerCase();
+					return (
+						c.commit_sha?.toLowerCase().includes(q) ||
+						c.author?.toLowerCase().includes(q) ||
+						c.message?.toLowerCase().includes(q) ||
+						c.branch?.toLowerCase().includes(q)
+					);
+				})
+			: commits
+	);
+
 	const totalPages = $derived(Math.max(1, Math.ceil(total / pageSize)));
 	const showFrom = $derived(total === 0 ? 0 : currentPage * pageSize + 1);
 	const showTo = $derived(Math.min((currentPage + 1) * pageSize, total));
@@ -94,6 +112,21 @@
 		<EmptyState message="No commits yet." />
 	{:else}
 		<div class="border-border overflow-hidden rounded-lg border">
+			<!-- Search bar -->
+			<div class="border-border flex items-center gap-2 border-b px-3 py-2">
+				<SearchIcon class="text-muted-foreground h-3.5 w-3.5 shrink-0" />
+				<input
+					type="text"
+					placeholder="Search SHA, author, message, branch (this page)…"
+					bind:value={search}
+					class="text-foreground placeholder:text-muted-foreground w-full bg-transparent text-sm outline-none"
+				/>
+				{#if search}
+					<button class="text-muted-foreground hover:text-foreground" onclick={() => (search = '')}>
+						<XIcon class="h-3.5 w-3.5" />
+					</button>
+				{/if}
+			</div>
 			<Table.Root class="text-xs">
 				<Table.Header>
 					<Table.Row class="bg-muted/30 border-border border-b">
@@ -107,7 +140,7 @@
 					</Table.Row>
 				</Table.Header>
 				<Table.Body>
-					{#each commits as c (c.id)}
+					{#each filteredCommits as c (c.id)}
 						<Table.Row
 							class="hover:bg-muted/40 cursor-pointer transition-colors"
 							onclick={() => toggleExpand(c.id)}
