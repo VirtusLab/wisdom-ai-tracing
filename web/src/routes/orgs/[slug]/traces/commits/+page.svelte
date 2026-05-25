@@ -26,7 +26,7 @@
 	let total = $state(0);
 	let loading = $state(true);
 	let error = $state('');
-	let pageSize = $state(25);
+	let pageSize = $state(10);
 	let currentPage = $state(0);
 	let expandedId = $state<string | null>(null);
 
@@ -154,7 +154,7 @@
 				<span>{showFrom}-{showTo} of {total}</span>
 				<div class="flex items-center gap-3">
 					<span>Per page:</span>
-					{#each [25, 50, 100] as size}
+					{#each [10, 25, 50] as size}
 						<button
 							class="rounded px-1.5 py-0.5 transition-colors {pageSize === size
 								? 'bg-primary text-primary-foreground'

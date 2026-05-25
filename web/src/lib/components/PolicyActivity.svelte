@@ -64,7 +64,7 @@
 	let selectedPolicyIds: string[] = $state([]);  // empty = all
 	let selectedDays: number | null = $state(30);
 
-	let pageSize = $state(25);
+	let pageSize = $state(10);
 	let page = $state(0);
 
 	function sinceDate(): string | null {
