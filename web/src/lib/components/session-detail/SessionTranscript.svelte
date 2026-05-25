@@ -26,7 +26,13 @@
 	function fmtTime(ts: string | null): string {
 		if (!ts) return '';
 		try {
-			return new Date(ts).toLocaleTimeString(locale, { hour12: false });
+			return new Date(ts).toLocaleString(locale, {
+				month: 'short',
+				day: 'numeric',
+				hour: '2-digit',
+				minute: '2-digit',
+				hour12: false
+			});
 		} catch {
 			return '';
 		}
