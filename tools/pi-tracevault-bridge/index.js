@@ -13,7 +13,9 @@
  *   2. tool-use: appends an assistant/tool_use entry to the transcript (so
  *      check can count tool calls), then streams the post-tool-use event to
  *      the server.
- *   3. session-end: streams the stop event to the server.
+ *   3. session-end: finds the most recent Claude transcript JSONL for this
+ *      project, parses it, and streams all tool calls + token usage to the
+ *      server before sending the stop event.
  *
  * Usage (from repo root):
  *   node tools/pi-tracevault-bridge/index.js session-start
@@ -27,11 +29,20 @@
  *   node tools/pi-tracevault-bridge/index.js session-id
  */
 
-import { readFileSync, writeFileSync, mkdirSync, existsSync, appendFileSync } from "fs";
-import { resolve, relative, dirname, isAbsolute } from "path";
+import {
+  readFileSync,
+  writeFileSync,
+  mkdirSync,
+  existsSync,
+  appendFileSync,
+  readdirSync,
+  statSync,
+} from "fs";
+import { resolve, relative, dirname, isAbsolute, join } from "path";
 import { fileURLToPath } from "url";
 import { randomUUID } from "crypto";
 import { spawnSync } from "child_process";
+import { homedir } from "os";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(__dirname, "../..");
@@ -76,40 +87,22 @@ function initLocalSession(sessionId) {
   const dir = sessionDir(sessionId);
   ensureDir(dir);
   const tPath = transcriptPath(sessionId);
-  // Initialise empty transcript
   if (!existsSync(tPath)) writeFileSync(tPath, "");
-  // Write metadata.json so collect_session_data() can find the transcript
   const meta = { transcript_path: tPath };
   writeFileSync(resolve(dir, "metadata.json"), JSON.stringify(meta));
 }
 
-/**
- * Append an assistant message with a tool_use block to the transcript.
- * `tracevault check` scans for type=="assistant" messages containing
- * content[].type=="tool_use" to build the tool_calls map.
- */
 function appendToolUseToTranscript(sessionId, toolName, toolUseId, toolInput) {
   const entry = {
     type: "assistant",
     message: {
       role: "assistant",
-      content: [
-        {
-          type: "tool_use",
-          id: toolUseId,
-          name: toolName,
-          input: toolInput ?? {},
-        },
-      ],
+      content: [{ type: "tool_use", id: toolUseId, name: toolName, input: toolInput ?? {} }],
     },
   };
   appendFileSync(transcriptPath(sessionId), JSON.stringify(entry) + "\n");
 }
 
-/**
- * Append a user message with a tool_result block to the transcript.
- * `tracevault stream` reads these to extract is_error for the current event.
- */
 function appendToolResultToTranscript(sessionId, toolUseId, isError, response) {
   const entry = {
     type: "user",
@@ -128,9 +121,6 @@ function appendToolResultToTranscript(sessionId, toolUseId, isError, response) {
   appendFileSync(transcriptPath(sessionId), JSON.stringify(entry) + "\n");
 }
 
-/**
- * Build the HookEvent JSON that `tracevault stream` reads from stdin.
- */
 function buildHookEvent(sessionId, hookEventName, opts = {}) {
   return {
     session_id: sessionId,
@@ -145,19 +135,12 @@ function buildHookEvent(sessionId, hookEventName, opts = {}) {
   };
 }
 
-/**
- * Call `tracevault stream --event <type>` with hookEvent as stdin.
- */
 function callTraceVaultStream(eventType, hookEvent) {
-  const result = spawnSync(
-    "tracevault",
-    ["stream", "--event", eventType],
-    {
-      input: JSON.stringify(hookEvent),
-      cwd: REPO_ROOT,
-      encoding: "utf8",
-    }
-  );
+  const result = spawnSync("tracevault", ["stream", "--event", eventType], {
+    input: JSON.stringify(hookEvent),
+    cwd: REPO_ROOT,
+    encoding: "utf8",
+  });
   return {
     success: result.status === 0,
     stdout: result.stdout ?? "",
@@ -166,16 +149,167 @@ function callTraceVaultStream(eventType, hookEvent) {
   };
 }
 
+// ── Transcript parsing ────────────────────────────────────────────────────────
+
+/**
+ * Derive the Claude project dir for REPO_ROOT.
+ * Claude uses the absolute path with '/' replaced by '-'.
+ */
+function claudeProjectDir() {
+  // Claude replaces both '/' and '.' with '-' to form the project directory name
+  const projectHash = REPO_ROOT.replace(/[/.]/g, "-");
+  return join(homedir(), ".claude", "projects", projectHash);
+}
+
+/**
+ * Find the most recently modified .jsonl transcript file in the Claude project dir.
+ * Returns null if none found.
+ */
+function findLatestTranscript() {
+  const projectDir = claudeProjectDir();
+  if (!existsSync(projectDir)) return null;
+
+  const files = readdirSync(projectDir)
+    .filter((f) => f.endsWith(".jsonl"))
+    .map((f) => ({ path: join(projectDir, f), mtime: statSync(join(projectDir, f)).mtimeMs }))
+    .sort((a, b) => b.mtime - a.mtime);
+
+  return files.length > 0 ? files[0].path : null;
+}
+
+/**
+ * Parse a Claude transcript JSONL file and extract:
+ * - toolEvents: array of { toolUseId, toolName, toolInput, toolResponse, isError, timestamp }
+ * - tokenTotals: { inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens }
+ */
+function parseTranscript(transcriptFile) {
+  const lines = readFileSync(transcriptFile, "utf8").split("\n").filter(Boolean);
+
+  // Map tool_use_id -> tool_use block (from assistant messages)
+  const toolUseMap = new Map();
+  // Map tool_use_id -> { is_error, content } (from user tool_result messages)
+  const toolResultMap = new Map();
+  // Timestamps from assistant messages (keyed by index in order)
+  const assistantTimestamps = [];
+
+  const tokenTotals = {
+    inputTokens: 0,
+    outputTokens: 0,
+    cacheReadTokens: 0,
+    cacheWriteTokens: 0,
+  };
+
+  for (const line of lines) {
+    let obj;
+    try {
+      obj = JSON.parse(line);
+    } catch {
+      continue;
+    }
+
+    const msgType = obj.type;
+
+    if (msgType === "assistant") {
+      const msg = obj.message ?? {};
+      const ts = obj.timestamp ?? null;
+
+      // Accumulate token usage
+      const usage = msg.usage ?? {};
+      tokenTotals.inputTokens += usage.input_tokens ?? 0;
+      tokenTotals.outputTokens += usage.output_tokens ?? 0;
+      tokenTotals.cacheReadTokens += usage.cache_read_input_tokens ?? 0;
+      tokenTotals.cacheWriteTokens += usage.cache_creation_input_tokens ?? 0;
+
+      // Collect tool_use blocks
+      const content = msg.content ?? [];
+      for (const block of content) {
+        if (block?.type === "tool_use") {
+          toolUseMap.set(block.id, { ...block, timestamp: ts });
+        }
+      }
+    }
+
+    if (msgType === "user") {
+      const content = obj.message?.content ?? [];
+      for (const block of content) {
+        if (block?.type === "tool_result") {
+          toolResultMap.set(block.tool_use_id, {
+            isError: block.is_error ?? false,
+            content: block.content ?? "",
+          });
+        }
+      }
+    }
+  }
+
+  // Build ordered tool events (in tool_use insertion order)
+  const toolEvents = [];
+  for (const [toolUseId, toolUse] of toolUseMap) {
+    const result = toolResultMap.get(toolUseId) ?? { isError: false, content: "" };
+    toolEvents.push({
+      toolUseId,
+      toolName: toolUse.name,
+      toolInput: toolUse.input ?? null,
+      toolResponse: result.content,
+      isError: result.isError,
+      timestamp: toolUse.timestamp,
+    });
+  }
+
+  return { toolEvents, tokenTotals };
+}
+
+/**
+ * Stream all tool events from the transcript to the TraceVault server and
+ * also append them to the local synthetic transcript (so policy check sees them).
+ * realTranscriptPath: the actual Claude transcript JSONL, used so the server
+ * can extract token usage from transcript_lines.
+ */
+function streamTranscriptEvents(sessionId, toolEvents, realTranscriptPath) {
+  let streamed = 0;
+  let failed = 0;
+
+  for (const ev of toolEvents) {
+    // Append to local synthetic transcript for policy check
+    appendToolUseToTranscript(sessionId, ev.toolName, ev.toolUseId, ev.toolInput);
+    appendToolResultToTranscript(sessionId, ev.toolUseId, ev.isError, ev.toolResponse ?? "");
+
+    // Stream to server — use real transcript path so server can extract tokens
+    const hookEvent = {
+      session_id: sessionId,
+      transcript_path: realTranscriptPath ?? transcriptPath(sessionId),
+      cwd: REPO_ROOT,
+      permission_mode: "default",
+      hook_event_name: "PostToolUse",
+      tool_name: ev.toolName,
+      tool_input: ev.toolInput,
+      tool_response: ev.toolResponse
+        ? { type: "text", text: String(ev.toolResponse).slice(0, 4096) }
+        : null,
+      tool_use_id: ev.toolUseId,
+    };
+
+    const res = callTraceVaultStream("post-tool-use", hookEvent);
+    if (res.success) {
+      streamed++;
+    } else {
+      failed++;
+    }
+  }
+
+  return { streamed, failed };
+}
+
 // ── CLI ───────────────────────────────────────────────────────────────────────
 
-const [,, command, ...args] = process.argv;
+const [, , command, ...args] = process.argv;
 
-function parseArgs(args) {
+function parseArgs(argList) {
   const opts = {};
-  for (let i = 0; i < args.length; i++) {
-    if (args[i].startsWith("--")) {
-      const key = args[i].slice(2).replace(/-([a-z])/g, (_, c) => c.toUpperCase());
-      opts[key] = args[i + 1];
+  for (let i = 0; i < argList.length; i++) {
+    if (argList[i].startsWith("--")) {
+      const key = argList[i].slice(2).replace(/-([a-z])/g, (_, c) => c.toUpperCase());
+      opts[key] = argList[i + 1];
       i++;
     }
   }
@@ -202,12 +336,56 @@ switch (command) {
 
   case "session-end": {
     const sessionId = getOrCreateSessionId();
-    const hookEvent = buildHookEvent(sessionId, "Stop");
-    const res = callTraceVaultStream("stop", hookEvent);
+    initLocalSession(sessionId); // ensure session dir exists
+
+    // Step 1: Find and parse the Claude transcript
+    const transcriptFile = findLatestTranscript();
+    if (transcriptFile) {
+      console.log(`📄 Parsing transcript: ${transcriptFile}`);
+      try {
+        const { toolEvents, tokenTotals } = parseTranscript(transcriptFile);
+
+        console.log(
+          `   Found ${toolEvents.length} tool calls | ` +
+          `tokens: in=${tokenTotals.inputTokens} out=${tokenTotals.outputTokens} ` +
+          `cr=${tokenTotals.cacheReadTokens} cw=${tokenTotals.cacheWriteTokens}`
+        );
+
+        // Stream all tool events
+        if (toolEvents.length > 0) {
+          const { streamed, failed } = streamTranscriptEvents(sessionId, toolEvents, transcriptFile);
+          console.log(`   Streamed ${streamed} events${failed > 0 ? `, ${failed} failed` : ""}`);
+        }
+
+        // Log token summary (token data is captured via transcript_lines in stream events)
+        if (tokenTotals.outputTokens > 0 || tokenTotals.cacheReadTokens > 0) {
+          console.log(`   Token totals recorded from transcript`);
+        }
+      } catch (err) {
+        console.error(`⚠️  Failed to parse transcript: ${err.message}`);
+      }
+    } else {
+      console.log(`ℹ️  No Claude transcript found for ${REPO_ROOT}`);
+    }
+
+    // Step 2: Send stop event — point transcript_path at the real Claude
+    // transcript so the server can extract token usage from it
+    const stopHookEvent = {
+      session_id: sessionId,
+      transcript_path: transcriptFile ?? transcriptPath(sessionId),
+      cwd: REPO_ROOT,
+      permission_mode: "default",
+      hook_event_name: "Stop",
+      tool_name: null,
+      tool_input: null,
+      tool_response: null,
+      tool_use_id: null,
+    };
+    const res = callTraceVaultStream("stop", stopHookEvent);
     if (res.success) {
       console.log(`✅ Session ended: ${sessionId}`);
     } else {
-      console.error(`⚠️  tracevault stream failed: ${res.stderr.trim()}`);
+      console.error(`⚠️  tracevault stream stop failed: ${res.stderr.trim()}`);
     }
     break;
   }
@@ -215,7 +393,6 @@ switch (command) {
   case "tool-use": {
     const opts = parseArgs(args);
     const sessionId = getOrCreateSessionId();
-    // Ensure local session state exists (in case session-start was skipped)
     initLocalSession(sessionId);
 
     const toolUseId = opts.toolUseId ?? randomUUID();
@@ -223,13 +400,9 @@ switch (command) {
     const toolInput = opts.input ? JSON.parse(opts.input) : null;
     const toolResponse = opts.response ?? "";
 
-    // 1. Write tool_use to transcript (what `check` reads to count tool calls)
     appendToolUseToTranscript(sessionId, opts.toolName, toolUseId, toolInput);
-
-    // 2. Write tool_result to transcript (what `stream` reads to extract is_error)
     appendToolResultToTranscript(sessionId, toolUseId, isError, toolResponse);
 
-    // 3. Stream the event to the server
     const hookEvent = buildHookEvent(sessionId, "PostToolUse", {
       toolName: opts.toolName,
       toolInput,
