@@ -5,16 +5,24 @@
 	import { sessionStatus } from '$lib/utils/status';
 	import type { SessionItem } from '$lib/types';
 	import * as Table from '$lib/components/ui/table/index.js';
+	import * as Popover from '$lib/components/ui/popover/index.js';
 	import StatusBadge from '$lib/components/StatusBadge.svelte';
 	import LoadingState from '$lib/components/LoadingState.svelte';
 	import ErrorState from '$lib/components/ErrorState.svelte';
 	import EmptyState from '$lib/components/EmptyState.svelte';
 	import ChevronLeftIcon from '@lucide/svelte/icons/chevron-left';
 	import ChevronRightIcon from '@lucide/svelte/icons/chevron-right';
+	import ChevronDownIcon from '@lucide/svelte/icons/chevron-down';
 	import SearchIcon from '@lucide/svelte/icons/search';
 	import XIcon from '@lucide/svelte/icons/x';
+	import CheckIcon from '@lucide/svelte/icons/check';
 
 	type StatusFilter = 'all' | 'active' | 'completed' | 'stale';
+
+	interface FilterOptions {
+		tool_names: string[];
+		users: { id: string; email: string }[];
+	}
 
 	const slug = $derived($page.params.slug);
 
@@ -22,10 +30,36 @@
 	let pageSize = $state(10);
 	let currentPage = $state(0);
 
+	// New filters
+	let selectedToolNames = $state<string[]>([]); // empty = no tool filter
+	let selectedUserIds = $state<string[]>([]); // empty = all users
+	let hasFileChanges = $state<boolean | null>(null); // null = no filter
+
+	// Filter options loaded from server
+	let filterOptions = $state<FilterOptions>({ tool_names: [], users: [] });
+	let filterOptionsLoaded = $state(false);
+
 	let sessions = $state<SessionItem[]>([]);
 	let total = $state(0);
 	let loading = $state(true);
 	let error = $state('');
+	let search = $state('');
+
+	async function loadFilterOptions() {
+		try {
+			const opts = await api.get<FilterOptions>(
+				`/api/v1/orgs/${slug}/traces/sessions/filter-options`
+			);
+			filterOptions = opts ?? { tool_names: [], users: [] };
+			// Default: all users selected
+			if (!filterOptionsLoaded && filterOptions.users.length > 0) {
+				selectedUserIds = filterOptions.users.map((u) => u.id);
+			}
+			filterOptionsLoaded = true;
+		} catch {
+			// non-critical
+		}
+	}
 
 	async function load() {
 		loading = true;
@@ -42,6 +76,19 @@
 			if (from) params.set('from', from);
 			if (to) params.set('to', to);
 			if (statusFilter !== 'all') params.set('status', statusFilter);
+
+			// New filters
+			if (selectedToolNames.length > 0) {
+				params.set('tool_names', selectedToolNames.join(','));
+			}
+			// User filter: only send if not all users are selected
+			if (filterOptionsLoaded && selectedUserIds.length > 0 &&
+				selectedUserIds.length < filterOptions.users.length) {
+				params.set('user_ids', selectedUserIds.join(','));
+			}
+			if (hasFileChanges !== null) {
+				params.set('has_file_changes', String(hasFileChanges));
+			}
 
 			const result = await api.get<{ items: SessionItem[]; total: number }>(
 				`/api/v1/orgs/${slug}/traces/sessions?${params}`
@@ -67,14 +114,53 @@
 		load();
 	}
 
+	function toggleTool(name: string) {
+		if (selectedToolNames.includes(name)) {
+			selectedToolNames = selectedToolNames.filter((t) => t !== name);
+		} else {
+			selectedToolNames = [...selectedToolNames, name];
+		}
+		currentPage = 0;
+		load();
+	}
+
+	function toggleUser(id: string) {
+		if (selectedUserIds.includes(id)) {
+			selectedUserIds = selectedUserIds.filter((u) => u !== id);
+		} else {
+			selectedUserIds = [...selectedUserIds, id];
+		}
+		currentPage = 0;
+		load();
+	}
+
+	function toolFilterLabel(): string {
+		if (selectedToolNames.length === 0) return 'Any tool';
+		if (selectedToolNames.length === 1) return selectedToolNames[0].split('__').pop() ?? selectedToolNames[0];
+		return `${selectedToolNames.length} tools`;
+	}
+
+	function userFilterLabel(): string {
+		if (!filterOptionsLoaded || selectedUserIds.length === filterOptions.users.length) return 'All users';
+		if (selectedUserIds.length === 0) return 'No users';
+		if (selectedUserIds.length === 1) {
+			const u = filterOptions.users.find((u) => u.id === selectedUserIds[0]);
+			return u?.email.split('@')[0] ?? '1 user';
+		}
+		return `${selectedUserIds.length} users`;
+	}
+
+	function fileChangesLabel(): string {
+		if (hasFileChanges === null) return 'Files: any';
+		return hasFileChanges ? 'Has file changes' : 'No file changes';
+	}
+
 	const filterButtons: { value: StatusFilter; label: string }[] = [
 		{ value: 'all', label: 'All' },
 		{ value: 'active', label: 'Active' },
 		{ value: 'completed', label: 'Completed' },
 		{ value: 'stale', label: 'Stale' }
 	];
-
-	let search = $state('');
 
 	const filteredSessions = $derived(
 		search.trim()
@@ -93,6 +179,11 @@
 	const showTo = $derived(Math.min((currentPage + 1) * pageSize, total));
 
 	$effect(() => {
+		slug;
+		loadFilterOptions();
+	});
+
+	$effect(() => {
 		slug; statusFilter; $page.url.searchParams;
 		load();
 	});
@@ -103,19 +194,111 @@
 </svelte:head>
 
 <div class="space-y-4">
-	<!-- Status filter -->
-	<div class="flex gap-1">
-		{#each filterButtons as btn}
-			<button
-				class="rounded-md px-3 py-1.5 text-xs font-medium transition-colors
-					{statusFilter === btn.value
-						? 'bg-primary text-primary-foreground'
-						: 'bg-muted text-muted-foreground hover:text-foreground'}"
-				onclick={() => setFilter(btn.value)}
-			>
-				{btn.label}
-			</button>
-		{/each}
+	<!-- Status + advanced filters row -->
+	<div class="flex flex-wrap items-center gap-2">
+		<!-- Status pills -->
+		<div class="flex gap-1">
+			{#each filterButtons as btn}
+				<button
+					class="rounded-md px-3 py-1.5 text-xs font-medium transition-colors
+						{statusFilter === btn.value
+							? 'bg-primary text-primary-foreground'
+							: 'bg-muted text-muted-foreground hover:text-foreground'}"
+					onclick={() => setFilter(btn.value)}
+				>
+					{btn.label}
+				</button>
+			{/each}
+		</div>
+
+		<span class="text-border">|</span>
+
+		<!-- Tool names filter -->
+		{#if filterOptions.tool_names.length > 0}
+			<Popover.Root>
+				<Popover.Trigger class="border-input bg-background hover:bg-accent hover:text-accent-foreground inline-flex h-8 items-center gap-1 rounded-md border px-3 text-xs font-medium transition-colors">
+					{toolFilterLabel()}
+					{#if selectedToolNames.length > 0}
+						<span class="bg-primary text-primary-foreground ml-1 rounded-full px-1.5 py-0.5 text-[10px]">{selectedToolNames.length}</span>
+					{/if}
+					<ChevronDownIcon class="h-3 w-3 opacity-50" />
+				</Popover.Trigger>
+				<Popover.Content class="w-72 p-2" align="start">
+					<div class="mb-1 flex justify-between text-[10px] text-muted-foreground px-1">
+						<button onclick={() => { selectedToolNames = []; currentPage = 0; load(); }}>Deselect all</button>
+						<button onclick={() => { selectedToolNames = [...filterOptions.tool_names]; currentPage = 0; load(); }}>Any tool</button>
+					</div>
+					<div class="max-h-60 overflow-y-auto">
+						{#each filterOptions.tool_names as name}
+							<button
+								class="flex w-full items-center gap-2 rounded px-2 py-1.5 text-xs hover:bg-muted"
+								onclick={() => toggleTool(name)}
+							>
+								<span class="flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-sm border border-input">
+									{#if selectedToolNames.includes(name)}<CheckIcon class="h-3 w-3" />{/if}
+								</span>
+								<span class="truncate font-mono">{name}</span>
+							</button>
+						{/each}
+					</div>
+				</Popover.Content>
+			</Popover.Root>
+		{/if}
+
+		<!-- User filter -->
+		{#if filterOptions.users.length > 0}
+			<Popover.Root>
+				<Popover.Trigger class="border-input bg-background hover:bg-accent hover:text-accent-foreground inline-flex h-8 items-center gap-1 rounded-md border px-3 text-xs font-medium transition-colors">
+					{userFilterLabel()}
+					{#if filterOptionsLoaded && selectedUserIds.length < filterOptions.users.length}
+						<span class="bg-primary text-primary-foreground ml-1 rounded-full px-1.5 py-0.5 text-[10px]">{selectedUserIds.length}</span>
+					{/if}
+					<ChevronDownIcon class="h-3 w-3 opacity-50" />
+				</Popover.Trigger>
+				<Popover.Content class="w-64 p-2" align="start">
+					<div class="mb-1 flex justify-between text-[10px] text-muted-foreground px-1">
+						<button onclick={() => { selectedUserIds = []; currentPage = 0; load(); }}>Deselect all</button>
+						<button onclick={() => { selectedUserIds = filterOptions.users.map((u) => u.id); currentPage = 0; load(); }}>Select all</button>
+					</div>
+					{#each filterOptions.users as user}
+						<button
+							class="flex w-full items-center gap-2 rounded px-2 py-1.5 text-xs hover:bg-muted"
+							onclick={() => toggleUser(user.id)}
+						>
+							<span class="flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-sm border border-input">
+								{#if selectedUserIds.includes(user.id)}<CheckIcon class="h-3 w-3" />{/if}
+							</span>
+							<span class="truncate">{user.email}</span>
+						</button>
+					{/each}
+				</Popover.Content>
+			</Popover.Root>
+		{/if}
+
+		<!-- File changes filter -->
+		<Popover.Root>
+			<Popover.Trigger class="border-input bg-background hover:bg-accent hover:text-accent-foreground inline-flex h-8 items-center gap-1 rounded-md border px-3 text-xs font-medium transition-colors {hasFileChanges !== null ? 'border-primary' : ''}">
+				{fileChangesLabel()}
+				<ChevronDownIcon class="h-3 w-3 opacity-50" />
+			</Popover.Trigger>
+			<Popover.Content class="w-44 p-2" align="start">
+				{#each [
+					{ label: 'Any', value: null },
+					{ label: 'Has file changes', value: true },
+					{ label: 'No file changes', value: false }
+				] as opt}
+					<button
+						class="flex w-full items-center gap-2 rounded px-2 py-1.5 text-xs hover:bg-muted"
+						onclick={() => { hasFileChanges = opt.value; currentPage = 0; load(); }}
+					>
+						<span class="flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-sm border border-input">
+							{#if hasFileChanges === opt.value}<CheckIcon class="h-3 w-3" />{/if}
+						</span>
+						{opt.label}
+					</button>
+				{/each}
+			</Popover.Content>
+		</Popover.Root>
 	</div>
 
 	{#if loading}

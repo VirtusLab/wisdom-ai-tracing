@@ -8,8 +8,8 @@ pub use attribution::get_attribution;
 pub use branches::get_branches;
 pub use commits::{get_commit, list_commits};
 pub use sessions::{
-    get_session, get_session_events, get_session_file_changes, get_session_linked_commits,
-    get_session_transcript, list_sessions,
+    get_session, get_session_events, get_session_file_changes, get_session_filter_options,
+    get_session_linked_commits, get_session_transcript, list_sessions,
 };
 pub use timeline::get_timeline;
 
@@ -39,6 +39,15 @@ pub struct SessionListQuery {
     pub to: Option<DateTime<Utc>>,
     pub limit: Option<i64>,
     pub offset: Option<i64>,
+    /// Filter to sessions that called at least one of these tools (comma-separated).
+    /// Empty / absent = no tool filter.
+    pub tool_names: Option<String>,
+    /// Filter to sessions belonging to these users (comma-separated UUIDs).
+    /// Empty / absent = all users.
+    pub user_ids: Option<String>,
+    /// When true, only sessions with ≥1 file change. When false, only sessions
+    /// with 0 file changes. Absent = no filter.
+    pub has_file_changes: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
