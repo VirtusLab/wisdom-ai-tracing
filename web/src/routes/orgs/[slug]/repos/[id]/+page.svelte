@@ -89,8 +89,12 @@
 
 	async function loadCommits() {
 		try {
-			const repoFilter = repoId ? `?repo_id=${repoId}` : '';
-			commits = await api.get<CommitListItem[]>(`/api/v1/orgs/${slug}/traces/commits${repoFilter}`);
+			const params = new URLSearchParams({ limit: '100', offset: '0' });
+			if (repoId) params.set('repo_id', repoId);
+			const result = await api.get<{ items: CommitListItem[]; total: number }>(
+				`/api/v1/orgs/${slug}/traces/commits?${params}`
+			);
+			commits = result?.items ?? [];
 		} catch (err) {
 			error = err instanceof Error ? err.message : 'Failed to load commits';
 		} finally {
