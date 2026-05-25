@@ -291,9 +291,12 @@ Install the dependencies once after cloning:
 
 ```sh
 npm install --prefix tools/cargo-mcp
+npm install --prefix integrations/tracevault-mcp
 ```
 
 Claude Code will automatically offer the tools in any session inside this repo. No further configuration is needed.
+
+The second package (`integrations/tracevault-mcp`) provides the `ask_tracevault` tool, which lets agents query indexed session history using natural language. It requires a logged-in Visdom Trace session — run `tracevault login` once if you haven't already.
 
 ## Keys & Secrets
 
