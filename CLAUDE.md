@@ -2,6 +2,14 @@
 
 # Use conventional commit messages: https://www.conventionalcommits.org/en/v1.0.0/#specification
 
+# Visdom Trace — session tracking
+
+At the end of every session (before finishing), run:
+    node tools/pi-tracevault-bridge/index.js session-end
+
+This parses the Claude transcript and streams all tool calls and token usage
+to the Visdom Trace server, giving full session visibility.
+
 # Visdom Trace — pre-push validation
 
 ## During work (session-scoped policies)
