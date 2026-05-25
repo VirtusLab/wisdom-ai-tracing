@@ -48,7 +48,7 @@
 		<div class="text-destructive py-4 text-center text-sm">{error}</div>
 	{:else if data}
 		<SessionSummaryStats
-			totalTokens={data.total_tokens}
+			totalTokens={data.input_tokens + data.output_tokens + data.cache_read_tokens + data.cache_write_tokens || data.total_tokens}
 			estimatedCostUsd={data.estimated_cost_usd}
 			outputTokens={data.output_tokens}
 			apiCalls={data.api_calls}
