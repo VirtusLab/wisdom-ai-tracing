@@ -135,13 +135,13 @@
 	}
 
 	function toolFilterLabel(): string {
-		if (selectedToolNames.length === 0) return 'All tools';
+		if (selectedToolNames.length === 0) return 'All';
 		if (selectedToolNames.length === 1) return selectedToolNames[0].split('__').pop() ?? selectedToolNames[0];
 		return `${selectedToolNames.length} tools`;
 	}
 
 	function userFilterLabel(): string {
-		if (!filterOptionsLoaded || selectedUserIds.length === filterOptions.users.length) return 'All users';
+		if (!filterOptionsLoaded || selectedUserIds.length === filterOptions.users.length) return 'All';
 		if (selectedUserIds.length === 0) return 'No users';
 		if (selectedUserIds.length === 1) {
 			const u = filterOptions.users.find((u) => u.id === selectedUserIds[0]);
