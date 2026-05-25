@@ -17,7 +17,10 @@ When ready to push, open a validation window and run the review tool:
 1. tracevault validation-start
 2. mcp__review__agent_review   (self-review of the diff — validation window policy)
 
-Only mcp__review__agent_review should be called between tracevault validation-start and git push.
+Only allowed tools should be called between tracevault validation-start and git push.
+Allowed tools in the validation window:
+- mcp__review__agent_review   (required — must be called)
+- Read                        (allowed — may be called as needed)
 
 If you need to fix something after the review:
 - Make the fix
