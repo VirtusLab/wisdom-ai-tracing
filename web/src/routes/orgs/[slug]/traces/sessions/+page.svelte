@@ -77,8 +77,10 @@
 			if (to) params.set('to', to);
 			if (statusFilter !== 'all') params.set('status', statusFilter);
 
-			// New filters
-			if (selectedToolNames.length > 0) {
+			// New filters — skip tool filter if none or all are selected (equivalent: no filter)
+			const allToolsSelected = filterOptions.tool_names.length > 0 &&
+				selectedToolNames.length === filterOptions.tool_names.length;
+			if (selectedToolNames.length > 0 && !allToolsSelected) {
 				params.set('tool_names', selectedToolNames.join(','));
 			}
 			// User filter: only send if not all users are selected
@@ -136,6 +138,7 @@
 
 	function toolFilterLabel(): string {
 		if (selectedToolNames.length === 0) return 'All';
+		if (selectedToolNames.length === filterOptions.tool_names.length && filterOptions.tool_names.length > 0) return 'Any tool';
 		if (selectedToolNames.length === 1) return selectedToolNames[0].split('__').pop() ?? selectedToolNames[0];
 		return `${selectedToolNames.length} tools`;
 	}
@@ -216,9 +219,9 @@
 		<!-- Tool names filter -->
 		{#if filterOptions.tool_names.length > 0}
 			<Popover.Root>
-				<Popover.Trigger class="border-input bg-background hover:bg-accent hover:text-accent-foreground inline-flex h-8 items-center gap-1 rounded-md border px-3 text-xs font-medium transition-colors {selectedToolNames.length > 0 ? 'border-primary' : ''}">
+				<Popover.Trigger class="border-input bg-background hover:bg-accent hover:text-accent-foreground inline-flex h-8 items-center gap-1 rounded-md border px-3 text-xs font-medium transition-colors {selectedToolNames.length > 0 && selectedToolNames.length < filterOptions.tool_names.length ? 'border-primary' : ''}">
 					{toolFilterLabel()}
-					{#if selectedToolNames.length > 0}
+					{#if selectedToolNames.length > 0 && selectedToolNames.length < filterOptions.tool_names.length}
 						<span class="bg-primary text-primary-foreground ml-1 rounded-full px-1.5 py-0.5 text-[10px]">{selectedToolNames.length}</span>
 					{/if}
 					<ChevronDownIcon class="h-3 w-3 opacity-50" />
