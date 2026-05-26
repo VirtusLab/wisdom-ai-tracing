@@ -76,8 +76,17 @@ interface Credentials {
   email: string;
 }
 
+/** Returns the platform-appropriate config directory, matching the Rust `dirs::config_dir()`. */
+function configDir(): string {
+  if (process.platform === "darwin") {
+    return join(homedir(), "Library", "Application Support");
+  }
+  // Linux / other: use XDG_CONFIG_HOME or ~/.config
+  return process.env.XDG_CONFIG_HOME ?? join(homedir(), ".config");
+}
+
 function loadCredentials(): Credentials | null {
-  const path = join(homedir(), ".config", "tracevault", "credentials.json");
+  const path = join(configDir(), "tracevault", "credentials.json");
   if (!existsSync(path)) return null;
   try {
     return JSON.parse(readFileSync(path, "utf8")) as Credentials;
