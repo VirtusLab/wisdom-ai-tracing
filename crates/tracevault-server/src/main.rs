@@ -404,7 +404,7 @@ async fn main() {
         )
         .route(
             "/api/v1/orgs/{slug}/repos/{repo_id}/policies/agent-instructions",
-            get(api::policies::get_agent_instructions),
+            get(api::agent_instructions::get_agent_instructions),
         )
         .route(
             "/api/v1/orgs/{slug}/repos/{repo_id}/policy-evaluations",

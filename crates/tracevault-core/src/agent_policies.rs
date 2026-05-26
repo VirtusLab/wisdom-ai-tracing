@@ -34,14 +34,10 @@ impl ActionTag {
 
 impl ToolRequirement {
     fn render_line(&self) -> String {
-        if self.action == ActionTag::Allow {
-            return format!("- `{}`", self.tool);
-        }
-
         let (verb, succeed) = match self.action {
+            ActionTag::Allow => return format!("- `{}`", self.tool),
             ActionTag::Block => ("must be called", "must succeed"),
             ActionTag::Warn => ("should be called", "should succeed"),
-            ActionTag::Allow => unreachable!(),
         };
 
         let action_phrase = if self.must_succeed {
