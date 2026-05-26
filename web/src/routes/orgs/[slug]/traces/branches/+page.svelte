@@ -34,7 +34,7 @@
 			const all = await api.get<{ id: string; name: string }[]>(`/api/v1/orgs/${slug}/repos`);
 			repos = all ?? [];
 		} catch {
-			// non-critical
+			console.warn("Failed to fetch repos for filter:", err);
 		}
 	}
 
