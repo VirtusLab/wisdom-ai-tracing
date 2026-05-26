@@ -292,12 +292,11 @@ cp .mcp.json.example .mcp.json
 
 `.mcp.json` is gitignored so it stays local. The example includes the three project servers needed for policy compliance. Add any private servers (deploy tools, DB access, etc.) to your local copy only.
 
-**Step 2 — Install dependencies:**
+**Step 2 — Install dependencies for the required policy tools:**
 
 ```sh
 npm install --prefix tools/cargo-mcp
 npm install --prefix tools/review-mcp
-npm install --prefix integrations/tracevault-mcp
 ```
 
 **What each server provides:**
@@ -310,8 +309,13 @@ npm install --prefix integrations/tracevault-mcp
 **`tools/review-mcp/`** — required by the validation-scoped self-review policy:
 - **`mcp__review__agent_review`** — assembles the diff + full context of touched files and returns a review prompt. Call this inside a validation window before pushing to Rust files.
 
-**`integrations/tracevault-mcp/`** — optional, for querying session history:
-- **`ask_tracevault`** — lets agents query indexed session history in natural language. Requires `tracevault login` to be run once.
+**Optional — session history queries:**
+
+```sh
+npm install --prefix integrations/tracevault-mcp
+```
+
+Installs `ask_tracevault` — lets agents query indexed session history in natural language ("Why was this refactored?", "What sessions touched the auth service?"). Not required by any policy. Needs `tracevault login` once.
 
 Claude Code picks up all servers from `.mcp.json` automatically on next session start. No further configuration needed.
 
