@@ -83,7 +83,7 @@ fn scope_applies_to_session(scope: &PolicyScope) -> bool {
     matches!(scope, PolicyScope::Session | PolicyScope::Both)
 }
 
-fn scope_applies_to_window(scope: &PolicyScope) -> bool {
+fn scope_applies_to_validation(scope: &PolicyScope) -> bool {
     matches!(scope, PolicyScope::ValidationWindow | PolicyScope::Both)
 }
 
@@ -97,8 +97,8 @@ pub fn render_markdown(
     validation_window_mode: &ValidationWindowMode,
 ) -> String {
     let mut session_reqs: Vec<ToolRequirement> = Vec::new();
-    let mut window_required: Vec<ToolRequirement> = Vec::new();
-    let mut window_allowed: Vec<ToolRequirement> = Vec::new();
+    let mut validation_required: Vec<ToolRequirement> = Vec::new();
+    let mut validation_allowed: Vec<ToolRequirement> = Vec::new();
 
     for p in policies.iter().filter(|p| p.enabled) {
         let reqs = condition_to_requirements(&p.condition, p.action);
@@ -109,24 +109,24 @@ pub fn render_markdown(
         if scope_applies_to_session(&p.scope) {
             session_reqs.extend(reqs.iter().cloned());
         }
-        if scope_applies_to_window(&p.scope)
+        if scope_applies_to_validation(&p.scope)
             && !matches!(validation_window_mode, ValidationWindowMode::Disabled)
         {
             for r in &reqs {
                 if r.action == PolicyAction::Allow {
-                    window_allowed.push(r.clone());
+                    validation_allowed.push(r.clone());
                 } else {
-                    window_required.push(r.clone());
+                    validation_required.push(r.clone());
                 }
             }
         }
     }
 
     let has_session = !session_reqs.is_empty();
-    let has_window = (!window_required.is_empty() || !window_allowed.is_empty())
+    let has_validation = (!validation_required.is_empty() || !validation_allowed.is_empty())
         && !matches!(validation_window_mode, ValidationWindowMode::Disabled);
 
-    if !has_session && !has_window {
+    if !has_session && !has_validation {
         return "## Visdom Trace — agent policy instructions\n\n\
                 No active policies for this repository.\n"
             .into();
@@ -148,7 +148,7 @@ pub fn render_markdown(
         }
     }
 
-    if has_window {
+    if has_validation {
         out.push_str("\n### Validation window (pre-push gating)\n");
         out.push_str(
             "A validation window restricts which tools can be called before push, \
@@ -158,17 +158,17 @@ pub fn render_markdown(
             Opening a new window invalidates the prior one.\n",
         );
 
-        if !window_required.is_empty() {
+        if !validation_required.is_empty() {
             out.push_str("\nRequired tools (must be called inside the window):\n");
-            for r in &window_required {
+            for r in &validation_required {
                 out.push_str(&r.render_line());
                 out.push('\n');
             }
         }
 
-        if !window_allowed.is_empty() {
+        if !validation_allowed.is_empty() {
             out.push_str("\nAllowed tools (may be called freely inside the window):\n");
-            for r in &window_allowed {
+            for r in &validation_allowed {
                 out.push_str(&r.render_line());
                 out.push('\n');
             }
