@@ -62,6 +62,23 @@ pub struct CheckResultItem {
     pub details: String,
 }
 
+/// Subset of `RepoSettingsResponse` from the server — only the fields we use.
+#[derive(Debug, Clone, Deserialize)]
+pub struct RepoSettings {
+    pub validation_window_mode: String,
+}
+
+/// Subset of `PolicyResponse` from the server — only the fields we use for rendering.
+#[derive(Debug, Clone, Deserialize)]
+pub struct PolicyListItem {
+    #[allow(dead_code)]
+    pub name: String,
+    pub condition: serde_json::Value,
+    pub action: String,
+    pub scope: String,
+    pub enabled: bool,
+}
+
 #[derive(Debug, Deserialize)]
 pub struct RepoListItem {
     pub id: uuid::Uuid,
@@ -270,6 +287,55 @@ impl ApiClient {
 
         let repos: Vec<RepoListItem> = resp.json().await?;
         Ok(repos)
+    }
+
+    pub async fn list_policies(
+        &self,
+        org_slug: &str,
+        repo_id: &uuid::Uuid,
+    ) -> Result<Vec<PolicyListItem>, Box<dyn Error>> {
+        let mut builder = self.client.get(format!(
+            "{}/api/v1/orgs/{}/repos/{}/policies",
+            self.base_url, org_slug, repo_id
+        ));
+        if let Some(key) = &self.api_key {
+            builder = builder.header("Authorization", format!("Bearer {key}"));
+        }
+
+        let resp = builder.send().await?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            return Err(format!("Failed to list policies ({status}): {body}").into());
+        }
+
+        let policies: Vec<PolicyListItem> = resp.json().await?;
+        Ok(policies)
+    }
+
+    pub async fn get_repo_settings(
+        &self,
+        org_slug: &str,
+        repo_id: &uuid::Uuid,
+    ) -> Result<RepoSettings, Box<dyn Error>> {
+        let mut builder = self.client.get(format!(
+            "{}/api/v1/orgs/{}/repos/{}/settings",
+            self.base_url, org_slug, repo_id
+        ));
+        if let Some(key) = &self.api_key {
+            builder = builder.header("Authorization", format!("Bearer {key}"));
+        }
+
+        let resp = builder.send().await?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            return Err(format!("Failed to fetch repo settings ({status}): {body}").into());
+        }
+
+        Ok(resp.json().await?)
     }
 
     pub async fn verify_commits(

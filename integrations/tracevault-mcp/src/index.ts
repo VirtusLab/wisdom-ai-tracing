@@ -39,6 +39,10 @@ import {
 import { readFileSync, existsSync } from "fs";
 import { join } from "path";
 import { homedir } from "os";
+import { execFile } from "child_process";
+import { promisify } from "util";
+
+const execFileAsync = promisify(execFile);
 
 // ---------------------------------------------------------------------------
 // Config
@@ -277,6 +281,46 @@ const TOOL_DESCRIPTION =
   "'What sessions touched the auth service last month?', " +
   "'What decisions were made about the database schema?'.";
 
+const AGENT_POLICIES_TOOL = "agent_policies";
+const AGENT_POLICIES_DESCRIPTION =
+  "Fetch agent-readable Markdown instructions describing the active policies " +
+  "for the current repository — which tools must be called before push, which " +
+  "must succeed, which file patterns trigger conditional tool calls, and how " +
+  "the validation window works. Call this at session start so your behaviour " +
+  "matches the policies configured on the TraceVault server. The instructions " +
+  "take precedence over any manual project rules.";
+
+/**
+ * Shell out to the installed `tracevault` CLI to render the agent-policies
+ * instructions. We do this rather than re-implement the rendering in TypeScript
+ * so there is exactly one rendering implementation to maintain.
+ */
+async function runAgentPolicies(): Promise<string> {
+  try {
+    const { stdout } = await execFileAsync("tracevault", ["agent-policies"], {
+      // Run from the current working directory so the CLI picks up
+      // .tracevault/config.toml and resolves the right repo.
+      cwd: process.cwd(),
+      maxBuffer: 4 * 1024 * 1024,
+    });
+    return stdout;
+  } catch (err: unknown) {
+    const e = err as { code?: string; stderr?: string; message?: string };
+    if (e.code === "ENOENT") {
+      throw new McpError(
+        ErrorCode.InternalError,
+        "TraceVault CLI not found on PATH. Install it with `cargo install tracevault-cli` " +
+          "or follow the project README."
+      );
+    }
+    const detail = e.stderr?.trim() || e.message || "unknown error";
+    throw new McpError(
+      ErrorCode.InternalError,
+      `tracevault agent-policies failed: ${detail}`
+    );
+  }
+}
+
 async function main(): Promise<void> {
   let config: Config;
   try {
@@ -309,10 +353,23 @@ async function main(): Promise<void> {
           required: ["question"],
         },
       },
+      {
+        name: AGENT_POLICIES_TOOL,
+        description: AGENT_POLICIES_DESCRIPTION,
+        inputSchema: {
+          type: "object" as const,
+          properties: {},
+        },
+      },
     ],
   }));
 
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
+    if (request.params.name === AGENT_POLICIES_TOOL) {
+      const text = await runAgentPolicies();
+      return { content: [{ type: "text", text }] };
+    }
+
     if (request.params.name !== TOOL_NAME) {
       throw new McpError(
         ErrorCode.MethodNotFound,

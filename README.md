@@ -315,62 +315,35 @@ npm install --prefix tools/review-mcp
 npm install --prefix integrations/tracevault-mcp
 ```
 
-Installs `ask_tracevault` — lets agents query indexed session history in natural language ("Why was this refactored?", "What sessions touched the auth service?"). Not required by any policy. Needs `tracevault login` once.
+Installs two tools:
+
+- **`ask_tracevault`** — lets agents query indexed session history in natural language ("Why was this refactored?", "What sessions touched the auth service?"). Not required by any policy. Needs `tracevault login` once.
+- **`agent_policies`** — returns the rendered policy instructions for the current repo (same output as `tracevault agent-policies`). Call this at session start so the agent's behaviour matches the configured policies.
 
 Claude Code picks up all servers from `.mcp.json` automatically on next session start. No further configuration needed.
 
 ## Integrating Visdom Trace into your own project
 
-When you run `tracevault init` in a repository, Visdom Trace installs the session hooks automatically. To get the most out of it — and to make sure your AI agents understand the governance expectations — add a `CLAUDE.md` to your repo with instructions for the agent.
+When you run `tracevault init` in a repository, Visdom Trace installs the session hooks automatically. To make sure your AI agents understand the governance expectations, add a `CLAUDE.md` (or equivalent) entry pointing them at `tracevault agent-policies`.
 
 ### Recommended `CLAUDE.md` for a Visdom Trace–integrated project
 
 ```
 # Visdom Trace session tracking
 
-## During work
-
-Work freely. No special actions needed while coding.
-
-## Pre-push validation
-
-When your work is complete and you are ready to push:
-
-1. Open a validation window — this marks the start of the validation phase:
-
-       tracevault validation-start
-
-2. Run all required validation tools. Only tools explicitly allowed by
-   validation-window policies should be called between this point and push.
-   The exact tools depend on which policies are configured for this repo.
-   Check the repo's policy list in the Visdom Trace dashboard.
-
-3. If a validation tool fails and you need to fix the issue, make your fix
-   and then open a NEW validation window before rerunning the tools:
-
-       tracevault validation-start   # invalidates the previous window
-
-   You must rerun ALL expected validation tools after opening a new window.
-
-4. Once all validation tools have passed, push normally:
-
-       git push
+Before starting any session, run `tracevault agent-policies` (or call the
+`agent_policies` MCP tool if the tracevault MCP is installed) and follow
+the instructions it returns. Those instructions reflect the policies
+configured on the server and take precedence over anything below.
 
 ## Commit messages
 
 Use conventional commits: https://www.conventionalcommits.org/en/v1.0.0/
 ```
 
-> **Note for project maintainers:** The specific tools required in the validation window (e.g. `mcp__review__agent_review`, `mcp__cargo__cargo_fmt`) depend on the policies configured for your repo in the Visdom Trace dashboard. Add those tool names to the "Run all required validation tools" step above when customising this template for your project.
+`tracevault agent-policies` fetches the active policies from the server and renders Markdown describing which tools must be called, which must succeed, what file patterns trigger conditional checks, and how the validation window works. When policies change in the dashboard, the output updates automatically — you do not need to maintain a manual list in `CLAUDE.md`.
 
-Adjust the instructions to match your stack. The key behaviors to encode:
-
-| Instruction | Why |
-|---|---|
-| Work freely before the validation window | Session-scoped policies can check tools called at any point; Validation-scoped policies only check tools called after `tracevault validation-start` |
-| Open validation window when work is done | Marks the start of the pre-push gate phase; only allowed tools should be called between this point and push |
-| Restart the window if a fix is needed | `tracevault validation-start` invalidates previous windows; all expected tools must be rerun to satisfy Validation-scoped policies |
-| All validation tools must pass before pushing | Policies will block the push if required tools weren't called or didn't succeed |
+> **Tool installation:** The rendered instructions reference tools by their literal name (e.g. `mcp__cargo__cargo_fmt`). Make sure those tools are installed in your agent setup. See [Install project-local MCP tools](#4-install-project-local-mcp-tools) for the bundled tools shipped with this repo.
 
 ### Policy types you can configure
 

@@ -86,6 +86,15 @@ enum Cli {
         #[arg(long)]
         session_id: Option<String>,
     },
+    /// Render agent-readable instructions from active policies.
+    ///
+    /// Fetches the active policies for the current repo and outputs Markdown
+    /// instructions describing which tools the agent must call before pushing,
+    /// and how validation windows work. Designed to be invoked from CLAUDE.md
+    /// (or equivalent) at session start so the agent's behaviour matches the
+    /// policies configured on the TraceVault server.
+    #[command(name = "agent-policies")]
+    AgentPolicies,
 }
 
 #[tokio::main]
@@ -193,6 +202,13 @@ async fn main() {
                 commands::validation_window::open_validation_window(&cwd, session_id.as_deref())
                     .await
             {
+                eprintln!("Error: {e}");
+                std::process::exit(1);
+            }
+        }
+        Cli::AgentPolicies => {
+            let cwd = env::current_dir().expect("Cannot determine current directory");
+            if let Err(e) = commands::agent_policies::run(&cwd).await {
                 eprintln!("Error: {e}");
                 std::process::exit(1);
             }
