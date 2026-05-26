@@ -13,11 +13,16 @@
 	let loading = $state(false);
 	let error = $state<string | null>(null);
 	let content = $state<string | null>(null);
-	let copyStatus = $state<'idle' | 'copied' | 'failed'>('idle');
+	type CopyStatus = 'idle' | 'copied' | 'failed';
+	let copyStatus = $state<CopyStatus>('idle');
 
-	const copyLabel = $derived(
-		copyStatus === 'copied' ? 'Copied' : copyStatus === 'failed' ? 'Copy failed' : 'Copy'
-	);
+	function getCopyLabel(status: CopyStatus): string {
+		if (status === 'copied') return 'Copied';
+		if (status === 'failed') return 'Copy failed';
+		return 'Copy';
+	}
+
+	const copyLabel = $derived(getCopyLabel(copyStatus));
 
 	async function fetchContent() {
 		loading = true;
