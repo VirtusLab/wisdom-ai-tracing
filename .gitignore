@@ -1,5 +1,6 @@
 /target
 .env
+.mcp.json
 !.env.example
 *.swp
 .DS_Store
@@ -19,3 +20,4 @@ integrations/tracevault-mcp/node_modules/
 integrations/tracevault-mcp/dist/
 integrations/gsd2-extension/node_modules/
 integrations/gsd2-extension/dist/
+.mcp.json
