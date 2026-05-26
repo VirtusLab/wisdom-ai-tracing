@@ -1,3 +1,4 @@
+pub mod agent_instructions;
 pub mod analytics;
 pub mod api_keys;
 pub mod auth;

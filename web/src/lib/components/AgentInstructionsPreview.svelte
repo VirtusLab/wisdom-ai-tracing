@@ -13,49 +13,45 @@
 	let loading = $state(false);
 	let error = $state<string | null>(null);
 	let content = $state<string | null>(null);
+	let copyStatus = $state<'idle' | 'copied' | 'failed'>('idle');
+
+	async function fetchContent() {
+		loading = true;
+		error = null;
+		try {
+			const resp = await api.get<{ format: string; content: string }>(
+				`/api/v1/orgs/${slug}/repos/${repoId}/policies/agent-instructions`
+			);
+			content = resp.content;
+		} catch (err) {
+			error = err instanceof Error ? err.message : 'Failed to fetch instructions';
+		} finally {
+			loading = false;
+		}
+	}
 
 	async function toggle() {
 		if (open) {
 			open = false;
 			return;
 		}
+		if (content !== null) {
+			open = true;
+			return; // cached
+		}
 		open = true;
-		if (content !== null) return; // cached
-		loading = true;
-		error = null;
-		try {
-			const resp = await api.get<{ format: string; content: string }>(
-				`/api/v1/orgs/${slug}/repos/${repoId}/policies/agent-instructions`
-			);
-			content = resp.content;
-		} catch (err) {
-			error = err instanceof Error ? err.message : 'Failed to fetch instructions';
-		} finally {
-			loading = false;
-		}
-	}
-
-	async function refresh() {
-		loading = true;
-		error = null;
-		try {
-			const resp = await api.get<{ format: string; content: string }>(
-				`/api/v1/orgs/${slug}/repos/${repoId}/policies/agent-instructions`
-			);
-			content = resp.content;
-		} catch (err) {
-			error = err instanceof Error ? err.message : 'Failed to fetch instructions';
-		} finally {
-			loading = false;
-		}
+		await fetchContent();
 	}
 
 	async function copyToClipboard() {
 		if (!content) return;
 		try {
 			await navigator.clipboard.writeText(content);
-		} catch (err) {
-			console.warn('Clipboard write failed:', err);
+			copyStatus = 'copied';
+			setTimeout(() => (copyStatus = 'idle'), 1500);
+		} catch {
+			copyStatus = 'failed';
+			setTimeout(() => (copyStatus = 'idle'), 2500);
 		}
 	}
 </script>
@@ -65,8 +61,12 @@
 		<h2 class="text-sm font-semibold">Agent instructions</h2>
 		<div class="flex gap-2">
 			{#if open && content}
-				<Button variant="outline" size="sm" onclick={copyToClipboard}>Copy</Button>
-				<Button variant="outline" size="sm" onclick={refresh} disabled={loading}>Refresh</Button>
+				<Button variant="outline" size="sm" onclick={copyToClipboard}>
+					{copyStatus === 'copied' ? 'Copied' : copyStatus === 'failed' ? 'Copy failed' : 'Copy'}
+				</Button>
+				<Button variant="outline" size="sm" onclick={fetchContent} disabled={loading}>
+					Refresh
+				</Button>
 			{/if}
 			<Button variant="outline" size="sm" onclick={toggle}>
 				{open ? 'Hide' : 'Preview'}
