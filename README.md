@@ -349,9 +349,9 @@ Adjust the instructions to match your stack. The key behaviors to encode:
 
 | Instruction | Why |
 |---|---|
-| Work freely before the validation window | Session-scoped policies can check tools called at any point; window-scoped policies only check tools called after `tracevault validation-start` |
+| Work freely before the validation window | Session-scoped policies can check tools called at any point; Validation-scoped policies only check tools called after `tracevault validation-start` |
 | Open validation window when work is done | Marks the start of the pre-push gate phase; only allowed tools should be called between this point and push |
-| Restart the window if a fix is needed | `tracevault validation-start` invalidates previous windows; all expected tools must be rerun to satisfy window-scoped policies |
+| Restart the window if a fix is needed | `tracevault validation-start` invalidates previous windows; all expected tools must be rerun to satisfy Validation-scoped policies |
 | All validation tools must pass before pushing | Policies will block the push if required tools weren't called or didn't succeed |
 
 ### Policy types you can configure
@@ -367,7 +367,7 @@ In the Visdom Trace dashboard, under **Repos → [your repo] → Policies**, you
 
 Actions: **Block push** (exit non-zero, prevents `git push`) or **Warn** (logs but allows).
 
-Scope: **Session** (evaluate all tool calls), **Validation window** (evaluate only tools called after `tracevault validation-start`), or **Both**.
+Scope: **Session** (evaluate all tool calls in the session) or **Validation** (evaluate only tools called after `tracevault validation-start`).
 
 ## Keys & Secrets
 
@@ -427,7 +427,7 @@ export DATABASE_URL=postgres://user:password@host:5432/tracevault?sslmode=requir
 | `tracevault stream --event <type>` | Handle a Claude Code hook event (reads JSON from stdin) and stream it to the server |
 | `tracevault sync` | Sync repo metadata with the server |
 | `tracevault check` | Evaluate policies against server rules, exit non-zero if blocked |
-| `tracevault validation-start [--session-id ID]` | Open a validation window. Call this when work is complete and you are ready to run pre-push validation tools. Window-scoped policies only evaluate tools called after this point. Calling it again invalidates the previous window. |
+| `tracevault validation-start [--session-id ID]` | Open a validation window. Call this when work is complete and you are ready to run pre-push validation tools. Validation-scoped policies only evaluate tools called after this point. Calling it again invalidates the previous window. |
 | `tracevault stats` | Show local session statistics |
 | `tracevault verify` | Verify commits are registered and sealed on the server (`--commits` or `--range`) |
 | `tracevault status` | Show current session status (not yet implemented) |
@@ -452,9 +452,9 @@ Each policy has a configurable action:
 
 Fail-closed: if the server is unreachable, `tracevault check` blocks the push.
 
-### Validation Windows
+### Validation Scope
 
-A validation window is a pre-push gate phase. When work is complete and the agent is ready to push, it opens a validation window with `tracevault validation-start`, then runs all tools required by window-scoped policies (formatters, linters, security scanners, code review tools). Only tools explicitly allowed by those policies should be called between the window opening and the push.
+A validation window is a pre-push gate phase. When work is complete and the agent is ready to push, it opens a validation window with `tracevault validation-start`, then runs all tools required by Validation-scoped policies (formatters, linters, security scanners, code review tools). Only tools explicitly allowed by those policies should be called between the window opening and the push.
 
 If a validation tool fails and the agent needs to make a fix, it must restart the window (`tracevault validation-start` again) before rerunning the tools — the previous window is invalidated and all expected tools must be called again from scratch.
 
