@@ -16,10 +16,8 @@ on:
     types: [closed]
     branches:
       - main
-  # Final safety net — runs hourly so a missed push/merge never blocks a
-  # release for more than an hour.
-  schedule:
-    - cron: '0 * * * *'
+  # Manual fallback — use the "Run workflow" button on the Actions tab
+  # when both push and pull_request_target triggers misfire.
   workflow_dispatch:
 
 jobs:
