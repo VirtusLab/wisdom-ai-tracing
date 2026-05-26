@@ -81,6 +81,9 @@ function configDir(): string {
   if (process.platform === "darwin") {
     return join(homedir(), "Library", "Application Support");
   }
+  if (process.platform === "win32") {
+    return process.env.APPDATA ?? join(homedir(), "AppData", "Roaming");
+  }
   // Linux / other: use XDG_CONFIG_HOME or ~/.config
   return process.env.XDG_CONFIG_HOME ?? join(homedir(), ".config");
 }
