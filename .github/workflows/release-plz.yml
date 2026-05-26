@@ -9,11 +9,26 @@ on:
   push:
     branches:
       - main
+  # Backup trigger: GitHub's push event sometimes does not fire after a
+  # rebase/squash merge, leaving release-plz stuck. Catch the merge via
+  # pull_request_target so the workflow still runs.
+  pull_request_target:
+    types: [closed]
+    branches:
+      - main
+  # Final safety net — runs hourly so a missed push/merge never blocks a
+  # release for more than an hour.
+  schedule:
+    - cron: '0 * * * *'
   workflow_dispatch:
 
 jobs:
   release-plz-release:
     name: Release-plz release
+    # Skip when triggered by a PR close that wasn't actually merged.
+    if: >-
+      github.event_name != 'pull_request_target' ||
+      github.event.pull_request.merged == true
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -21,6 +36,7 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
+          ref: main
       - name: Create enterprise stub (submodule not available in OSS CI)
         run: |
           if [ ! -f enterprise/Cargo.toml ]; then
@@ -62,9 +78,15 @@ jobs:
 
   release-plz-pr:
     name: Release-plz PR
+    # Skip when triggered by a PR close that wasn't actually merged.
+    if: >-
+      github.event_name != 'pull_request_target' ||
+      github.event.pull_request.merged == true
     runs-on: ubuntu-latest
     concurrency:
-      group: release-plz-${{ github.ref }}
+      # Keyed on the target branch (main) so all triggers share one slot —
+      # otherwise pull_request_target events would create per-PR groups.
+      group: release-plz-main
       cancel-in-progress: false
     steps:
       - name: Checkout repository
@@ -72,6 +94,7 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
+          ref: main
       - name: Create enterprise stub (submodule not available in OSS CI)
         run: |
           if [ ! -f enterprise/Cargo.toml ]; then
