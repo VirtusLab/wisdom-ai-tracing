@@ -418,8 +418,10 @@ pub async fn check_policies(
             continue;
         }
 
-        // Collect the evaluation datasets based on scope.
-        // `both` produces two evaluations; the worse result is reported.
+        // Select the evaluation dataset based on scope.
+        // "validation_window" evaluates only tool calls after validation-start;
+        // "session" (default) evaluates all tool calls in the session.
+        // Legacy "both" entries fall through to session evaluation.
         let datasets: &[(&std::collections::HashMap<String, ToolCallStats>, &str)] =
             match scope.as_str() {
                 "validation_window" => {
