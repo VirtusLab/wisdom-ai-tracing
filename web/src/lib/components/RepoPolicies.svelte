@@ -33,10 +33,13 @@
 
 	let { slug, repoId, policies, loading, error, onchange }: Props = $props();
 
-	// Create dialog state
-	let createOpen = $state(false);
-	let createLoading = $state(false);
-	let createError = $state('');
+	// Dialog state — shared between create and edit modes.
+	let dialogOpen = $state(false);
+	let dialogLoading = $state(false);
+	let dialogError = $state('');
+	// When set, the dialog is in edit mode for this policy.
+	let editingPolicy = $state<Policy | null>(null);
+
 	let newName = $state('');
 	let newDescription = $state('');
 	let newConditionType = $state('ConditionalToolCall');
@@ -47,6 +50,17 @@
 	let newScope = $state('session');
 	let newToolNames = $state('');
 	let newMustSucceed = $state(false);
+
+	const isEdit = $derived(editingPolicy !== null);
+	const dialogTitle = $derived(isEdit ? 'Edit Policy' : 'Create Policy');
+	const dialogDescription = $derived(
+		isEdit
+			? 'Update this policy. Only changed fields are saved.'
+			: 'Define a tool-call requirement for this repo.'
+	);
+	const submitLabel = $derived(
+		dialogLoading ? (isEdit ? 'Saving...' : 'Creating...') : isEdit ? 'Save' : 'Create'
+	);
 
 	function buildCondition(): Record<string, unknown> {
 		if (newConditionType === 'RequiredToolCall') {
@@ -76,29 +90,40 @@
 		}
 	}
 
-	async function handleCreate(e: Event) {
+	async function handleSubmit(e: Event) {
 		e.preventDefault();
-		createLoading = true;
-		createError = '';
+		dialogLoading = true;
+		dialogError = '';
 		try {
-			await api.post(`/api/v1/orgs/${slug}/repos/${repoId}/policies`, {
+			const payload = {
 				name: newName,
 				description: newDescription || undefined,
 				condition: buildCondition(),
 				action: newAction,
 				scope: newScope
-			});
-			createOpen = false;
+			};
+			if (editingPolicy) {
+				await api.put(`/api/v1/orgs/${slug}/policies/${editingPolicy.id}`, payload);
+			} else {
+				await api.post(`/api/v1/orgs/${slug}/repos/${repoId}/policies`, payload);
+			}
+			dialogOpen = false;
 			resetForm();
 			onchange();
 		} catch (err) {
-			createError = err instanceof Error ? err.message : 'Failed to create policy';
+			dialogError =
+				err instanceof Error
+					? err.message
+					: editingPolicy
+						? 'Failed to update policy'
+						: 'Failed to create policy';
 		} finally {
-			createLoading = false;
+			dialogLoading = false;
 		}
 	}
 
 	function resetForm() {
+		editingPolicy = null;
 		newName = '';
 		newDescription = '';
 		newConditionType = 'ConditionalToolCall';
@@ -109,7 +134,35 @@
 		newMustSucceed = false;
 		newAction = 'block_push';
 		newScope = 'session';
-		createError = '';
+		dialogError = '';
+	}
+
+	function openCreate() {
+		resetForm();
+		dialogOpen = true;
+	}
+
+	function openEdit(policy: Policy) {
+		resetForm();
+		editingPolicy = policy;
+		newName = policy.name;
+		newDescription = policy.description ?? '';
+		newAction = policy.action;
+		newScope = policy.scope;
+		const cond = policy.condition;
+		const type = cond.type as string;
+		newConditionType = type === 'RequiredToolCall' ? 'RequiredToolCall' : 'ConditionalToolCall';
+		newMustSucceed = cond.must_succeed === true;
+		if (type === 'RequiredToolCall') {
+			const tools = (cond.tool_names as string[]) ?? [];
+			newToolNames = tools.join(', ');
+		} else {
+			newToolName = (cond.tool_name as string) ?? '';
+			newMinCount = String((cond.min_count as number) ?? 1);
+			const patterns = (cond.when_files_match as string[] | undefined) ?? [];
+			newFilePatterns = patterns.join(', ');
+		}
+		dialogOpen = true;
 	}
 
 	let actionError = $state('');
@@ -159,20 +212,16 @@
 <div class="border-border overflow-hidden rounded-lg border">
 	<div class="bg-muted/30 flex items-center justify-between px-4 py-3">
 		<span class="text-sm font-semibold">Policies</span>
-		<Dialog.Root bind:open={createOpen} onOpenChange={(open) => { if (!open) resetForm(); }}>
-			<Dialog.Trigger>
-				{#snippet child({ props })}
-					<Button size="sm" {...props}>Add Policy</Button>
-				{/snippet}
-			</Dialog.Trigger>
+		<Button size="sm" onclick={openCreate}>Add Policy</Button>
+		<Dialog.Root bind:open={dialogOpen} onOpenChange={(open) => { if (!open) resetForm(); }}>
 			<Dialog.Content class="sm:max-w-lg">
 				<Dialog.Header>
-					<Dialog.Title>Create Policy</Dialog.Title>
-					<Dialog.Description>Define a tool-call requirement for this repo.</Dialog.Description>
+					<Dialog.Title>{dialogTitle}</Dialog.Title>
+					<Dialog.Description>{dialogDescription}</Dialog.Description>
 				</Dialog.Header>
-				<form onsubmit={handleCreate} class="grid gap-4">
-					{#if createError}
-						<p class="text-sm text-destructive">{createError}</p>
+				<form onsubmit={handleSubmit} class="grid gap-4">
+					{#if dialogError}
+						<p class="text-sm text-destructive">{dialogError}</p>
 					{/if}
 					<div class="grid gap-2">
 						<Label for="policy_name">Name</Label>
@@ -250,9 +299,7 @@
 					</div>
 
 					<Dialog.Footer>
-						<Button type="submit" disabled={createLoading}>
-							{createLoading ? 'Creating...' : 'Create'}
-						</Button>
+						<Button type="submit" disabled={dialogLoading}>{submitLabel}</Button>
 					</Dialog.Footer>
 				</form>
 			</Dialog.Content>
@@ -312,9 +359,16 @@
 							</Table.Cell>
 							<Table.Cell class="text-xs">
 								{#if policy.repo_id}
-									<Button variant="destructive" size="sm" onclick={() => deletePolicy(policy.id)}>
-										Delete
-									</Button>
+									<div class="flex justify-end gap-2">
+										<Button variant="outline" size="sm" onclick={() => openEdit(policy)}>Edit</Button>
+										<Button
+											variant="destructive"
+											size="sm"
+											onclick={() => deletePolicy(policy.id)}
+										>
+											Delete
+										</Button>
+									</div>
 								{/if}
 							</Table.Cell>
 						</Table.Row>
