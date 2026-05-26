@@ -261,7 +261,7 @@
 					<div class="mt-1 text-lg font-semibold">{fmtNum(((session.input_tokens ?? 0) + (session.output_tokens ?? 0) + (session.cache_read_tokens ?? 0) + (session.cache_write_tokens ?? 0)) || session.total_tokens)}</div>
 					{#if (session.input_tokens ?? 0) > 0 || (session.output_tokens ?? 0) > 0 || (session.cache_read_tokens ?? 0) > 0 || (session.cache_write_tokens ?? 0) > 0}
 						<div class="text-muted-foreground mt-1 space-y-0.5 text-[10px] leading-tight">
-							<div><span class="inline-block w-6">in:</span>{fmtNum(session.input_tokens)}</div>
+							<div><span class="inline-block">fresh:</span>{fmtNum(session.input_tokens)}</div>
 							<div><span class="inline-block w-6">out:</span>{fmtNum(session.output_tokens)}</div>
 							<div><span class="inline-block w-6">cr:</span>{fmtNum(session.cache_read_tokens)}</div>
 							<div><span class="inline-block w-6">cw:</span>{fmtNum(session.cache_write_tokens)}</div>
