@@ -15,6 +15,10 @@
 	let content = $state<string | null>(null);
 	let copyStatus = $state<'idle' | 'copied' | 'failed'>('idle');
 
+	const copyLabel = $derived(
+		copyStatus === 'copied' ? 'Copied' : copyStatus === 'failed' ? 'Copy failed' : 'Copy'
+	);
+
 	async function fetchContent() {
 		loading = true;
 		error = null;
@@ -62,7 +66,7 @@
 		<div class="flex gap-2">
 			{#if open && content}
 				<Button variant="outline" size="sm" onclick={copyToClipboard}>
-					{copyStatus === 'copied' ? 'Copied' : copyStatus === 'failed' ? 'Copy failed' : 'Copy'}
+					{copyLabel}
 				</Button>
 				<Button variant="outline" size="sm" onclick={fetchContent} disabled={loading}>
 					Refresh
