@@ -72,6 +72,14 @@ pub struct RepoListItem {
     pub clone_status: Option<String>,
 }
 
+/// Response shape for the `policies/agent-instructions` endpoint.
+#[derive(Debug, Clone, Deserialize)]
+pub struct AgentInstructionsResponse {
+    #[allow(dead_code)]
+    pub format: String,
+    pub content: String,
+}
+
 #[derive(Debug, Deserialize)]
 pub struct MeResponse {
     #[allow(dead_code)]
@@ -270,6 +278,28 @@ impl ApiClient {
 
         let repos: Vec<RepoListItem> = resp.json().await?;
         Ok(repos)
+    }
+
+    pub async fn get_agent_instructions(
+        &self,
+        org_slug: &str,
+        repo_id: &uuid::Uuid,
+    ) -> Result<AgentInstructionsResponse, Box<dyn Error>> {
+        let mut builder = self.client.get(format!(
+            "{}/api/v1/orgs/{}/repos/{}/policies/agent-instructions",
+            self.base_url, org_slug, repo_id
+        ));
+        if let Some(key) = &self.api_key {
+            builder = builder.header("Authorization", format!("Bearer {key}"));
+        }
+
+        let resp = builder.send().await?;
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            return Err(format!("Failed to fetch agent instructions ({status}): {body}").into());
+        }
+        Ok(resp.json().await?)
     }
 
     pub async fn verify_commits(

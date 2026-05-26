@@ -48,6 +48,8 @@ interface Config {
   serverUrl: string;
   token: string;
   orgSlug: string;
+  /** UUID of the current repo, when available from .tracevault/config.toml. */
+  repoId?: string;
 }
 
 function parseToml(content: string): Record<string, string> {
@@ -114,6 +116,12 @@ function loadConfig(): Config {
   const envUrl = process.env.TRACEVAULT_SERVER_URL;
   const envToken = process.env.TRACEVAULT_TOKEN ?? process.env.TRACEVAULT_API_KEY;
   const envOrg = process.env.TRACEVAULT_ORG_SLUG;
+  // Resolve repo_id from local config (used by repo-scoped tools like
+  // agent_policies). Optional — org-scoped tools work without it.
+  const cwd = process.cwd();
+  const localCfg = loadTomlConfig(join(cwd, ".tracevault", "config.toml"));
+  const repoId = localCfg?.repo_id;
+
   if (envUrl || envOrg) {
     // Partial env var config — require all three to be explicit to avoid
     // silently mixing env + file config in unexpected ways
@@ -124,13 +132,12 @@ function loadConfig(): Config {
       serverUrl: envUrl.replace(/\/$/, ""),
       token: envToken,
       orgSlug: envOrg,
+      repoId,
     };
   }
 
   // 2. credentials.json (written by `tracevault login`) + config.toml for org_slug
   const creds = loadCredentials();
-  const cwd = process.cwd();
-  const localCfg = loadTomlConfig(join(cwd, ".tracevault", "config.toml"));
 
   if (creds) {
     // org_slug comes from local config.toml; fall back to env var
@@ -140,6 +147,7 @@ function loadConfig(): Config {
         serverUrl: (envUrl ?? creds.server_url).replace(/\/$/, ""),
         token: envToken ?? creds.token,
         orgSlug,
+        repoId,
       };
     }
   }
@@ -150,6 +158,7 @@ function loadConfig(): Config {
       serverUrl: localCfg.server_url.replace(/\/$/, ""),
       token: envToken ?? localCfg.api_key!,
       orgSlug: localCfg.org_slug,
+      repoId,
     };
   }
 
@@ -277,6 +286,63 @@ const TOOL_DESCRIPTION =
   "'What sessions touched the auth service last month?', " +
   "'What decisions were made about the database schema?'.";
 
+const AGENT_POLICIES_TOOL = "agent_policies";
+const AGENT_POLICIES_DESCRIPTION =
+  "Fetch agent-readable Markdown instructions describing the active policies " +
+  "for the current repository — which tools must be called before push, which " +
+  "must succeed, which file patterns trigger conditional tool calls, and how " +
+  "the validation window works. Call this at session start so your behaviour " +
+  "matches the policies configured on the TraceVault server. The instructions " +
+  "take precedence over any manual project rules.";
+
+/**
+ * Fetch rendered agent instructions from the server. The server renders the
+ * Markdown — keeping rendering centralised means CLI, MCP, and dashboard all
+ * produce identical output.
+ */
+async function fetchAgentPolicies(cfg: Config): Promise<string> {
+  if (!cfg.repoId) {
+    throw new McpError(
+      ErrorCode.InvalidParams,
+      "TraceVault MCP: repo_id missing from .tracevault/config.toml — run `tracevault init` first."
+    );
+  }
+
+  const url = `${cfg.serverUrl}/api/v1/orgs/${cfg.orgSlug}/repos/${cfg.repoId}/policies/agent-instructions`;
+  const abort = new AbortController();
+  const timeout = setTimeout(() => abort.abort(), 15_000);
+
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      method: "GET",
+      headers: { "Authorization": `Bearer ${cfg.token}` },
+      signal: abort.signal,
+    });
+  } catch (err) {
+    if ((err as Error).name === "AbortError") {
+      throw new McpError(ErrorCode.InternalError, "TraceVault request timed out after 15s");
+    }
+    throw err;
+  } finally {
+    clearTimeout(timeout);
+  }
+
+  if (!response.ok) {
+    const text = await response.text().catch(() => "");
+    throw new McpError(
+      ErrorCode.InternalError,
+      `agent_policies fetch failed (${response.status}): ${text}`
+    );
+  }
+
+  const payload = (await response.json()) as { content?: string };
+  if (typeof payload?.content !== "string") {
+    throw new McpError(ErrorCode.InternalError, "agent_policies response missing 'content' field");
+  }
+  return payload.content;
+}
+
 async function main(): Promise<void> {
   let config: Config;
   try {
@@ -309,10 +375,23 @@ async function main(): Promise<void> {
           required: ["question"],
         },
       },
+      {
+        name: AGENT_POLICIES_TOOL,
+        description: AGENT_POLICIES_DESCRIPTION,
+        inputSchema: {
+          type: "object" as const,
+          properties: {},
+        },
+      },
     ],
   }));
 
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
+    if (request.params.name === AGENT_POLICIES_TOOL) {
+      const text = await fetchAgentPolicies(config);
+      return { content: [{ type: "text", text }] };
+    }
+
     if (request.params.name !== TOOL_NAME) {
       throw new McpError(
         ErrorCode.MethodNotFound,

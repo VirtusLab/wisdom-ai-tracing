@@ -7,6 +7,7 @@
 	import ChevronRightIcon from '@lucide/svelte/icons/chevron-right';
 	import SearchIcon from '@lucide/svelte/icons/search';
 	import XIcon from '@lucide/svelte/icons/x';
+	import AgentInstructionsPreview from '$lib/components/AgentInstructionsPreview.svelte';
 	import RepoPolicies from '$lib/components/RepoPolicies.svelte';
 	import PolicyActivity from '$lib/components/PolicyActivity.svelte';
 	import { formatDate } from '$lib/utils/date';
@@ -243,6 +244,9 @@
 		error={policiesError}
 		onchange={loadPolicies}
 	/>
+
+	<!-- Agent instructions preview -->
+	<AgentInstructionsPreview {slug} {repoId} />
 
 	<!-- Policy Activity -->
 	<PolicyActivity {slug} {repoId} {policies} />

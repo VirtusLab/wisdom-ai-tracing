@@ -1,3 +1,4 @@
+pub mod agent_policies;
 pub mod code_nav;
 pub mod diff;
 pub mod extensions;
