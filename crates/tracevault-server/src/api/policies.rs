@@ -436,14 +436,7 @@ pub async fn check_policies(
                     }
                     &[(&window_tool_calls, "window")]
                 }
-                "both" => {
-                    if has_any_window {
-                        &[(&all_tool_calls, "session"), (&window_tool_calls, "window")]
-                    } else {
-                        &[(&all_tool_calls, "session")]
-                    }
-                }
-                _ => &[(&all_tool_calls, "session")], // "session" (default)
+                _ => &[(&all_tool_calls, "session")], // "session" (default) — also handles legacy "both"
             };
 
         // Evaluate against each dataset; pick the worst outcome.
@@ -507,7 +500,7 @@ pub async fn check_policies(
     if has_any_window && window_mode != "disabled" {
         let covered_tools: Vec<String> = rows
             .iter()
-            .filter(|(_, _, _, _, _, scope)| scope == "validation_window" || scope == "both")
+            .filter(|(_, _, _, _, _, scope)| scope == "validation_window")
             .flat_map(|(_, _, condition, _, _, _)| extract_policy_tool_names(condition))
             .collect();
 
@@ -738,7 +731,7 @@ fn classify_result(outcome: &tracevault_core::policy_eval::EvalOutcome) -> &'sta
 const VALID_ACTIONS: &[&str] = &["block_push", "warn", "allow"];
 
 /// Valid scope values. Keep in sync with `PolicyScope` in tracevault-core.
-const VALID_SCOPES: &[&str] = &["session", "validation_window", "both"];
+const VALID_SCOPES: &[&str] = &["session", "validation_window"];
 
 fn validate_action(action: &str) -> Result<(), AppError> {
     if !VALID_ACTIONS.contains(&action) {

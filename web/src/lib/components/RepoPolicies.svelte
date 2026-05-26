@@ -241,14 +241,13 @@
 					<div class="grid gap-2">
 						<Label>Scope</Label>
 						<Select.Root type="single" value={newScope} onValueChange={(v) => { if (v) newScope = v; }}>
-							<Select.Trigger>{{ session: 'Session', validation_window: 'Validation Window', both: 'Both' }[newScope] ?? newScope}</Select.Trigger>
+							<Select.Trigger>{{ session: 'Session', validation_window: 'Validation', both: 'Session' }[newScope] ?? newScope}</Select.Trigger>
 							<Select.Content>
 								<Select.Item value="session">Session</Select.Item>
-								<Select.Item value="validation_window">Validation Window</Select.Item>
-								<Select.Item value="both">Both</Select.Item>
+								<Select.Item value="validation_window">Validation</Select.Item>
 							</Select.Content>
 						</Select.Root>
-						<p class="text-xs text-muted-foreground">Use <em>Validation Window</em> with <code>tracevault validation-start</code> to enforce checks run after code changes.</p>
+						<p class="text-xs text-muted-foreground">Use <em>Validation</em> scope with <code>tracevault validation-start</code> to enforce checks only within the pre-push validation window.</p>
 					</div>
 
 					<Dialog.Footer>
@@ -301,9 +300,8 @@
 							</Table.Cell>
 							<Table.Cell class="text-xs">
 								{#if policy.scope === 'validation_window'}
-									<span class="rounded-full px-2 py-0.5 text-[10px]" style="background: rgba(99,179,237,0.12); color: #63b3ed; border: 1px solid rgba(99,179,237,0.25)">Window</span>
-								{:else if policy.scope === 'both'}
-									<span class="rounded-full px-2 py-0.5 text-[10px]" style="background: rgba(167,139,250,0.12); color: #a78bfa; border: 1px solid rgba(167,139,250,0.25)">Both</span>
+									<span class="rounded-full px-2 py-0.5 text-[10px]" style="background: rgba(99,179,237,0.12); color: #63b3ed; border: 1px solid rgba(99,179,237,0.25)">Validation</span>
+
 								{:else}
 									<span class="rounded-full px-2 py-0.5 text-[10px]" style="background: rgba(156,163,175,0.12); color: #9ca3af; border: 1px solid rgba(156,163,175,0.25)">Session</span>
 								{/if}
