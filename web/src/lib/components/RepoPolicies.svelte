@@ -58,9 +58,15 @@
 			? 'Update this policy. Only changed fields are saved.'
 			: 'Define a tool-call requirement for this repo.'
 	);
-	const submitLabel = $derived(
-		dialogLoading ? (isEdit ? 'Saving...' : 'Creating...') : isEdit ? 'Save' : 'Create'
-	);
+
+	function getSubmitLabel(loading: boolean, editing: boolean): string {
+		if (loading && editing) return 'Saving...';
+		if (loading) return 'Creating...';
+		if (editing) return 'Save';
+		return 'Create';
+	}
+
+	const submitLabel = $derived(getSubmitLabel(dialogLoading, isEdit));
 
 	function buildCondition(): Record<string, unknown> {
 		if (newConditionType === 'RequiredToolCall') {
