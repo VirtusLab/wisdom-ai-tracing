@@ -282,24 +282,38 @@ That's it. From this point on, every Claude Code session in this repo is automat
 
 ### 4. Install project-local MCP tools
 
-This repo ships two project-local MCP servers that Claude Code picks up automatically via `.mcp.json`:
+This repo ships project-local MCP servers that Claude Code uses to satisfy pre-push policies.
 
-**`tools/cargo-mcp/`** — exposes three tools used by Visdom Trace policies:
+**Step 1 — Create your local `.mcp.json`:**
 
-- **`cargo_fmt`** — runs `cargo fmt` to format all Rust files in place. The policy requires this tool to be called before committing.
-- **`cargo_check`** — runs `cargo clippy` then `cargo test`. Returns an error result if either fails. The policy requires this tool to be called *and* to succeed before pushing.
-- **`cargo_audit`** — runs `cargo audit` to check Cargo.lock for known CVEs. Required by policy when `Cargo.lock` changes.
+```sh
+cp .mcp.json.example .mcp.json
+```
 
-**`integrations/tracevault-mcp/`** — exposes the `ask_tracevault` tool, which lets agents query indexed session history using natural language (e.g. "Why was this module refactored?", "What sessions touched the auth service last month?").
+`.mcp.json` is gitignored so it stays local. The example includes the three project servers needed for policy compliance. Add any private servers (deploy tools, DB access, etc.) to your local copy only.
 
-Install the dependencies once after cloning:
+**Step 2 — Install dependencies:**
 
 ```sh
 npm install --prefix tools/cargo-mcp
+npm install --prefix tools/review-mcp
 npm install --prefix integrations/tracevault-mcp
 ```
 
-Claude Code will automatically offer the tools in any session inside this repo. The `ask_tracevault` tool requires a logged-in Visdom Trace session — run `tracevault login` once if you haven't already.
+**What each server provides:**
+
+**`tools/cargo-mcp/`** — required by pre-push policies:
+- **`mcp__cargo__cargo_fmt`** — runs `cargo fmt`. Must be called before committing.
+- **`mcp__cargo__cargo_check`** — runs `cargo clippy` then `cargo test`. Must be called and succeed before pushing.
+- **`mcp__cargo__cargo_audit`** — runs `cargo audit`. Required when `Cargo.lock` changes.
+
+**`tools/review-mcp/`** — required by the validation-scoped self-review policy:
+- **`mcp__review__agent_review`** — assembles the diff + full context of touched files and returns a review prompt. Call this inside a validation window before pushing to Rust files.
+
+**`integrations/tracevault-mcp/`** — optional, for querying session history:
+- **`ask_tracevault`** — lets agents query indexed session history in natural language. Requires `tracevault login` to be run once.
+
+Claude Code picks up all servers from `.mcp.json` automatically on next session start. No further configuration needed.
 
 ## Integrating Visdom Trace into your own project
 
