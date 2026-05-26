@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.16.0](https://github.com/softwaremill/tracevault/compare/v0.15.0...v0.16.0) - 2026-05-26
+
+### Added
+
+- New `tracevault agent-policies` command. Fetches the active policies for the
+  current repo from the server and prints agent-readable Markdown instructions
+  — which tools must be called before push, which must succeed, what file
+  patterns trigger conditional checks, and how the validation window works.
+  Designed to be invoked from `CLAUDE.md` (or equivalent) at session start so
+  agent behaviour reflects the configured policies. When policies change in
+  the dashboard, the output updates automatically — no manual sync required.
+
 ## [0.15.0](https://github.com/softwaremill/tracevault/compare/v0.14.0...v0.15.0) - 2026-05-22
 
 ### Changed

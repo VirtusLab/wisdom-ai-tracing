@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.16.0](https://github.com/softwaremill/tracevault/compare/v0.15.0...v0.16.0) - 2026-05-26
+
+### Added
+
+- New `agent_policies` module: pure-function Markdown renderer that produces
+  agent-readable instructions from the active policies for a repo. Used by
+  the CLI's `tracevault agent-policies` command, the `agent_policies` MCP
+  tool, and the dashboard preview.
+
+### Changed
+
+- `PolicyAction` now derives `Copy`, `PartialEq`, and `Eq`. Backwards compatible.
+
 ## [0.15.0](https://github.com/softwaremill/tracevault/compare/v0.14.0...v0.15.0) - 2026-05-22
 
 ### Documentation

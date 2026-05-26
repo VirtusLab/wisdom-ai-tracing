@@ -7,6 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.16.0](https://github.com/softwaremill/tracevault/compare/v0.15.0...v0.16.0) - 2026-05-26
+
+### Added
+
+- New endpoint `GET /api/v1/orgs/{slug}/repos/{repo_id}/policies/agent-instructions`
+  that returns Markdown instructions rendered from the repo's active policies.
+- `feat(branches)`: add repo column and per-repo filter to the branches view.
+- `feat(sessions)`: tool, user, and file changes filters on the sessions view.
+- `feat(ui)`: token breakdown on session detail page and totals across the
+  sessions list.
+- `feat(ui)`: multi-select filters for the policy activity table.
+- `feat(mcp)`: TraceVault MCP server (`integrations/tracevault-mcp/`) with
+  the stateless `POST /api/v1/orgs/{slug}/chat/ask` endpoint backing
+  the new `ask_tracevault` and `agent_policies` tools.
+
+### Changed
+
+- Removed the `both` policy scope; existing `both` rows continue to validate
+  but the UI now exposes only `session` and `validation_window`.
+  The Window scope label is renamed to "Validation".
+- `refactor(traces_ui)`: split monolithic `traces_ui.rs` into focused submodules
+  and externalized all inline SQL to `sql/` files.
+- `fix(pagination)`: sessions and commits views converted to server-side
+  pagination; repo detail commit pagination corrected.
+
+### Fixed
+
+- `fix(tokens)`: store raw `input_tokens` and compute fresh values only for
+  pricing aggregation.
+- `fix(permissions)`: grant `ChatUse` to owner, admin and developer roles.
+- `fix(sso)`: admin role can manage SSO configuration; comments updated to
+  reflect owner-or-admin access.
+- `fix(login)`: prevent memberless ghost orgs from appearing in the dropdown.
+
 ## [0.15.0](https://github.com/softwaremill/tracevault/compare/v0.14.0...v0.15.0) - 2026-05-22
 
 ### Added
