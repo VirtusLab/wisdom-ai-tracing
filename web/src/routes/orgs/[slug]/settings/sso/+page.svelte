@@ -47,7 +47,9 @@
 	let autoProvision = $state(true);
 	let defaultRole = $state('developer');
 
-	const isOwner = $derived(orgState.current?.role === 'owner');
+	const canManageSso = $derived(
+		orgState.current?.role === 'owner' || orgState.current?.role === 'admin'
+	);
 
 	onMount(async () => {
 		try {
@@ -190,8 +192,8 @@
 				{/if}
 			</div>
 			<div class="p-4 space-y-4">
-				{#if !isOwner}
-					<p class="text-sm text-muted-foreground">Only organization owners can configure SSO.</p>
+				{#if !canManageSso}
+					<p class="text-sm text-muted-foreground">Only organization owners and admins can configure SSO.</p>
 				{:else}
 					<form onsubmit={(e) => { e.preventDefault(); handleSave(); }} class="space-y-4">
 						<div class="grid gap-2">
