@@ -10,34 +10,17 @@ use crate::policy::{PolicyAction, PolicyCondition, PolicyRule, PolicyScope, Vali
 #[derive(Debug, Clone)]
 struct ToolRequirement {
     tool: String,
-    action: ActionTag,
+    action: PolicyAction,
     must_succeed: bool,
     when_files_match: Option<Vec<String>>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ActionTag {
-    Block,
-    Warn,
-    Allow,
-}
-
-impl ActionTag {
-    fn from(action: &PolicyAction) -> Self {
-        match action {
-            PolicyAction::BlockPush => ActionTag::Block,
-            PolicyAction::Warn => ActionTag::Warn,
-            PolicyAction::Allow => ActionTag::Allow,
-        }
-    }
 }
 
 impl ToolRequirement {
     fn render_line(&self) -> String {
         let (verb, succeed) = match self.action {
-            ActionTag::Allow => return format!("- `{}`", self.tool),
-            ActionTag::Block => ("must be called", "must succeed"),
-            ActionTag::Warn => ("should be called", "should succeed"),
+            PolicyAction::Allow => return format!("- `{}`", self.tool),
+            PolicyAction::BlockPush => ("must be called", "must succeed"),
+            PolicyAction::Warn => ("should be called", "should succeed"),
         };
 
         let action_phrase = if self.must_succeed {
@@ -65,7 +48,7 @@ impl ToolRequirement {
     }
 }
 
-fn condition_to_requirements(cond: &PolicyCondition, action: ActionTag) -> Vec<ToolRequirement> {
+fn condition_to_requirements(cond: &PolicyCondition, action: PolicyAction) -> Vec<ToolRequirement> {
     match cond {
         PolicyCondition::RequiredToolCall {
             tool_names,
@@ -118,8 +101,7 @@ pub fn render_markdown(
     let mut window_allowed: Vec<ToolRequirement> = Vec::new();
 
     for p in policies.iter().filter(|p| p.enabled) {
-        let action = ActionTag::from(&p.action);
-        let reqs = condition_to_requirements(&p.condition, action);
+        let reqs = condition_to_requirements(&p.condition, p.action);
         if reqs.is_empty() {
             continue;
         }
@@ -131,7 +113,7 @@ pub fn render_markdown(
             && !matches!(validation_window_mode, ValidationWindowMode::Disabled)
         {
             for r in &reqs {
-                if r.action == ActionTag::Allow {
+                if r.action == PolicyAction::Allow {
                     window_allowed.push(r.clone());
                 } else {
                     window_required.push(r.clone());
