@@ -403,6 +403,10 @@ async fn main() {
             post(api::policies::check_policies),
         )
         .route(
+            "/api/v1/orgs/{slug}/repos/{repo_id}/policies/agent-instructions",
+            get(api::policies::get_agent_instructions),
+        )
+        .route(
             "/api/v1/orgs/{slug}/repos/{repo_id}/policy-evaluations",
             get(api::policies::list_policy_evaluations),
         )
