@@ -247,7 +247,6 @@
 								<Select.Item value="validation_window">Validation</Select.Item>
 							</Select.Content>
 						</Select.Root>
-						<p class="text-xs text-muted-foreground">Use <em>Validation</em> scope with <code>tracevault validation-start</code> to enforce checks only within the pre-push validation window.</p>
 					</div>
 
 					<Dialog.Footer>
