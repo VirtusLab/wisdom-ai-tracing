@@ -7,6 +7,7 @@
 
 	interface BranchItem {
 		branch: string;
+		repo_name: string;
 		tag: string | null;
 		commits_count: number;
 		sessions_count: number;
@@ -85,6 +86,7 @@
 	}
 
 	const columns = [
+		{ key: 'repo_name', label: 'Repo', sortable: true },
 		{ key: 'branch', label: 'Branch', sortable: true },
 		{ key: 'commits_count', label: 'Commits', sortable: true },
 		{ key: 'sessions_count', label: 'Sessions', sortable: true },

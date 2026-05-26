@@ -1,5 +1,6 @@
 SELECT
     bt.branch,
+    r.name AS repo_name,
     MAX(bt.tag) AS tag,
     COUNT(DISTINCT bt.commit_id) AS commits_count,
     COUNT(DISTINCT ca.session_id) AS sessions_count,
@@ -13,5 +14,5 @@ LEFT JOIN commit_attributions ca ON ca.commit_id = c.id
 LEFT JOIN sessions s ON ca.session_id = s.id
 WHERE r.org_id = $1
   AND ($2::uuid IS NULL OR c.repo_id = $2)
-GROUP BY bt.branch
+GROUP BY bt.branch, r.name
 ORDER BY last_activity DESC NULLS LAST
