@@ -16,18 +16,33 @@
 		last_activity: string | null;
 	}
 
+	interface RepoOption {
+		id: string;
+		name: string;
+	}
+
 	let branches: BranchItem[] = $state([]);
+	let repos: RepoOption[] = $state([]);
+	let selectedRepoId = $state<string>('');
 	let loading = $state(true);
 	let error = $state('');
 
 	const slug = $derived($page.params.slug);
 
+	async function fetchRepos() {
+		try {
+			const all = await api.get<{ id: string; name: string }[]>(`/api/v1/orgs/${slug}/repos`);
+			repos = all ?? [];
+		} catch {
+			// non-critical
+		}
+	}
+
 	async function fetchData() {
 		loading = true;
 		error = '';
 		try {
-			const repoId = $page.url.searchParams.get('repo_id');
-			const qs = repoId ? `?repo_id=${repoId}` : '';
+			const qs = selectedRepoId ? `?repo_id=${selectedRepoId}` : '';
 			branches = await api.get<BranchItem[]>(`/api/v1/orgs/${slug}/traces/branches${qs}`);
 		} catch (err) {
 			error = err instanceof Error ? err.message : 'Failed to load branches';
@@ -37,6 +52,8 @@
 	}
 
 	$effect(() => {
+		slug;
+		fetchRepos();
 		fetchData();
 	});
 
@@ -101,7 +118,21 @@
 </svelte:head>
 
 <div class="space-y-4">
-	<h1 class="text-2xl font-bold">Branches</h1>
+	<div class="flex items-center justify-between">
+		<h1 class="text-2xl font-bold">Branches</h1>
+		{#if repos.length > 0}
+			<select
+				bind:value={selectedRepoId}
+				onchange={() => fetchData()}
+				class="border-input bg-background text-foreground h-8 rounded-md border px-3 text-xs"
+			>
+				<option value="">All repos</option>
+				{#each repos as repo}
+					<option value={repo.id}>{repo.name}</option>
+				{/each}
+			</select>
+		{/if}
+	</div>
 
 	{#if loading}
 		<LoadingState />
@@ -113,7 +144,7 @@
 		<DataTable
 			{columns}
 			rows={branches}
-			searchKeys={['branch', 'status']}
+			searchKeys={['branch', 'repo_name', 'status']}
 			defaultSort="last_activity"
 			defaultSortDir="desc"
 			rowIdKey="branch"
