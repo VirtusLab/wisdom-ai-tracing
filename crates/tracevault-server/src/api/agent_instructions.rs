@@ -16,7 +16,7 @@ use uuid::Uuid;
 
 use crate::error::AppError;
 use crate::extractors::OrgAuth;
-use crate::repo::policies::PolicyRepo;
+use crate::repo::policies::{PolicyRepo, PolicyRow};
 use crate::AppState;
 
 #[derive(Debug, Serialize)]
@@ -39,33 +39,11 @@ pub async fn get_agent_instructions(
     let rows = PolicyRepo::list_for_repo(&state.pool, auth.org_id, repo_id).await?;
     let mode_str = PolicyRepo::get_validation_window_mode(&state.pool, repo_id).await?;
 
-    // Build PolicyRule values from the DB rows so the core renderer can
-    // operate on its native domain types. Skip rows whose condition/action/
-    // scope/severity can't be parsed — they're invalid but shouldn't fail
-    // the whole render.
+    // Skip rows that don't parse cleanly — they're invalid but shouldn't fail
+    // the whole render. The renderer operates on core's native domain types.
     let rules: Vec<tracevault_core::policy::PolicyRule> = rows
         .into_iter()
-        .filter_map(|r| {
-            let condition: tracevault_core::policy::PolicyCondition =
-                serde_json::from_value(r.condition).ok()?;
-            let action: tracevault_core::policy::PolicyAction =
-                serde_json::from_value(serde_json::Value::String(r.action)).ok()?;
-            let scope: tracevault_core::policy::PolicyScope =
-                serde_json::from_value(serde_json::Value::String(r.scope)).ok()?;
-            let severity: tracevault_core::policy::PolicySeverity =
-                serde_json::from_value(serde_json::Value::String(r.severity)).ok()?;
-            Some(tracevault_core::policy::PolicyRule {
-                id: r.id,
-                org_id: Some(r.org_id.to_string()),
-                name: r.name,
-                description: r.description,
-                condition,
-                action,
-                severity,
-                enabled: r.enabled,
-                scope,
-            })
-        })
+        .filter_map(map_row_to_policy_rule)
         .collect();
 
     let mode: tracevault_core::policy::ValidationWindowMode =
@@ -78,4 +56,30 @@ pub async fn get_agent_instructions(
         format: "markdown".into(),
         content,
     }))
+}
+
+/// Convert a DB row into a `PolicyRule`, returning None if any field fails to
+/// deserialize (the row is then skipped — see `get_agent_instructions`).
+fn map_row_to_policy_rule(row: PolicyRow) -> Option<tracevault_core::policy::PolicyRule> {
+    use tracevault_core::policy::{
+        PolicyAction, PolicyCondition, PolicyRule, PolicyScope, PolicySeverity,
+    };
+
+    let condition: PolicyCondition = serde_json::from_value(row.condition).ok()?;
+    let action: PolicyAction = serde_json::from_value(serde_json::Value::String(row.action)).ok()?;
+    let scope: PolicyScope = serde_json::from_value(serde_json::Value::String(row.scope)).ok()?;
+    let severity: PolicySeverity =
+        serde_json::from_value(serde_json::Value::String(row.severity)).ok()?;
+
+    Some(PolicyRule {
+        id: row.id,
+        org_id: Some(row.org_id.to_string()),
+        name: row.name,
+        description: row.description,
+        condition,
+        action,
+        severity,
+        enabled: row.enabled,
+        scope,
+    })
 }
