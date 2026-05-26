@@ -117,17 +117,15 @@ impl StreamService {
                     || batch_cache_write > 0;
                 if has_tokens {
                     let model_name = detected_model.as_deref().unwrap_or("unknown");
-                    // The Anthropic API reports input_tokens as the total including
-                    // cache hits/writes. Compute fresh (non-cached) input only for
-                    // pricing; store the raw total so the UI can show it correctly.
-                    let fresh_input_for_pricing =
-                        (batch_input - batch_cache_read - batch_cache_write).max(0);
+                    // input_tokens from the API includes cache_read and cache_write,
+                    // subtract to get fresh (non-cached) input only
+                    let fresh_input = (batch_input - batch_cache_read - batch_cache_write).max(0);
                     let pricing =
                         crate::pricing::fetch_pricing_for_model(&state.pool, model_name, None)
                             .await;
                     let batch_cost = crate::pricing::estimate_cost_with_pricing(
                         &pricing,
-                        fresh_input_for_pricing,
+                        fresh_input,
                         batch_output,
                         batch_cache_read,
                         batch_cache_write,
@@ -137,11 +135,7 @@ impl StreamService {
                         &state.pool,
                         session_db_id,
                         &TokenBatch {
-                            // Store raw input_tokens (total from API, includes cache).
-                            // fresh_input_tokens is used only for total_tokens to avoid
-                            // double-counting cache tokens.
-                            input_tokens: batch_input,
-                            fresh_input_tokens: fresh_input_for_pricing,
+                            input_tokens: fresh_input,
                             output_tokens: batch_output,
                             cache_read_tokens: batch_cache_read,
                             cache_write_tokens: batch_cache_write,

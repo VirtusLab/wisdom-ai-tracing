@@ -17,11 +17,7 @@ pub struct UpsertSession {
 }
 
 pub struct TokenBatch {
-    /// Raw input_tokens from the API (total including cache_read + cache_write).
     pub input_tokens: i64,
-    /// Fresh (non-cached) input tokens — used for total_tokens accumulation only.
-    /// = input_tokens - cache_read_tokens - cache_write_tokens, clamped to 0.
-    pub fresh_input_tokens: i64,
     pub output_tokens: i64,
     pub cache_read_tokens: i64,
     pub cache_write_tokens: i64,
@@ -69,22 +65,19 @@ impl SessionRepo {
                 output_tokens = output_tokens + $3,
                 cache_read_tokens = cache_read_tokens + $4,
                 cache_write_tokens = cache_write_tokens + $5,
-                -- total_tokens uses fresh_input (non-cached) to avoid double-counting
-                -- cache tokens that are already reflected in cache_read/write columns.
-                total_tokens = total_tokens + $8 + $3 + $4 + $5,
+                total_tokens = total_tokens + $2 + $3 + $4 + $5,
                 estimated_cost_usd = estimated_cost_usd + $6,
                 model = COALESCE($7, model),
                 updated_at = now()
              WHERE id = $1",
         )
         .bind(session_id)
-        .bind(batch.input_tokens) // $2 — raw total (stored in input_tokens column)
-        .bind(batch.output_tokens) // $3
-        .bind(batch.cache_read_tokens) // $4
-        .bind(batch.cache_write_tokens) // $5
-        .bind(batch.estimated_cost_usd) // $6
-        .bind(&batch.model) // $7
-        .bind(batch.fresh_input_tokens) // $8 — for total_tokens only
+        .bind(batch.input_tokens)
+        .bind(batch.output_tokens)
+        .bind(batch.cache_read_tokens)
+        .bind(batch.cache_write_tokens)
+        .bind(batch.estimated_cost_usd)
+        .bind(&batch.model)
         .execute(pool)
         .await?;
         Ok(())

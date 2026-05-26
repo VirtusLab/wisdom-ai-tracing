@@ -138,7 +138,6 @@ async fn update_tokens_accumulates(pool: sqlx::PgPool) {
         id,
         &TokenBatch {
             input_tokens: 100,
-            fresh_input_tokens: 100,
             output_tokens: 50,
             cache_read_tokens: 10,
             cache_write_tokens: 5,
@@ -154,7 +153,6 @@ async fn update_tokens_accumulates(pool: sqlx::PgPool) {
         id,
         &TokenBatch {
             input_tokens: 200,
-            fresh_input_tokens: 200,
             output_tokens: 100,
             cache_read_tokens: 20,
             cache_write_tokens: 10,
