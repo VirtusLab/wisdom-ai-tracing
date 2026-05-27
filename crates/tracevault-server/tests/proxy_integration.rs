@@ -16,6 +16,7 @@ mod common;
 
 use axum::{
     body::{to_bytes, Body, Bytes},
+    extract::DefaultBodyLimit,
     http::{Request, StatusCode},
     routing::get,
     Router,
@@ -85,6 +86,7 @@ async fn build_harness(pool: sqlx::PgPool) -> Harness {
         extensions: tracevault_server::extensions::community_registry(),
         encryption_key: Some(encryption_key),
         http_client: reqwest::Client::new(),
+        proxy_http_client: reqwest::Client::new(),
         cors_origin: "*".to_string(),
         invite_expiry_minutes: 60,
         embedding_service: None,
@@ -99,6 +101,9 @@ async fn build_harness(pool: sqlx::PgPool) -> Harness {
                 .put(api::proxy::anthropic_proxy)
                 .delete(api::proxy::anthropic_proxy),
         )
+        // Mirror the production body limit so integration tests exercise the
+        // same envelope as live traffic.
+        .layer(DefaultBodyLimit::max(32 * 1024 * 1024))
         .route(
             "/api/v1/me/anthropic-key",
             get(api::me::get_anthropic_key_status)
@@ -410,7 +415,8 @@ async fn proxy_returns_502_when_upstream_unreachable(pool: sqlx::PgPool) {
         repo_manager: repo_manager::RepoManager::new("/tmp"),
         extensions: tracevault_server::extensions::community_registry(),
         encryption_key: Some(encryption_key),
-        http_client: reqwest::Client::builder()
+        http_client: reqwest::Client::new(),
+        proxy_http_client: reqwest::Client::builder()
             // Tight timeout so we don't sit for 30s on the OS default.
             .connect_timeout(std::time::Duration::from_millis(500))
             .build()
@@ -527,6 +533,73 @@ async fn proxy_strips_forbidden_request_headers(pool: sqlx::PgPool) {
     }
 }
 
+// --- Proxy: body size + path-traversal hardening --------------------------
+
+/// A request body comfortably larger than Axum's 2 MB `Bytes` default must
+/// reach upstream when the proxy router raises `DefaultBodyLimit`. This
+/// catches regressions where the body cap is removed or shrunk back to the
+/// default and silently breaks vision / long-context Anthropic requests.
+#[sqlx::test(migrations = "./migrations")]
+async fn proxy_accepts_large_body_within_raised_limit(pool: sqlx::PgPool) {
+    let h = build_harness(pool).await;
+
+    Mock::given(method("POST"))
+        .and(wm_path("/v1/messages"))
+        .and(header("x-api-key", "sk-ant-test-upstream-key"))
+        .respond_with(ResponseTemplate::new(200).set_body_string("{}"))
+        .expect(1)
+        .mount(&h.upstream)
+        .await;
+
+    // 4 MB body — 2× Axum's default cap, well within our 32 MB limit.
+    let payload = vec![b'a'; 4 * 1024 * 1024];
+
+    let req = Request::builder()
+        .method("POST")
+        .uri("/proxy/anthropic/v1/messages")
+        .header("x-api-key", &h.user_session_token)
+        .header("content-type", "application/octet-stream")
+        .body(Body::from(payload))
+        .unwrap();
+
+    let resp = h.app.clone().oneshot(req).await.unwrap();
+    assert_eq!(
+        resp.status(),
+        StatusCode::OK,
+        "4 MB body must pass through with the raised body limit"
+    );
+}
+
+/// `..` segments in the proxy path must be rejected at the router entry
+/// with an Anthropic-shaped error envelope. Belt-and-braces against future
+/// reconfiguration of `anthropic_upstream_base` to a path-prefixed URL.
+#[sqlx::test(migrations = "./migrations")]
+async fn proxy_rejects_path_traversal_segments(pool: sqlx::PgPool) {
+    let h = build_harness(pool).await;
+
+    // No mock mounted — the request must never reach upstream.
+    let req = Request::builder()
+        .method("POST")
+        .uri("/proxy/anthropic/v1/messages/..%2F..%2Fadmin")
+        .header("x-api-key", &h.user_session_token)
+        .header("content-type", "application/json")
+        .body(Body::from("{}"))
+        .unwrap();
+
+    let resp = h.app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    let body = read_body_to_value(resp.into_body()).await;
+    assert_eq!(body["type"], "error");
+    assert_eq!(body["error"]["type"], "api_error");
+
+    // And confirm upstream really was never called.
+    let recv = h.upstream.received_requests().await.unwrap();
+    assert!(
+        recv.is_empty(),
+        "upstream must not receive a `..`-bearing path"
+    );
+}
+
 // --- /api/v1/me/anthropic-key HTTP lifecycle (deferred from T02) ---------
 
 #[sqlx::test(migrations = "./migrations")]
@@ -544,6 +617,7 @@ async fn me_anthropic_key_lifecycle(pool: sqlx::PgPool) {
         extensions: tracevault_server::extensions::community_registry(),
         encryption_key: Some(encryption_key),
         http_client: reqwest::Client::new(),
+        proxy_http_client: reqwest::Client::new(),
         cors_origin: "*".to_string(),
         invite_expiry_minutes: 60,
         embedding_service: None,
