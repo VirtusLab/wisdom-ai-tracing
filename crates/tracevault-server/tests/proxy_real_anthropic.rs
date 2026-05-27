@@ -27,8 +27,14 @@ use tracevault_server::{api, repo_manager, AppState};
 const MODEL: &str = "claude-haiku-4-5";
 
 fn require_anthropic_key() -> String {
-    std::env::var("ANTHROPIC_API_KEY")
-        .expect("ANTHROPIC_API_KEY env var must be set to run #[ignore]-d real-Anthropic tests")
+    // Walk up from the test binary's CWD looking for a .env file (workspace
+    // root in most layouts). Silently no-op if no .env is present — the
+    // env var may still be set externally.
+    let _ = dotenvy::dotenv();
+    std::env::var("ANTHROPIC_API_KEY").expect(
+        "ANTHROPIC_API_KEY env var must be set to run #[ignore]-d real-Anthropic tests \
+         (export it, or add it to .env at the workspace root)",
+    )
 }
 
 async fn build_real_state(pool: &sqlx::PgPool, upstream_key: &str) -> (AppState, String) {
