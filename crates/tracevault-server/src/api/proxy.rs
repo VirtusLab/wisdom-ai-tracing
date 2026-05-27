@@ -104,6 +104,17 @@ fn anthropic_error(status: StatusCode, kind: ProxyErrorKind, message: &str) -> R
 ///
 /// Path layout: `path` is everything after `/proxy/anthropic/` (no leading
 /// slash). Query string is forwarded verbatim from the original URI.
+///
+/// This is a thin orchestration shell: it sequences three concerns that
+/// live in their own private functions so the responsibilities are easy
+/// to audit independently:
+///
+///   1. `authenticate` — resolve `x-api-key` to a user_id and load the
+///      user's decrypted upstream credential.
+///   2. `forward_to_upstream` — construct the upstream request (URL,
+///      header allow-list, key injection) and dispatch it.
+///   3. `build_downstream_response` — stream the upstream body back to
+///      the client with response-header forwarding.
 pub async fn anthropic_proxy(
     State(state): State<AppState>,
     Path(path): Path<String>,
@@ -114,7 +125,49 @@ pub async fn anthropic_proxy(
 ) -> Response {
     let start = Instant::now();
 
-    // --- Step 1: extract and resolve the TV token in x-api-key ---
+    let (user_id, upstream_key) = match authenticate(&state, &headers, &path).await {
+        Ok(pair) => pair,
+        Err(resp) => return resp,
+    };
+
+    let upstream_resp = match forward_to_upstream(
+        &state,
+        &method,
+        &path,
+        original_uri.query().unwrap_or(""),
+        &headers,
+        body,
+        &upstream_key,
+        user_id,
+        start,
+    )
+    .await
+    {
+        Ok(r) => r,
+        Err(resp) => return resp,
+    };
+
+    let upstream_status = upstream_resp.status();
+    tracing::info!(
+        user_id = %user_id,
+        path = %path,
+        upstream_status = upstream_status.as_u16(),
+        duration_ms = start.elapsed().as_millis() as u64,
+        "proxied request"
+    );
+
+    build_downstream_response(upstream_resp)
+}
+
+/// Concern 1: extract `x-api-key`, resolve it to a user, and load that
+/// user's decrypted Anthropic credential. Returns the
+/// `(user_id, upstream_plaintext_key)` pair on success, or an
+/// Anthropic-shaped error envelope on any auth/credential failure.
+async fn authenticate(
+    state: &AppState,
+    headers: &HeaderMap,
+    path: &str,
+) -> Result<(Uuid, String), Response> {
     let tv_token = match headers.get("x-api-key").and_then(|v| v.to_str().ok()) {
         Some(t) if !t.is_empty() => t,
         _ => {
@@ -124,28 +177,35 @@ pub async fn anthropic_proxy(
                 path = %path,
                 "proxy auth failed"
             );
-            return anthropic_error(
+            return Err(anthropic_error(
                 StatusCode::UNAUTHORIZED,
                 ProxyErrorKind::AuthenticationError,
                 "Missing x-api-key header",
-            );
+            ));
         }
     };
 
     let token_hash = sha256_hex(tv_token);
-    let user_id = match resolve_token(&state, &token_hash).await {
-        Ok(uid) => uid,
-        Err(resp) => return resp,
-    };
+    let user_id = resolve_token(state, &token_hash).await?;
+    let upstream_key = load_anthropic_key(state, user_id).await?;
+    Ok((user_id, upstream_key))
+}
 
-    // --- Step 2: load + decrypt the user's Anthropic key ---
-    let upstream_key = match load_anthropic_key(&state, user_id).await {
-        Ok(k) => k,
-        Err(resp) => return resp,
-    };
-
-    // --- Step 3: build the upstream request ---
-    let query = original_uri.query().unwrap_or("");
+/// Concern 2: build the upstream request from the user's downstream
+/// request — URL composition, header allow-list, decrypted-key injection —
+/// then dispatch it.
+#[allow(clippy::too_many_arguments)]
+async fn forward_to_upstream(
+    state: &AppState,
+    method: &Method,
+    path: &str,
+    query: &str,
+    headers: &HeaderMap,
+    body: Bytes,
+    upstream_key: &str,
+    user_id: Uuid,
+    start: Instant,
+) -> Result<reqwest::Response, Response> {
     let base = state.anthropic_upstream_base.trim_end_matches('/');
     let upstream_url = if query.is_empty() {
         format!("{base}/{path}")
@@ -166,43 +226,35 @@ pub async fn anthropic_proxy(
     // Inject the decrypted upstream key. Done after the allow-list loop so
     // a client-sent x-api-key cannot bleed through even if the allow-list
     // is ever broadened by mistake.
-    upstream_req = upstream_req.header("x-api-key", &upstream_key);
+    upstream_req = upstream_req.header("x-api-key", upstream_key);
 
-    // --- Step 4: dispatch and capture upstream response ---
-    let upstream_resp = match upstream_req.send().await {
-        Ok(r) => r,
-        Err(e) => {
-            tracing::warn!(
-                user_id = %user_id,
-                path = %path,
-                error_type = "api_error",
-                duration_ms = start.elapsed().as_millis() as u64,
-                err = %e,
-                "upstream request to Anthropic failed"
-            );
-            return anthropic_error(
-                StatusCode::BAD_GATEWAY,
-                ProxyErrorKind::ApiError,
-                "Upstream Anthropic API unreachable",
-            );
-        }
-    };
+    upstream_req.send().await.map_err(|e| {
+        tracing::warn!(
+            user_id = %user_id,
+            path = %path,
+            error_type = "api_error",
+            duration_ms = start.elapsed().as_millis() as u64,
+            err = %e,
+            "upstream request to Anthropic failed"
+        );
+        anthropic_error(
+            StatusCode::BAD_GATEWAY,
+            ProxyErrorKind::ApiError,
+            "Upstream Anthropic API unreachable",
+        )
+    })
+}
 
+/// Concern 3: turn the upstream `reqwest::Response` into an axum
+/// `Response` — copies status + allow-listed response headers and streams
+/// the body byte-for-byte via `bytes_stream()` so SSE responses pass
+/// through without buffering.
+fn build_downstream_response(upstream_resp: reqwest::Response) -> Response {
     let upstream_status = upstream_resp.status();
     let upstream_headers = upstream_resp.headers().clone();
-
-    tracing::info!(
-        user_id = %user_id,
-        path = %path,
-        upstream_status = upstream_status.as_u16(),
-        duration_ms = start.elapsed().as_millis() as u64,
-        "proxied request"
-    );
-
-    // --- Step 5: stream the response body back ---
     let body_stream = upstream_resp.bytes_stream();
-    let mut downstream = Response::builder().status(upstream_status);
 
+    let mut downstream = Response::builder().status(upstream_status);
     if let Some(hdrs) = downstream.headers_mut() {
         copy_response_headers(&upstream_headers, hdrs);
     }
