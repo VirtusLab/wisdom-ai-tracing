@@ -1,0 +1,267 @@
+<script lang="ts">
+	import { api } from '$lib/api';
+	import { Button } from '$lib/components/ui/button/index.js';
+	import { Input } from '$lib/components/ui/input/index.js';
+	import { Label } from '$lib/components/ui/label/index.js';
+	import * as Alert from '$lib/components/ui/alert/index.js';
+	import ErrorState from '$lib/components/ErrorState.svelte';
+
+	interface AnthropicKeyStatus {
+		configured: boolean;
+		configured_at: string | null;
+	}
+
+	let status: AnthropicKeyStatus | null = $state(null);
+	let loading = $state(true);
+	let saving = $state(false);
+	let removing = $state(false);
+	let confirmingRemove = $state(false);
+	let error = $state('');
+	let success = $state('');
+	let newKey = $state('');
+	let copied = $state(false);
+
+	const proxyBaseUrl = $derived(
+		typeof window === 'undefined' ? '' : `${window.location.origin}/proxy/anthropic`
+	);
+
+	$effect(() => {
+		loadStatus();
+	});
+
+	async function loadStatus() {
+		loading = true;
+		error = '';
+		try {
+			status = await api.get<AnthropicKeyStatus>('/api/v1/me/anthropic-key');
+		} catch (err) {
+			error = err instanceof Error ? err.message : 'Failed to load proxy configuration';
+		} finally {
+			loading = false;
+		}
+	}
+
+	async function handleSave(event: SubmitEvent) {
+		event.preventDefault();
+		if (!newKey.trim()) return;
+		saving = true;
+		error = '';
+		success = '';
+		try {
+			await api.put<void>('/api/v1/me/anthropic-key', { key: newKey.trim() });
+			newKey = '';
+			success = 'Anthropic API key saved.';
+			await loadStatus();
+		} catch (err) {
+			error = err instanceof Error ? err.message : 'Failed to save key';
+		} finally {
+			saving = false;
+		}
+	}
+
+	async function handleRemove() {
+		removing = true;
+		error = '';
+		success = '';
+		try {
+			await api.delete<void>('/api/v1/me/anthropic-key');
+			confirmingRemove = false;
+			success = 'Anthropic API key removed.';
+			await loadStatus();
+		} catch (err) {
+			error = err instanceof Error ? err.message : 'Failed to remove key';
+		} finally {
+			removing = false;
+		}
+	}
+
+	async function copyProxyUrl() {
+		if (!proxyBaseUrl) return;
+		try {
+			await navigator.clipboard.writeText(proxyBaseUrl);
+			copied = true;
+			setTimeout(() => (copied = false), 1500);
+		} catch {
+			// Clipboard API can fail in some browsers / contexts; ignore silently.
+		}
+	}
+
+	function formatTimestamp(ts: string | null): string {
+		if (!ts) return '';
+		try {
+			return new Date(ts).toLocaleString();
+		} catch {
+			return ts;
+		}
+	}
+</script>
+
+<svelte:head>
+	<title>Proxy - TraceVault</title>
+</svelte:head>
+
+<div class="space-y-6">
+	<div>
+		<h1 class="text-2xl font-bold">LLM Proxy</h1>
+		<p class="text-muted-foreground mt-1 text-sm">
+			Route AI coding tools (Claude Code, GSD2, Cursor, Codex CLI) through TraceVault by
+			pointing them at the proxy URL below. Your stored Anthropic API key is used internally
+			— it is never returned to the browser after saving.
+		</p>
+	</div>
+
+	{#if error}
+		<ErrorState message={error} />
+	{/if}
+
+	{#if success}
+		<Alert.Root>
+			<Alert.Title>Success</Alert.Title>
+			<Alert.Description>{success}</Alert.Description>
+		</Alert.Root>
+	{/if}
+
+	{#if loading}
+		<div class="text-muted-foreground flex items-center justify-center gap-2 py-12 text-sm">
+			<span
+				class="inline-block h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent"
+			></span>
+			Loading...
+		</div>
+	{:else}
+		<!-- Anthropic API key configuration -->
+		<div class="border-border max-w-lg overflow-hidden rounded-lg border">
+			<div class="bg-muted/30 px-4 py-3">
+				<span class="text-sm font-semibold">Anthropic API Key</span>
+				<p class="text-muted-foreground mt-0.5 text-xs">
+					Used by the proxy to authenticate with api.anthropic.com on your behalf.
+				</p>
+			</div>
+			<div class="space-y-4 p-4">
+				{#if status?.configured}
+					<div class="flex items-center gap-2 text-sm">
+						<span
+							class="inline-block h-2 w-2 rounded-full bg-emerald-500"
+							aria-hidden="true"
+						></span>
+						<span class="font-medium">Configured</span>
+						{#if status.configured_at}
+							<span class="text-muted-foreground"
+								>last set {formatTimestamp(status.configured_at)}</span
+							>
+						{/if}
+					</div>
+				{:else}
+					<div class="flex items-center gap-2 text-sm">
+						<span
+							class="bg-muted-foreground inline-block h-2 w-2 rounded-full"
+							aria-hidden="true"
+						></span>
+						<span class="text-muted-foreground">Not configured</span>
+					</div>
+				{/if}
+
+				<form onsubmit={handleSave} class="space-y-3">
+					<div class="grid gap-2">
+						<Label for="anthropic_key">
+							{status?.configured ? 'Replace key' : 'Set key'}
+						</Label>
+						<Input
+							id="anthropic_key"
+							type="password"
+							autocomplete="off"
+							bind:value={newKey}
+							placeholder="sk-ant-..."
+						/>
+						<p class="text-muted-foreground text-xs">
+							Saved keys are never displayed again. Get one from
+							<a
+								href="https://console.anthropic.com/settings/keys"
+								target="_blank"
+								rel="noreferrer"
+								class="underline">console.anthropic.com</a
+							>.
+						</p>
+					</div>
+
+					<div class="flex items-center gap-2">
+						<Button type="submit" disabled={saving || !newKey.trim()}>
+							{saving ? 'Saving...' : status?.configured ? 'Replace' : 'Save'}
+						</Button>
+						{#if status?.configured}
+							{#if confirmingRemove}
+								<Button
+									type="button"
+									variant="destructive"
+									disabled={removing}
+									onclick={handleRemove}
+								>
+									{removing ? 'Removing...' : 'Confirm remove'}
+								</Button>
+								<Button
+									type="button"
+									variant="ghost"
+									disabled={removing}
+									onclick={() => (confirmingRemove = false)}
+								>
+									Cancel
+								</Button>
+							{:else}
+								<Button
+									type="button"
+									variant="ghost"
+									onclick={() => (confirmingRemove = true)}
+								>
+									Remove
+								</Button>
+							{/if}
+						{/if}
+					</div>
+				</form>
+			</div>
+		</div>
+
+		<!-- How-to / copy block -->
+		<div class="border-border max-w-lg overflow-hidden rounded-lg border">
+			<div class="bg-muted/30 px-4 py-3">
+				<span class="text-sm font-semibold">How to use</span>
+				<p class="text-muted-foreground mt-0.5 text-xs">
+					Configure your tool to send Anthropic requests through TraceVault.
+				</p>
+			</div>
+			<div class="space-y-4 p-4 text-sm">
+				<div>
+					<Label class="mb-1 block">Proxy base URL</Label>
+					<div class="flex items-center gap-2">
+						<code class="bg-muted flex-1 truncate rounded px-2 py-1 text-xs">
+							{proxyBaseUrl || '(loading…)'}
+						</code>
+						<Button
+							type="button"
+							variant="outline"
+							size="sm"
+							onclick={copyProxyUrl}
+							disabled={!proxyBaseUrl}
+						>
+							{copied ? 'Copied' : 'Copy'}
+						</Button>
+					</div>
+				</div>
+				<div class="text-muted-foreground space-y-1 text-xs leading-relaxed">
+					<p>Set these environment variables for your AI tool:</p>
+					<pre
+						class="bg-muted overflow-x-auto rounded p-2 text-xs"><code
+							>ANTHROPIC_BASE_URL={proxyBaseUrl}
+ANTHROPIC_API_KEY=&lt;your TraceVault session token&gt;</code
+						></pre>
+					<p>
+						Your TraceVault session token is in
+						<code>~/.tracevault/credentials.json</code> after running
+						<code>tracevault login</code>, or run <code>tracevault proxy info</code> for the
+						full configuration snippet.
+					</p>
+				</div>
+			</div>
+		</div>
+	{/if}
+</div>
