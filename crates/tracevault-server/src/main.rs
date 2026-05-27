@@ -576,10 +576,22 @@ async fn main() {
             post(api::ci::verify_commits),
         );
 
+    // Anthropic LLM proxy — authenticates via x-api-key inside the handler
+    // (not the standard Authorization-bearer extractor), so it is its own
+    // router with no rate-limiting layer. Issue #207 / parent #181.
+    let proxy_routes = Router::new().route(
+        "/proxy/anthropic/{*path}",
+        get(api::proxy::anthropic_proxy)
+            .post(api::proxy::anthropic_proxy)
+            .put(api::proxy::anthropic_proxy)
+            .delete(api::proxy::anthropic_proxy),
+    );
+
     let app = Router::new()
         .merge(auth_routes)
         .merge(public_routes)
         .merge(authenticated_routes)
+        .merge(proxy_routes)
         .layer(TraceLayer::new_for_http())
         .layer(cors)
         .with_state(AppState {
