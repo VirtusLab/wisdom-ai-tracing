@@ -30,7 +30,7 @@ ed25519-dalek = { version = "2", features = ["rand_core"] }
 rand = "0.8"
 base64 = "0.22"
 git2 = "0.20"
-reqwest = { version = "0.13", features = ["json"] }
+reqwest = { version = "0.13", features = ["json", "stream"] }
 async-trait = "0.1"
 aes-gcm = "0.10"
 dotenvy = "0.15.7"
