@@ -1,4 +1,5 @@
 use axum::{
+    extract::DefaultBodyLimit,
     routing::{delete, get, post, put},
     Router,
 };
@@ -60,6 +61,16 @@ async fn main() {
     let repo_manager = repo_manager::RepoManager::new(&cfg.repos_dir);
     let extensions = build_extensions(&cfg);
     let http_client = reqwest::Client::new();
+    // Dedicated client for the Anthropic proxy. `connect_timeout` bounds
+    // how long a stalled TCP/TLS handshake can park the proxy task; we
+    // intentionally do *not* set an overall `timeout()` because the proxy
+    // carries SSE streams whose total duration is bounded by the model's
+    // output, not by the wall clock.
+    let proxy_http_client = reqwest::Client::builder()
+        .connect_timeout(std::time::Duration::from_secs(10))
+        .pool_idle_timeout(Some(std::time::Duration::from_secs(90)))
+        .build()
+        .expect("Failed to build proxy reqwest client");
 
     // Auto-sync repos that are in 'ready' state on startup
     sync_repos_on_startup(&pool, &repo_manager, &extensions).await;
@@ -579,13 +590,21 @@ async fn main() {
     // Anthropic LLM proxy — authenticates via x-api-key inside the handler
     // (not the standard Authorization-bearer extractor), so it is its own
     // router with no rate-limiting layer. Issue #207 / parent #181.
-    let proxy_routes = Router::new().route(
-        "/proxy/anthropic/{*path}",
-        get(api::proxy::anthropic_proxy)
-            .post(api::proxy::anthropic_proxy)
-            .put(api::proxy::anthropic_proxy)
-            .delete(api::proxy::anthropic_proxy),
-    );
+    //
+    // Body limit: Axum's default `Bytes` cap is 2 MB, which silently rejects
+    // legitimate Anthropic requests (vision inputs, long conversations,
+    // large `system` prompts). Raise to 32 MB to match Anthropic's own
+    // request size envelope while still bounding worst-case server memory
+    // per in-flight request.
+    let proxy_routes = Router::new()
+        .route(
+            "/proxy/anthropic/{*path}",
+            get(api::proxy::anthropic_proxy)
+                .post(api::proxy::anthropic_proxy)
+                .put(api::proxy::anthropic_proxy)
+                .delete(api::proxy::anthropic_proxy),
+        )
+        .layer(DefaultBodyLimit::max(32 * 1024 * 1024));
 
     let app = Router::new()
         .merge(auth_routes)
@@ -600,6 +619,7 @@ async fn main() {
             extensions,
             encryption_key: cfg.encryption_key.clone(),
             http_client: http_client.clone(),
+            proxy_http_client: proxy_http_client.clone(),
             cors_origin: cfg.cors_origin.clone(),
             invite_expiry_minutes: cfg.invite_expiry_minutes,
             anthropic_upstream_base: api::proxy::DEFAULT_ANTHROPIC_UPSTREAM_BASE.to_string(),
