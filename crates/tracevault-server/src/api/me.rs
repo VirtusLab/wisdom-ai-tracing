@@ -74,6 +74,15 @@ pub async fn put_anthropic_key(
             "Anthropic key must not be empty".into(),
         ));
     }
+    // Real Anthropic keys are ~110 chars; cap at 256 to leave generous
+    // headroom for future formats while preventing the endpoint from
+    // accepting a ~2 MB junk string and persisting it encrypted on the
+    // user_anthropic_keys row.
+    if key.len() > 256 {
+        return Err(AppError::BadRequest(
+            "Anthropic key is unreasonably long (max 256 chars)".into(),
+        ));
+    }
     // Anthropic API keys begin with `sk-ant-` (modern format). We reject
     // anything that doesn't look like one to catch obvious paste mistakes
     // (TV session token, empty string, environment variable name, etc.).
