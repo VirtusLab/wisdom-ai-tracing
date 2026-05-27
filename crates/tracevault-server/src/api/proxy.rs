@@ -37,7 +37,9 @@ use crate::encryption;
 use crate::repo::user_anthropic_keys::UserAnthropicKeyRepo;
 use crate::AppState;
 
-const ANTHROPIC_UPSTREAM_BASE: &str = "https://api.anthropic.com";
+/// Default Anthropic API base URL used in production. Overridden in tests
+/// via `AppState.anthropic_upstream_base`.
+pub const DEFAULT_ANTHROPIC_UPSTREAM_BASE: &str = "https://api.anthropic.com";
 
 /// Request headers we forward upstream. Anything not on this list is dropped
 /// — including `host` (reqwest sets it correctly), `authorization`, `cookie`,
@@ -144,10 +146,11 @@ pub async fn anthropic_proxy(
 
     // --- Step 3: build the upstream request ---
     let query = original_uri.query().unwrap_or("");
+    let base = state.anthropic_upstream_base.trim_end_matches('/');
     let upstream_url = if query.is_empty() {
-        format!("{ANTHROPIC_UPSTREAM_BASE}/{path}")
+        format!("{base}/{path}")
     } else {
-        format!("{ANTHROPIC_UPSTREAM_BASE}/{path}?{query}")
+        format!("{base}/{path}?{query}")
     };
 
     let mut upstream_req = state

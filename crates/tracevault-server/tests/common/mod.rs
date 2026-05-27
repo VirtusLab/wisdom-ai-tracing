@@ -140,3 +140,33 @@ pub async fn seed_api_key(pool: &PgPool, org_id: Uuid) -> (Uuid, String) {
         .unwrap();
     (id, hash)
 }
+
+/// Insert an auth_sessions row for the given user with the given token's
+/// sha256 hash and a far-future expiry. Returns the *raw* token so callers
+/// can use it directly in an Authorization header or x-api-key header.
+///
+/// Distinct from `seed_session`, which seeds the trace `sessions` table.
+#[allow(dead_code)]
+pub async fn seed_auth_session(pool: &PgPool, user_id: Uuid) -> String {
+    let (raw, hash) = tracevault_server::auth::generate_session_token();
+    let expires_at = chrono::Utc::now() + chrono::Duration::days(30);
+    sqlx::query(
+        "INSERT INTO auth_sessions (user_id, token_hash, expires_at) \
+         VALUES ($1, $2, $3)",
+    )
+    .bind(user_id)
+    .bind(&hash)
+    .bind(expires_at)
+    .execute(pool)
+    .await
+    .unwrap();
+    raw
+}
+
+/// A deterministic 32-byte base64 encryption key suitable for `encrypt`/
+/// `decrypt`. Fixture only — never use in production.
+#[allow(dead_code)]
+pub fn fixture_encryption_key() -> String {
+    use base64::Engine;
+    base64::engine::general_purpose::STANDARD.encode([0x5Au8; 32])
+}

@@ -47,4 +47,8 @@ pub struct AppState {
     pub invite_expiry_minutes: u64,
     pub embedding_service:
         Option<std::sync::Arc<crate::service::chat_embeddings::EmbeddingService>>,
+    /// Base URL the Anthropic proxy forwards requests to. Defaults to
+    /// `https://api.anthropic.com` in production; overridden in tests so a
+    /// wiremock stub upstream can stand in for the real Anthropic API.
+    pub anthropic_upstream_base: String,
 }

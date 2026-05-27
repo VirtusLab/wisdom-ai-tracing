@@ -602,6 +602,7 @@ async fn main() {
             http_client: http_client.clone(),
             cors_origin: cfg.cors_origin.clone(),
             invite_expiry_minutes: cfg.invite_expiry_minutes,
+            anthropic_upstream_base: api::proxy::DEFAULT_ANTHROPIC_UPSTREAM_BASE.to_string(),
             embedding_service,
         });
 
