@@ -5,6 +5,7 @@ pub mod flush;
 pub mod init;
 pub mod login;
 pub mod logout;
+pub mod proxy;
 pub mod stats;
 pub mod status;
 pub mod stream;
