@@ -12,6 +12,7 @@ pub mod dashboard;
 pub mod features;
 pub mod github;
 pub mod invites;
+pub mod me;
 pub mod orgs;
 pub mod policies;
 pub mod pricing;

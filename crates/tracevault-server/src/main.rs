@@ -218,6 +218,12 @@ async fn main() {
         .route("/api/v1/auth/me", get(api::auth::me))
         // User endpoints
         .route("/api/v1/me/orgs", get(api::auth::list_my_orgs))
+        .route(
+            "/api/v1/me/anthropic-key",
+            get(api::me::get_anthropic_key_status)
+                .put(api::me::put_anthropic_key)
+                .delete(api::me::delete_anthropic_key),
+        )
         // Org management (create is org-agnostic)
         .route("/api/v1/orgs", post(api::orgs::create_org))
         // Org-scoped: org details & members
