@@ -11,8 +11,13 @@ fn tmp_git_repo() -> TempDir {
 #[tokio::test]
 async fn init_fails_without_git() {
     let tmp = TempDir::new().unwrap();
-    let result =
-        tracevault_cli::commands::init::init_in_directory(tmp.path(), None, None, false).await;
+    let result = tracevault_cli::commands::init::init_in_directory(
+        tmp.path(),
+        None,
+        Some(ClaudeSettingsTarget::Shared),
+        false,
+    )
+    .await;
     assert!(result.is_err());
     assert!(result
         .unwrap_err()
@@ -25,9 +30,14 @@ async fn init_creates_tracevault_config() {
     let tmp = tmp_git_repo();
     let config_path = tmp.path().join(".tracevault").join("config.toml");
 
-    tracevault_cli::commands::init::init_in_directory(tmp.path(), None, None, false)
-        .await
-        .unwrap();
+    tracevault_cli::commands::init::init_in_directory(
+        tmp.path(),
+        None,
+        Some(ClaudeSettingsTarget::Shared),
+        false,
+    )
+    .await
+    .unwrap();
 
     assert!(config_path.exists());
     let content = fs::read_to_string(&config_path).unwrap();
@@ -38,9 +48,14 @@ async fn init_creates_tracevault_config() {
 async fn init_creates_directory_structure() {
     let tmp = tmp_git_repo();
 
-    tracevault_cli::commands::init::init_in_directory(tmp.path(), None, None, false)
-        .await
-        .unwrap();
+    tracevault_cli::commands::init::init_in_directory(
+        tmp.path(),
+        None,
+        Some(ClaudeSettingsTarget::Shared),
+        false,
+    )
+    .await
+    .unwrap();
 
     assert!(tmp.path().join(".tracevault").exists());
     assert!(tmp.path().join(".tracevault/sessions").exists());
@@ -56,9 +71,14 @@ async fn init_creates_directory_structure() {
 async fn init_installs_claude_hooks() {
     let tmp = tmp_git_repo();
 
-    tracevault_cli::commands::init::init_in_directory(tmp.path(), None, None, false)
-        .await
-        .unwrap();
+    tracevault_cli::commands::init::init_in_directory(
+        tmp.path(),
+        None,
+        Some(ClaudeSettingsTarget::Shared),
+        false,
+    )
+    .await
+    .unwrap();
 
     let settings_path = tmp.path().join(".claude/settings.json");
     assert!(settings_path.exists());
@@ -80,9 +100,14 @@ async fn init_merges_into_existing_settings() {
     fs::create_dir_all(&claude_dir).unwrap();
     fs::write(claude_dir.join("settings.json"), r#"{"model": "opus"}"#).unwrap();
 
-    tracevault_cli::commands::init::init_in_directory(tmp.path(), None, None, false)
-        .await
-        .unwrap();
+    tracevault_cli::commands::init::init_in_directory(
+        tmp.path(),
+        None,
+        Some(ClaudeSettingsTarget::Shared),
+        false,
+    )
+    .await
+    .unwrap();
 
     let content = fs::read_to_string(claude_dir.join("settings.json")).unwrap();
     let settings: serde_json::Value = serde_json::from_str(&content).unwrap();
@@ -105,9 +130,14 @@ fn tracevault_hooks_has_pre_post_and_notification() {
 async fn init_installs_git_pre_push_hook() {
     let tmp = tmp_git_repo();
 
-    tracevault_cli::commands::init::init_in_directory(tmp.path(), None, None, false)
-        .await
-        .unwrap();
+    tracevault_cli::commands::init::init_in_directory(
+        tmp.path(),
+        None,
+        Some(ClaudeSettingsTarget::Shared),
+        false,
+    )
+    .await
+    .unwrap();
 
     let hook_path = tmp.path().join(".git/hooks/pre-push");
     assert!(hook_path.exists());
@@ -133,9 +163,14 @@ async fn init_preserves_existing_pre_push_hook() {
     )
     .unwrap();
 
-    tracevault_cli::commands::init::init_in_directory(tmp.path(), None, None, false)
-        .await
-        .unwrap();
+    tracevault_cli::commands::init::init_in_directory(
+        tmp.path(),
+        None,
+        Some(ClaudeSettingsTarget::Shared),
+        false,
+    )
+    .await
+    .unwrap();
 
     let content = fs::read_to_string(hooks_dir.join("pre-push")).unwrap();
     // Existing content preserved
@@ -150,12 +185,22 @@ async fn init_preserves_existing_pre_push_hook() {
 async fn init_does_not_duplicate_hook_on_reinit() {
     let tmp = tmp_git_repo();
 
-    tracevault_cli::commands::init::init_in_directory(tmp.path(), None, None, false)
-        .await
-        .unwrap();
-    tracevault_cli::commands::init::init_in_directory(tmp.path(), None, None, false)
-        .await
-        .unwrap();
+    tracevault_cli::commands::init::init_in_directory(
+        tmp.path(),
+        None,
+        Some(ClaudeSettingsTarget::Shared),
+        false,
+    )
+    .await
+    .unwrap();
+    tracevault_cli::commands::init::init_in_directory(
+        tmp.path(),
+        None,
+        Some(ClaudeSettingsTarget::Shared),
+        false,
+    )
+    .await
+    .unwrap();
 
     let content = fs::read_to_string(tmp.path().join(".git/hooks/pre-push")).unwrap();
     let marker_count = content.matches("# tracevault:enforce").count();
@@ -169,9 +214,14 @@ async fn init_does_not_duplicate_hook_on_reinit() {
 async fn init_installs_post_commit_hook() {
     let tmp = tmp_git_repo();
 
-    tracevault_cli::commands::init::init_in_directory(tmp.path(), None, None, false)
-        .await
-        .unwrap();
+    tracevault_cli::commands::init::init_in_directory(
+        tmp.path(),
+        None,
+        Some(ClaudeSettingsTarget::Shared),
+        false,
+    )
+    .await
+    .unwrap();
 
     let hook_path = tmp.path().join(".git/hooks/post-commit");
     assert!(hook_path.exists());
@@ -186,12 +236,22 @@ async fn init_installs_post_commit_hook() {
 async fn init_does_not_duplicate_post_commit_hook_on_reinit() {
     let tmp = tmp_git_repo();
 
-    tracevault_cli::commands::init::init_in_directory(tmp.path(), None, None, false)
-        .await
-        .unwrap();
-    tracevault_cli::commands::init::init_in_directory(tmp.path(), None, None, false)
-        .await
-        .unwrap();
+    tracevault_cli::commands::init::init_in_directory(
+        tmp.path(),
+        None,
+        Some(ClaudeSettingsTarget::Shared),
+        false,
+    )
+    .await
+    .unwrap();
+    tracevault_cli::commands::init::init_in_directory(
+        tmp.path(),
+        None,
+        Some(ClaudeSettingsTarget::Shared),
+        false,
+    )
+    .await
+    .unwrap();
 
     let content = fs::read_to_string(tmp.path().join(".git/hooks/post-commit")).unwrap();
     let marker_count = content.matches("# tracevault:post-commit").count();
@@ -280,7 +340,7 @@ async fn init_writes_server_url_to_config() {
     tracevault_cli::commands::init::init_in_directory(
         tmp.path(),
         Some("https://tv.example.com"),
-        None,
+        Some(ClaudeSettingsTarget::Shared),
         false,
     )
     .await
@@ -295,9 +355,14 @@ async fn init_writes_server_url_to_config() {
 async fn init_no_gitignore_skips_gitignore_update() {
     let tmp = tmp_git_repo();
 
-    tracevault_cli::commands::init::init_in_directory(tmp.path(), None, None, true)
-        .await
-        .unwrap();
+    tracevault_cli::commands::init::init_in_directory(
+        tmp.path(),
+        None,
+        Some(ClaudeSettingsTarget::Shared),
+        true,
+    )
+    .await
+    .unwrap();
 
     // .gitignore should not exist (tmp_git_repo creates a bare repo without one)
     // or should not contain any tracevault entries if it already existed
