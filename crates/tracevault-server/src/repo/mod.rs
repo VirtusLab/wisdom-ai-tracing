@@ -14,4 +14,5 @@ pub mod pricing;
 pub mod repos;
 pub mod sealing;
 pub mod sessions;
+pub mod user_anthropic_keys;
 pub mod users;
