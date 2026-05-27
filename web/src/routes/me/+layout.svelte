@@ -25,12 +25,16 @@
 		// previous navigation we just use that; otherwise default to the
 		// first membership.
 		const orgs: OrgInfo[] = await orgStore.loadOrgs();
+		// Read the current store snapshot. svelte/store invokes the
+		// subscriber synchronously with the current value on `.subscribe()`,
+		// so we cannot call `unsub` from inside that first callback —
+		// at that point `unsub` is still in its TDZ. Stash the unsubscribe
+		// in an outer binding and call it after the Promise settles.
+		let unsub: (() => void) | undefined;
 		const state = await new Promise<{ current: OrgInfo | null }>((resolve) => {
-			const unsub = orgStore.subscribe((s) => {
-				resolve(s);
-				unsub();
-			});
+			unsub = orgStore.subscribe((s) => resolve(s));
 		});
+		unsub?.();
 		if (!state.current && orgs.length > 0) {
 			orgStore.setCurrent(orgs[0]);
 		}
