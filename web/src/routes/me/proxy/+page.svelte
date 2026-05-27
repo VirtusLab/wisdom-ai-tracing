@@ -81,8 +81,12 @@
 			await navigator.clipboard.writeText(proxyBaseUrl);
 			copied = true;
 			setTimeout(() => (copied = false), 1500);
-		} catch {
-			// Clipboard API can fail in some browsers / contexts; ignore silently.
+		} catch (err) {
+			// Clipboard API can fail in some browsers / contexts (e.g. when the
+			// page is not focused, or in non-secure-context iframes). Log so
+			// it's debuggable but don't surface as a page-level error — the
+			// user can still copy manually.
+			console.warn('Failed to copy proxy URL to clipboard:', err);
 		}
 	}
 
