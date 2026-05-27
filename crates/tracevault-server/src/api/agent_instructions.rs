@@ -66,7 +66,8 @@ fn map_row_to_policy_rule(row: PolicyRow) -> Option<tracevault_core::policy::Pol
     };
 
     let condition: PolicyCondition = serde_json::from_value(row.condition).ok()?;
-    let action: PolicyAction = serde_json::from_value(serde_json::Value::String(row.action)).ok()?;
+    let action: PolicyAction =
+        serde_json::from_value(serde_json::Value::String(row.action)).ok()?;
     let scope: PolicyScope = serde_json::from_value(serde_json::Value::String(row.scope)).ok()?;
     let severity: PolicySeverity =
         serde_json::from_value(serde_json::Value::String(row.severity)).ok()?;
