@@ -24,7 +24,7 @@
 use axum::{
     body::{Body, Bytes},
     extract::{OriginalUri, Path, State},
-    http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode},
+    http::{HeaderMap, Method, StatusCode},
     response::{IntoResponse, Response},
     Json,
 };
@@ -125,6 +125,28 @@ pub async fn anthropic_proxy(
 ) -> Response {
     let start = Instant::now();
 
+    // Defense in depth: reject `..` segments in the captured path before
+    // composing the upstream URL. `reqwest`/`url` normalize `..` before
+    // sending, so today this only collapses paths within api.anthropic.com
+    // (no host escape is possible). But `anthropic_upstream_base` is a
+    // configurable string — if it ever carries a path prefix (e.g. a
+    // future Anthropic regional endpoint with `/v1/` baked in), `..` could
+    // escape that prefix. Rejecting at the entry point keeps this safe
+    // regardless of how the base URL is configured later.
+    if path.split(['/', '\\']).any(|seg| seg == "..") {
+        tracing::warn!(
+            error_type = "authentication_error",
+            reason = "path_traversal_segment",
+            path = %path,
+            "proxy rejected path containing '..'"
+        );
+        return anthropic_error(
+            StatusCode::BAD_REQUEST,
+            ProxyErrorKind::ApiError,
+            "Invalid path",
+        );
+    }
+
     let (user_id, upstream_key) = match authenticate(&state, &headers, &path).await {
         Ok(pair) => pair,
         Err(resp) => return resp,
@@ -214,7 +236,7 @@ async fn forward_to_upstream(
     };
 
     let mut upstream_req = state
-        .http_client
+        .proxy_http_client
         .request(method.clone(), &upstream_url)
         .body(body);
 
@@ -413,22 +435,26 @@ async fn load_anthropic_key(state: &AppState, user_id: Uuid) -> Result<String, R
 }
 
 /// Copy allow-listed and `anthropic-*` headers from `src` into `dst`.
+///
+/// `reqwest::HeaderMap` and `axum`/`http`'s `HeaderMap` share the same
+/// underlying types from the `http` crate, so we can clone names and values
+/// directly without round-tripping through `from_bytes` (which would
+/// re-validate already-valid headers and silently drop them on the unlikely
+/// failure path).
 fn copy_response_headers(src: &reqwest::header::HeaderMap, dst: &mut HeaderMap) {
     for (name, value) in src.iter() {
+        // Header names from `http::HeaderName` are already lowercase by
+        // construction, so a plain `starts_with` is sufficient and avoids
+        // an allocation per response header.
         let name_str = name.as_str();
         let allow = FORWARDED_RESPONSE_HEADERS
             .iter()
             .any(|h| h.eq_ignore_ascii_case(name_str))
-            || name_str.to_ascii_lowercase().starts_with("anthropic-");
+            || name_str.starts_with("anthropic-");
         if !allow {
             continue;
         }
-        if let (Ok(hname), Ok(hval)) = (
-            HeaderName::from_bytes(name.as_str().as_bytes()),
-            HeaderValue::from_bytes(value.as_bytes()),
-        ) {
-            dst.insert(hname, hval);
-        }
+        dst.insert(name.clone(), value.clone());
     }
 }
 
