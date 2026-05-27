@@ -57,6 +57,10 @@ async fn build_real_state(pool: &sqlx::PgPool, upstream_key: &str) -> (AppState,
         extensions: tracevault_server::extensions::community_registry(),
         encryption_key: Some(encryption_key),
         http_client: reqwest::Client::new(),
+        proxy_http_client: reqwest::Client::builder()
+            .connect_timeout(std::time::Duration::from_secs(10))
+            .build()
+            .unwrap(),
         cors_origin: "*".to_string(),
         invite_expiry_minutes: 60,
         embedding_service: None,

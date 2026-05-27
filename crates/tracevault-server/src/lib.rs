@@ -42,7 +42,16 @@ pub struct AppState {
     pub repo_manager: repo_manager::RepoManager,
     pub extensions: extensions::ExtensionRegistry,
     pub encryption_key: Option<String>,
+    /// General-purpose HTTP client (pricing sync, future short-lived
+    /// outbound calls). Built with reqwest defaults — no per-request
+    /// timeout, suitable for one-shot non-streaming calls.
     pub http_client: reqwest::Client,
+    /// HTTP client dedicated to the Anthropic proxy. Has a bounded
+    /// `connect_timeout` so a stalled TCP handshake on api.anthropic.com
+    /// cannot park the proxy task indefinitely; intentionally has no
+    /// overall `timeout()` because the proxy carries long-lived SSE
+    /// streams whose total duration depends on the model's output.
+    pub proxy_http_client: reqwest::Client,
     pub cors_origin: String,
     pub invite_expiry_minutes: u64,
     pub embedding_service:
