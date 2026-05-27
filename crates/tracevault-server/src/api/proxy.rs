@@ -135,7 +135,7 @@ pub async fn anthropic_proxy(
     // regardless of how the base URL is configured later.
     if path.split(['/', '\\']).any(|seg| seg == "..") {
         tracing::warn!(
-            error_type = "authentication_error",
+            error_type = "api_error",
             reason = "path_traversal_segment",
             path = %path,
             "proxy rejected path containing '..'"
