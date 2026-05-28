@@ -46,15 +46,20 @@ pub enum PolicyCondition {
     },
 }
 
-/// Which evaluation window this policy applies to.
+/// Which evaluation phase this policy applies to.
+///
+/// The "verification phase" is the period after the agent declares it is
+/// done changing code (via `tracevault verify-start`) and is now running
+/// pre-push checks. Policies scoped to that phase evaluate only tool calls
+/// made inside it; policies scoped to `Session` evaluate the whole push.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum PolicyScope {
-    /// Evaluated over the entire push window (default).
+    /// Evaluated over the entire push (default).
     #[default]
     Session,
-    /// Evaluated only against events inside the last validation window.
-    ValidationWindow,
+    /// Evaluated only against events inside the current verification phase.
+    VerificationPhase,
     /// Evaluated in both contexts.
     Both,
 }
@@ -64,21 +69,22 @@ pub enum PolicyScope {
 pub enum PolicyAction {
     BlockPush,
     Warn,
-    /// Tool is explicitly permitted inside a validation window without a count
-    /// requirement. Prevents it from triggering the unknown-tool gate.
+    /// Tool is explicitly permitted inside the verification phase without
+    /// a count requirement. Prevents it from triggering the unknown-tool
+    /// gate.
     Allow,
 }
 
 /// Org/repo-level setting controlling what happens when an unknown tool
-/// (not covered by any validation_window-scoped policy) is called inside
-/// the validation window.
+/// (not covered by any `verification_phase`-scoped policy) is called inside
+/// an active verification phase.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 #[serde(rename_all = "snake_case")]
-pub enum ValidationWindowMode {
-    /// No window enforcement (default).
+pub enum VerificationPhaseMode {
+    /// No verification-phase enforcement (default).
     #[default]
     Disabled,
-    /// Unknown tool call is flagged but push succeeds.
+    /// Unknown tool call is flagged but the push still succeeds.
     Warn,
     /// Unknown tool call blocks the push.
     Block,
