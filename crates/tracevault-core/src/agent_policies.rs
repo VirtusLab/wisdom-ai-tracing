@@ -151,18 +151,31 @@ pub fn render_markdown(
     }
 
     if has_verification {
+        // The consequence sentence depends on the enforcement mode. We render
+        // this whole section only when mode is Warn or Block (Disabled cases
+        // never get here because has_verification short-circuits above), so
+        // it is safe to switch on those two arms and `unreachable!` Disabled.
+        let consequence = match verification_phase_mode {
+            VerificationPhaseMode::Block => "Any other tool call will fail the push.",
+            VerificationPhaseMode::Warn => {
+                "Any other tool call will be recorded as a warning on the push."
+            }
+            VerificationPhaseMode::Disabled => unreachable!(
+                "verification phase section is only rendered when mode is Warn or Block"
+            ),
+        };
         out.push_str("\n### Verification phase (pre-push gating)\n");
-        out.push_str(
+        out.push_str(&format!(
             "When you are done changing code and ready to push, you must enter a \
             **verification phase** by running:\n\n    tracevault verify-start\n\n\
             From that point until the push, you are only allowed to call the tools \
-            listed below. Any other tool call will fail the push.\n\n\
+            listed below. {consequence}\n\n\
             The intent: catch agents that pretend to review while still editing. \
             If you need to make a code change after entering the phase, that is fine — \
             make the change, then run `tracevault verify-start` again to restart the \
             phase and rerun the required tools. The most recent `verify-start` is the \
             only one that counts.\n",
-        );
+        ));
 
         if !verification_required.is_empty() {
             out.push_str("\n**Required** — must be called inside the phase:\n");
@@ -385,7 +398,7 @@ mod tests {
     }
 
     #[test]
-    fn warn_mode_does_not_advertise_blocking_in_window() {
+    fn warn_mode_does_not_advertise_blocking_in_phase() {
         let p = rule(
             required(&["agent_review"], false),
             PolicyAction::Warn,
@@ -394,8 +407,34 @@ mod tests {
         );
         let out = render_markdown(&[p], &VerificationPhaseMode::Warn);
         assert!(out.contains("### Verification phase"));
-        assert!(!out.contains("will block the push"));
-        assert!(!out.contains("blocked"));
+        // Critical: in Warn mode the consequence sentence must NOT promise to
+        // fail the push — that wording belongs to Block mode only.
+        assert!(
+            !out.contains("will fail the push"),
+            "Warn mode must not advertise blocking behavior; output: {out}"
+        );
+        assert!(out.contains("recorded as a warning"));
         assert!(out.contains("should be called"));
+    }
+
+    #[test]
+    fn block_mode_advertises_failing_the_push() {
+        let p = rule(
+            required(&["agent_review"], false),
+            PolicyAction::BlockPush,
+            PolicyScope::VerificationPhase,
+            true,
+        );
+        let out = render_markdown(&[p], &VerificationPhaseMode::Block);
+        assert!(out.contains("### Verification phase"));
+        // Critical: in Block mode the consequence sentence must say so.
+        assert!(
+            out.contains("will fail the push"),
+            "Block mode must explicitly state the push will fail; output: {out}"
+        );
+        assert!(
+            !out.contains("recorded as a warning"),
+            "Block mode must not use Warn-mode phrasing; output: {out}"
+        );
     }
 }
