@@ -19,11 +19,19 @@ use crate::AppState;
 pub struct AnthropicKeyStatus {
     pub configured: bool,
     pub configured_at: Option<DateTime<Utc>>,
+    /// Per-credential proxy concurrency cap. `None` when no key is
+    /// configured; otherwise the value stored on the row.
+    pub max_concurrent: Option<i32>,
 }
 
 #[derive(Deserialize)]
 pub struct PutAnthropicKeyRequest {
     pub key: String,
+    /// Optional per-credential proxy concurrency cap. Omit to keep the
+    /// existing value on update, or fall back to the DB default (8) on
+    /// first insert.
+    #[serde(default)]
+    pub max_concurrent: Option<i32>,
 }
 
 /// Reject the synthetic nil user_id that the AuthUser extractor returns when
@@ -50,10 +58,18 @@ pub async fn get_anthropic_key_status(
     auth: AuthUser,
 ) -> Result<Json<AnthropicKeyStatus>, AppError> {
     let user_id = require_real_user(&auth)?;
-    let configured_at = UserAnthropicKeyRepo::configured_at(&state.pool, user_id).await?;
-    Ok(Json(AnthropicKeyStatus {
-        configured: configured_at.is_some(),
-        configured_at,
+    let status = UserAnthropicKeyRepo::status(&state.pool, user_id).await?;
+    Ok(Json(match status {
+        Some(s) => AnthropicKeyStatus {
+            configured: true,
+            configured_at: Some(s.configured_at),
+            max_concurrent: Some(s.max_concurrent),
+        },
+        None => AnthropicKeyStatus {
+            configured: false,
+            configured_at: None,
+            max_concurrent: None,
+        },
     }))
 }
 
@@ -94,13 +110,31 @@ pub async fn put_anthropic_key(
         ));
     }
 
+    // Validate max_concurrent if the caller specified one. Bounds mirror
+    // the DB CHECK constraint so we fail fast with a clear 400 instead of
+    // surfacing a generic constraint-violation 500 from the upsert.
+    if let Some(n) = req.max_concurrent {
+        if !(1..=256).contains(&n) {
+            return Err(AppError::BadRequest(
+                "max_concurrent must be between 1 and 256".into(),
+            ));
+        }
+    }
+
     let encryption_key = state.encryption_key.as_deref().ok_or_else(|| {
         AppError::Internal(
             "Server is not configured with an encryption key; cannot store Anthropic keys".into(),
         )
     })?;
 
-    UserAnthropicKeyRepo::upsert(&state.pool, encryption_key, user_id, key).await?;
+    UserAnthropicKeyRepo::upsert(
+        &state.pool,
+        encryption_key,
+        user_id,
+        key,
+        req.max_concurrent,
+    )
+    .await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
