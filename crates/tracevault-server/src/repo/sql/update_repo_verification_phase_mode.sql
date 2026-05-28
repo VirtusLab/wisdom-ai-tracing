@@ -1,1 +1,1 @@
-UPDATE repos SET validation_window_mode = $1 WHERE id = $2
+UPDATE repos SET verification_phase_mode = $1 WHERE id = $2

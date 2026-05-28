@@ -37,7 +37,7 @@ pub async fn get_agent_instructions(
     }
 
     let rows = PolicyRepo::list_for_repo(&state.pool, auth.org_id, repo_id).await?;
-    let mode_str = PolicyRepo::get_validation_window_mode(&state.pool, repo_id).await?;
+    let mode_str = PolicyRepo::get_verification_phase_mode(&state.pool, repo_id).await?;
 
     // Skip rows that don't parse cleanly — they're invalid but shouldn't fail
     // the whole render. The renderer operates on core's native domain types.
@@ -46,9 +46,9 @@ pub async fn get_agent_instructions(
         .filter_map(map_row_to_policy_rule)
         .collect();
 
-    let mode: tracevault_core::policy::ValidationWindowMode =
+    let mode: tracevault_core::policy::VerificationPhaseMode =
         serde_json::from_value(serde_json::Value::String(mode_str))
-            .unwrap_or(tracevault_core::policy::ValidationWindowMode::Disabled);
+            .unwrap_or(tracevault_core::policy::VerificationPhaseMode::Disabled);
 
     let content = tracevault_core::agent_policies::render_markdown(&rules, &mode);
 

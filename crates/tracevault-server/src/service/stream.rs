@@ -327,10 +327,10 @@ impl StreamService {
             // 8. SessionStart -- session already upserted above
             StreamEventType::SessionStart => {}
 
-            // 9. ValidationWindowStart — record timestamp; only the latest matters
-            StreamEventType::ValidationWindowStart => {
+            // 9. VerificationPhaseStart — record timestamp; only the latest matters
+            StreamEventType::VerificationPhaseStart => {
                 sqlx::query(include_str!(
-                    "../repo/sql/update_session_validation_window.sql"
+                    "../repo/sql/update_session_verification_phase.sql"
                 ))
                 .bind(req.timestamp)
                 .bind(session_db_id)

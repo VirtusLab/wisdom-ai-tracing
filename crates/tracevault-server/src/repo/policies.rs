@@ -230,13 +230,13 @@ impl PolicyRepo {
         Ok(rows)
     }
 
-    /// Fetch the validation_window_mode for a repo.
-    pub async fn get_validation_window_mode(
+    /// Fetch the verification_phase_mode for a repo.
+    pub async fn get_verification_phase_mode(
         pool: &PgPool,
         repo_id: Uuid,
     ) -> Result<String, AppError> {
         let mode: Option<String> =
-            sqlx::query_scalar(include_str!("sql/get_validation_window_mode.sql"))
+            sqlx::query_scalar(include_str!("sql/get_verification_phase_mode.sql"))
                 .bind(repo_id)
                 .fetch_optional(pool)
                 .await?

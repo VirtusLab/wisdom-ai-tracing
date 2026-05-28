@@ -1,1 +1,1 @@
-UPDATE sessions SET validation_window_started_at = $1 WHERE id = $2
+UPDATE sessions SET verification_phase_started_at = $1 WHERE id = $2

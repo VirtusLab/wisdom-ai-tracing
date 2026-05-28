@@ -296,10 +296,10 @@
 					<div class="grid gap-2">
 						<Label>Scope</Label>
 						<Select.Root type="single" value={newScope} onValueChange={(v) => { if (v) newScope = v; }}>
-							<Select.Trigger>{{ session: 'Session', validation_window: 'Validation', both: 'Session' }[newScope] ?? newScope}</Select.Trigger>
+							<Select.Trigger>{{ session: 'Session', verification_phase: 'Verification', both: 'Session' }[newScope] ?? newScope}</Select.Trigger>
 							<Select.Content>
 								<Select.Item value="session">Session</Select.Item>
-								<Select.Item value="validation_window">Validation</Select.Item>
+								<Select.Item value="verification_phase">Verification</Select.Item>
 							</Select.Content>
 						</Select.Root>
 					</div>
@@ -351,8 +351,8 @@
 								{/if}
 							</Table.Cell>
 							<Table.Cell class="text-xs">
-								{#if policy.scope === 'validation_window'}
-									<span class="rounded-full px-2 py-0.5 text-[10px]" style="background: rgba(99,179,237,0.12); color: #63b3ed; border: 1px solid rgba(99,179,237,0.25)">Validation</span>
+								{#if policy.scope === 'verification_phase'}
+									<span class="rounded-full px-2 py-0.5 text-[10px]" style="background: rgba(99,179,237,0.12); color: #63b3ed; border: 1px solid rgba(99,179,237,0.25)">Verification</span>
 
 								{:else}
 									<span class="rounded-full px-2 py-0.5 text-[10px]" style="background: rgba(156,163,175,0.12); color: #9ca3af; border: 1px solid rgba(156,163,175,0.25)">Session</span>

@@ -8,16 +8,16 @@ use crate::commands::stream::next_event_index;
 use crate::config::TracevaultConfig;
 use crate::credentials::Credentials;
 
-/// Send a ValidationWindowStart event to the server, recording the current
-/// timestamp as the start of the validation window for this session.
+/// Send a VerificationPhaseStart event to the server, recording the current
+/// timestamp as the start of the verification phase for this session.
 ///
 /// Only the most recent call per session matters — calling this again simply
-/// moves the window cursor forward, discarding events from the previous window.
+/// moves the phase cursor forward, discarding events from the previous phase.
 ///
 /// `explicit_session_id` — when Some, targets that session directly.
 /// When None, the most recently modified session directory is used (suitable
 /// for single-agent setups; pass `--session-id` in multi-agent setups).
-pub async fn open_validation_window(
+pub async fn open_verification_phase(
     project_root: &Path,
     explicit_session_id: Option<&str>,
 ) -> Result<(), String> {
@@ -70,7 +70,7 @@ pub async fn open_validation_window(
         // session upsert fail. (The server also defends against this, but
         // there's no reason to send a null here.)
         tool: Some("claude-code".to_string()),
-        event_type: StreamEventType::ValidationWindowStart,
+        event_type: StreamEventType::VerificationPhaseStart,
         session_id: session_id.clone(),
         timestamp: chrono::Utc::now(),
         hook_event_name: None,
@@ -97,11 +97,11 @@ pub async fn open_validation_window(
     client
         .stream_event(org_slug, repo_id, &event)
         .await
-        .map_err(|e| format!("Failed to send validation window event: {e}"))?;
+        .map_err(|e| format!("Failed to send verification phase event: {e}"))?;
 
-    println!("✓ Validation window opened for session {session_id}");
-    println!("  Tool calls from this point are evaluated by validation_window-scoped policies.");
-    println!("  Run `tracevault validation-start` again to reset the window if needed.");
+    println!("✓ Verification phase opened for session {session_id}");
+    println!("  Tool calls from this point are evaluated by verification_phase-scoped policies.");
+    println!("  Run `tracevault verify-start` again to reset the phase if needed.");
 
     Ok(())
 }

@@ -1,1 +1,1 @@
-SELECT validation_window_mode FROM repos WHERE id = $1
+SELECT verification_phase_mode FROM repos WHERE id = $1
