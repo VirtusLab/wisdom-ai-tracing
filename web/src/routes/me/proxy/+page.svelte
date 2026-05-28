@@ -52,9 +52,22 @@
 		}
 	}
 
+	/// True when the user has either typed a new key or changed the cap
+	/// away from what's stored. The submit button is gated on this — it
+	/// prevents the user from submitting a no-op request.
+	const hasUnsavedChange = $derived.by(() => {
+		const keyTyped = newKey.trim().length > 0;
+		const capChanged =
+			status?.max_concurrent != null && newMaxConcurrent !== status.max_concurrent;
+		// When not configured yet, only a key counts — the cap on its own
+		// can't be the first write (server returns 400 in that case).
+		if (!status?.configured) return keyTyped;
+		return keyTyped || capChanged;
+	});
+
 	async function handleSave(event: SubmitEvent) {
 		event.preventDefault();
-		if (!newKey.trim()) return;
+		if (!hasUnsavedChange) return;
 		// Defensive client-side bounds check. The server enforces the same
 		// range (DB CHECK + handler validation) but failing here gives a
 		// clearer error than a 400 from the API.
@@ -66,19 +79,28 @@
 			error = `Max concurrent must be a whole number between ${MIN_MAX_CONCURRENT} and ${MAX_MAX_CONCURRENT}.`;
 			return;
 		}
+
+		// Build a minimal request body: only include `key` when the user
+		// actually typed one. Cap is always sent so the server picks up
+		// any change.
+		const body: { key?: string; max_concurrent: number } = {
+			max_concurrent: newMaxConcurrent
+		};
+		const trimmedKey = newKey.trim();
+		if (trimmedKey.length > 0) body.key = trimmedKey;
+
 		saving = true;
 		error = '';
 		success = '';
 		try {
-			await api.put<void>('/api/v1/me/anthropic-key', {
-				key: newKey.trim(),
-				max_concurrent: newMaxConcurrent
-			});
+			await api.put<void>('/api/v1/me/anthropic-key', body);
 			newKey = '';
-			success = 'Anthropic API key saved.';
+			success = trimmedKey
+				? 'Anthropic API key saved.'
+				: 'Concurrency cap updated.';
 			await loadStatus();
 		} catch (err) {
-			error = err instanceof Error ? err.message : 'Failed to save key';
+			error = err instanceof Error ? err.message : 'Failed to save settings';
 		} finally {
 			saving = false;
 		}
@@ -198,7 +220,7 @@
 				<form onsubmit={handleSave} class="space-y-3">
 					<div class="grid gap-2">
 						<Label for="anthropic_key">
-							{status?.configured ? 'Replace key' : 'Set key'}
+							{status?.configured ? 'Rotate key (optional)' : 'Set key'}
 						</Label>
 						<Input
 							id="anthropic_key"
@@ -232,13 +254,14 @@
 						<p class="text-muted-foreground text-xs">
 							The proxy rejects further requests for this credential once this many are in
 							flight. Range {MIN_MAX_CONCURRENT}–{MAX_MAX_CONCURRENT}; default {DEFAULT_MAX_CONCURRENT}.
-							New value applies on the next server restart.
+							New value applies on the next proxy request; in-flight requests keep their
+							existing budget.
 						</p>
 					</div>
 
 					<div class="flex items-center gap-2">
-						<Button type="submit" disabled={saving || !newKey.trim()}>
-							{saving ? 'Saving...' : status?.configured ? 'Replace' : 'Save'}
+						<Button type="submit" disabled={saving || !hasUnsavedChange}>
+							{saving ? 'Saving...' : status?.configured ? 'Update' : 'Save'}
 						</Button>
 						{#if status?.configured}
 							{#if confirmingRemove}

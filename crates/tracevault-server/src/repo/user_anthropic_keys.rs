@@ -115,6 +115,27 @@ impl UserAnthropicKeyRepo {
         }))
     }
 
+    /// Update only the `max_concurrent` cap for `user_id`, leaving the
+    /// stored ciphertext + nonce untouched. Returns `true` when a row was
+    /// updated, `false` when no row existed (the caller should surface
+    /// "configure a key first" in that case).
+    pub async fn update_max_concurrent(
+        pool: &PgPool,
+        user_id: Uuid,
+        max_concurrent: i32,
+    ) -> Result<bool, AppError> {
+        let res = sqlx::query(
+            "UPDATE user_anthropic_keys
+             SET max_concurrent = $2, updated_at = now()
+             WHERE user_id = $1",
+        )
+        .bind(user_id)
+        .bind(max_concurrent)
+        .execute(pool)
+        .await?;
+        Ok(res.rows_affected() > 0)
+    }
+
     /// Remove the row for `user_id`. Idempotent — returns Ok even if no row
     /// existed.
     pub async fn delete(pool: &PgPool, user_id: Uuid) -> Result<(), AppError> {

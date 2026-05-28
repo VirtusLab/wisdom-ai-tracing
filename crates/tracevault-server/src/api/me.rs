@@ -26,7 +26,12 @@ pub struct AnthropicKeyStatus {
 
 #[derive(Deserialize)]
 pub struct PutAnthropicKeyRequest {
-    pub key: String,
+    /// Optional new Anthropic key. When omitted the existing ciphertext is
+    /// preserved — this is the "cap only" update path, used from the UI
+    /// when the user wants to change `max_concurrent` without rotating
+    /// the key. At least one of `key` or `max_concurrent` must be present.
+    #[serde(default)]
+    pub key: Option<String>,
     /// Optional per-credential proxy concurrency cap. Omit to keep the
     /// existing value on update, or fall back to the DB default (8) on
     /// first insert.
@@ -75,8 +80,23 @@ pub async fn get_anthropic_key_status(
 
 /// PUT /api/v1/me/anthropic-key
 ///
-/// Upserts the caller's Anthropic key, encrypted with the server's master
-/// encryption key. Returns 204 on success.
+/// Upserts the caller's Anthropic key and/or its concurrency cap. The
+/// request body has two optional fields, `key` and `max_concurrent`, but
+/// at least one must be present. Use cases:
+///
+///   * `{ key: "sk-ant-...", max_concurrent: 16 }` — first-time setup or
+///     full rotation.
+///   * `{ key: "sk-ant-..." }` — rotate the key; cap preserved (default 8
+///     applied if no row yet).
+///   * `{ max_concurrent: 16 }` — change only the cap; key must already
+///     exist (400 otherwise).
+///
+/// In all cases the in-memory per-credential semaphore for this user is
+/// dropped from the DashMap so the *next* proxy request rebuilds it
+/// against the new cap value. In-flight requests keep their permits on
+/// the old (dropped) semaphore for the lifetime of their response,
+/// effectively letting the cap change apply at the natural next quiet
+/// point.
 pub async fn put_anthropic_key(
     State(state): State<AppState>,
     auth: AuthUser,
@@ -84,29 +104,9 @@ pub async fn put_anthropic_key(
 ) -> Result<StatusCode, AppError> {
     let user_id = require_real_user(&auth)?;
 
-    let key = req.key.trim();
-    if key.is_empty() {
+    if req.key.is_none() && req.max_concurrent.is_none() {
         return Err(AppError::BadRequest(
-            "Anthropic key must not be empty".into(),
-        ));
-    }
-    // Real Anthropic keys are ~110 chars; cap at 256 to leave generous
-    // headroom for future formats while preventing the endpoint from
-    // accepting a ~2 MB junk string and persisting it encrypted on the
-    // user_anthropic_keys row.
-    if key.len() > 256 {
-        return Err(AppError::BadRequest(
-            "Anthropic key is unreasonably long (max 256 chars)".into(),
-        ));
-    }
-    // Anthropic API keys begin with `sk-ant-` (modern format). We reject
-    // anything that doesn't look like one to catch obvious paste mistakes
-    // (TV session token, empty string, environment variable name, etc.).
-    // We do *not* validate the key against api.anthropic.com here — that
-    // would couple this endpoint to upstream availability.
-    if !key.starts_with("sk-ant-") {
-        return Err(AppError::BadRequest(
-            "Anthropic key must start with 'sk-ant-'".into(),
+            "Request must include `key`, `max_concurrent`, or both".into(),
         ));
     }
 
@@ -121,20 +121,65 @@ pub async fn put_anthropic_key(
         }
     }
 
-    let encryption_key = state.encryption_key.as_deref().ok_or_else(|| {
-        AppError::Internal(
-            "Server is not configured with an encryption key; cannot store Anthropic keys".into(),
-        )
-    })?;
+    match req.key.as_deref() {
+        Some(raw_key) => {
+            let key = raw_key.trim();
+            if key.is_empty() {
+                return Err(AppError::BadRequest(
+                    "Anthropic key must not be empty".into(),
+                ));
+            }
+            // Real Anthropic keys are ~110 chars; cap at 256 to leave generous
+            // headroom for future formats while preventing the endpoint from
+            // accepting a ~2 MB junk string and persisting it encrypted.
+            if key.len() > 256 {
+                return Err(AppError::BadRequest(
+                    "Anthropic key is unreasonably long (max 256 chars)".into(),
+                ));
+            }
+            if !key.starts_with("sk-ant-") {
+                return Err(AppError::BadRequest(
+                    "Anthropic key must start with 'sk-ant-'".into(),
+                ));
+            }
+            let encryption_key = state.encryption_key.as_deref().ok_or_else(|| {
+                AppError::Internal(
+                    "Server is not configured with an encryption key; cannot store Anthropic keys"
+                        .into(),
+                )
+            })?;
+            UserAnthropicKeyRepo::upsert(
+                &state.pool,
+                encryption_key,
+                user_id,
+                key,
+                req.max_concurrent,
+            )
+            .await?;
+        }
+        None => {
+            // Settings-only update — the caller explicitly passed
+            // max_concurrent without a new key. Requires an existing row;
+            // otherwise there is nothing to update and we refuse with 400
+            // rather than silently inserting a half-row.
+            let new_cap = req.max_concurrent.expect("checked above");
+            let updated =
+                UserAnthropicKeyRepo::update_max_concurrent(&state.pool, user_id, new_cap).await?;
+            if !updated {
+                return Err(AppError::BadRequest(
+                    "Cannot update settings: no Anthropic key configured yet".into(),
+                ));
+            }
+        }
+    }
 
-    UserAnthropicKeyRepo::upsert(
-        &state.pool,
-        encryption_key,
-        user_id,
-        key,
-        req.max_concurrent,
-    )
-    .await?;
+    // Flush the in-memory per-credential semaphore so the next request
+    // rebuilds it against the new cap (or the freshly-persisted row).
+    // In-flight requests still hold permits on the old, now-orphaned
+    // Arc<Semaphore> — when they finish they release naturally and the
+    // arc drops.
+    state.proxy_per_credential_semaphores.remove(&user_id);
+
     Ok(StatusCode::NO_CONTENT)
 }
 

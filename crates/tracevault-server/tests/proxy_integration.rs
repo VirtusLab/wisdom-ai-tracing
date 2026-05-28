@@ -1030,3 +1030,164 @@ async fn me_anthropic_key_lifecycle(pool: sqlx::PgPool) {
     let body = read_body_to_value(resp.into_body()).await;
     assert_eq!(body["configured"], false);
 }
+
+/// Build a minimal app + state with just the /me/anthropic-key endpoints,
+/// for tests that exercise the settings-only PUT path. Returns
+/// (app, bearer-header-value, user_id, shared-semaphore-map).
+async fn build_me_endpoints_only(
+    pool: sqlx::PgPool,
+) -> (
+    Router,
+    String,
+    uuid::Uuid,
+    std::sync::Arc<dashmap::DashMap<uuid::Uuid, std::sync::Arc<tokio::sync::Semaphore>>>,
+) {
+    let upstream = MockServer::start().await;
+    let user = common::seed_user(&pool).await;
+    let session = common::seed_auth_session(&pool, user).await;
+    let encryption_key = common::fixture_encryption_key();
+    let sems: std::sync::Arc<dashmap::DashMap<uuid::Uuid, std::sync::Arc<tokio::sync::Semaphore>>> =
+        std::sync::Arc::new(dashmap::DashMap::new());
+
+    let state = AppState {
+        pool: pool.clone(),
+        repo_manager: repo_manager::RepoManager::new("/tmp"),
+        extensions: tracevault_server::extensions::community_registry(),
+        encryption_key: Some(encryption_key),
+        http_client: reqwest::Client::new(),
+        proxy_http_client: reqwest::Client::new(),
+        cors_origin: "*".to_string(),
+        invite_expiry_minutes: 60,
+        embedding_service: None,
+        anthropic_upstream_base: upstream.uri(),
+        proxy_global_semaphore: None,
+        proxy_per_credential_semaphores: sems.clone(),
+    };
+
+    let app = Router::new()
+        .route(
+            "/api/v1/me/anthropic-key",
+            get(api::me::get_anthropic_key_status)
+                .put(api::me::put_anthropic_key)
+                .delete(api::me::delete_anthropic_key),
+        )
+        .with_state(state);
+
+    (app, format!("Bearer {session}"), user, sems)
+}
+
+fn put_request(bearer: &str, body: serde_json::Value) -> Request<Body> {
+    Request::builder()
+        .method("PUT")
+        .uri("/api/v1/me/anthropic-key")
+        .header("authorization", bearer)
+        .header("content-type", "application/json")
+        .body(Body::from(serde_json::to_vec(&body).unwrap()))
+        .unwrap()
+}
+
+/// Setting cap-only on an existing row must update only max_concurrent and
+/// preserve the ciphertext, *and* must drop the in-memory semaphore so the
+/// next proxy request rebuilds it with the new cap.
+#[sqlx::test(migrations = "./migrations")]
+async fn me_anthropic_key_put_updates_cap_only(pool: sqlx::PgPool) {
+    let (app, bearer, user_id, sems) = build_me_endpoints_only(pool.clone()).await;
+
+    // Seed initial key with cap=4.
+    let r = app
+        .clone()
+        .oneshot(put_request(
+            &bearer,
+            serde_json::json!({ "key": "sk-ant-initial-fixture", "max_concurrent": 4 }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(r.status(), StatusCode::NO_CONTENT);
+
+    // Prime the in-memory semaphore so we can prove it gets dropped.
+    sems.entry(user_id)
+        .or_insert_with(|| std::sync::Arc::new(tokio::sync::Semaphore::new(4)));
+    assert!(sems.contains_key(&user_id));
+
+    // Cap-only PUT.
+    let r = app
+        .clone()
+        .oneshot(put_request(
+            &bearer,
+            serde_json::json!({ "max_concurrent": 16 }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(r.status(), StatusCode::NO_CONTENT);
+
+    // Verify ciphertext unchanged via the GET endpoint (status returns
+    // configured=true, max_concurrent=16) AND that the semaphore entry
+    // is gone.
+    let r = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/api/v1/me/anthropic-key")
+                .header("authorization", &bearer)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(r.status(), StatusCode::OK);
+    let body = read_body_to_value(r.into_body()).await;
+    assert_eq!(body["configured"], true);
+    assert_eq!(body["max_concurrent"], 16);
+    assert!(
+        !sems.contains_key(&user_id),
+        "settings-only PUT must drop the in-memory semaphore so the new cap takes effect"
+    );
+
+    // And the encrypted key in the DB really is still the initial one.
+    let cred = tracevault_server::repo::user_anthropic_keys::UserAnthropicKeyRepo::get_credential(
+        &pool, user_id,
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    let plaintext = tracevault_server::encryption::decrypt(
+        &cred.encrypted,
+        &cred.nonce,
+        &common::fixture_encryption_key(),
+    )
+    .unwrap();
+    assert_eq!(plaintext, "sk-ant-initial-fixture");
+    assert_eq!(cred.max_concurrent, 16);
+}
+
+/// Cap-only PUT before any key has been configured must return 400 — we
+/// don't want a half-row containing only a cap and no key material.
+#[sqlx::test(migrations = "./migrations")]
+async fn me_anthropic_key_put_rejects_cap_only_when_unconfigured(pool: sqlx::PgPool) {
+    let (app, bearer, _user_id, _sems) = build_me_endpoints_only(pool).await;
+
+    let r = app
+        .clone()
+        .oneshot(put_request(
+            &bearer,
+            serde_json::json!({ "max_concurrent": 16 }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(r.status(), StatusCode::BAD_REQUEST);
+}
+
+/// Empty body (neither key nor cap) must return 400 rather than silently
+/// noop.
+#[sqlx::test(migrations = "./migrations")]
+async fn me_anthropic_key_put_rejects_empty_body(pool: sqlx::PgPool) {
+    let (app, bearer, _user_id, _sems) = build_me_endpoints_only(pool).await;
+
+    let r = app
+        .clone()
+        .oneshot(put_request(&bearer, serde_json::json!({})))
+        .await
+        .unwrap();
+    assert_eq!(r.status(), StatusCode::BAD_REQUEST);
+}
