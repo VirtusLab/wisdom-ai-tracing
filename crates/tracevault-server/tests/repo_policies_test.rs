@@ -487,9 +487,10 @@ async fn window_tool_call_stats_after_timestamp(pool: sqlx::PgPool) {
     .await
     .unwrap();
 
-    let stats = EventRepo::get_verification_phase_tool_call_stats(&pool, session_db_id, before_window)
-        .await
-        .unwrap();
+    let stats =
+        EventRepo::get_verification_phase_tool_call_stats(&pool, session_db_id, before_window)
+            .await
+            .unwrap();
 
     assert_eq!(stats.get("cargo_fmt").map(|s| s.total), Some(1));
     assert_eq!(stats.get("cargo_fmt").map(|s| s.successful), Some(1));
@@ -540,9 +541,10 @@ async fn window_tool_call_stats_excludes_pre_window_events(pool: sqlx::PgPool) {
     let window_start = chrono::Utc::now();
 
     // Stats should be empty — event happened before the window
-    let stats = EventRepo::get_verification_phase_tool_call_stats(&pool, session_db_id, window_start)
-        .await
-        .unwrap();
+    let stats =
+        EventRepo::get_verification_phase_tool_call_stats(&pool, session_db_id, window_start)
+            .await
+            .unwrap();
 
     assert!(stats.is_empty());
 }
