@@ -72,6 +72,29 @@ async fn main() {
         .build()
         .expect("Failed to build proxy reqwest client");
 
+    // Optional global concurrency cap across all proxy requests. Unset = no
+    // global limit; this is the right default for the small-team deployments
+    // we ship to today. Operators turn this on after capacity testing; a
+    // sensible starting value is 256.
+    let proxy_global_semaphore: Option<std::sync::Arc<tokio::sync::Semaphore>> =
+        match std::env::var("PROXY_MAX_GLOBAL_CONCURRENT") {
+            Ok(s) => match s.parse::<usize>() {
+                Ok(n) if n > 0 => {
+                    tracing::info!(cap = n, "proxy global concurrency cap enabled");
+                    Some(std::sync::Arc::new(tokio::sync::Semaphore::new(n)))
+                }
+                _ => {
+                    tracing::warn!(
+                        value = %s,
+                        "PROXY_MAX_GLOBAL_CONCURRENT is set but not a positive integer; ignoring"
+                    );
+                    None
+                }
+            },
+            Err(_) => None,
+        };
+    let proxy_per_credential_semaphores = std::sync::Arc::new(dashmap::DashMap::new());
+
     // Auto-sync repos that are in 'ready' state on startup
     sync_repos_on_startup(&pool, &repo_manager, &extensions).await;
 
@@ -624,6 +647,8 @@ async fn main() {
             invite_expiry_minutes: cfg.invite_expiry_minutes,
             anthropic_upstream_base: api::proxy::DEFAULT_ANTHROPIC_UPSTREAM_BASE.to_string(),
             embedding_service,
+            proxy_global_semaphore: proxy_global_semaphore.clone(),
+            proxy_per_credential_semaphores: proxy_per_credential_semaphores.clone(),
         });
 
     let listener = tokio::net::TcpListener::bind(&bind_addr).await.unwrap();

@@ -47,6 +47,7 @@ async fn build_real_state(pool: &sqlx::PgPool, upstream_key: &str) -> (AppState,
         &encryption_key,
         user,
         upstream_key,
+        None,
     )
     .await
     .unwrap();
@@ -66,6 +67,8 @@ async fn build_real_state(pool: &sqlx::PgPool, upstream_key: &str) -> (AppState,
         embedding_service: None,
         // Defaults to the real api.anthropic.com — exactly what we want here.
         anthropic_upstream_base: api::proxy::DEFAULT_ANTHROPIC_UPSTREAM_BASE.to_string(),
+        proxy_global_semaphore: None,
+        proxy_per_credential_semaphores: std::sync::Arc::new(dashmap::DashMap::new()),
     };
     (state, session_token)
 }

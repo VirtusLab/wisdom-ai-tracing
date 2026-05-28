@@ -60,4 +60,26 @@ pub struct AppState {
     /// `https://api.anthropic.com` in production; overridden in tests so a
     /// wiremock stub upstream can stand in for the real Anthropic API.
     pub anthropic_upstream_base: String,
+    /// Optional global cap on in-flight proxy requests across all users.
+    /// `None` = unlimited (default); set the operator env var
+    /// `PROXY_MAX_GLOBAL_CONCURRENT` to enable.
+    pub proxy_global_semaphore: Option<std::sync::Arc<tokio::sync::Semaphore>>,
+    /// Per-credential concurrency semaphores. Keyed by
+    /// `user_anthropic_keys.user_id` (effectively the credential ID today;
+    /// generalizes to org/credential IDs once those land). Each semaphore is
+    /// lazily created on first request for a credential, sized to the
+    /// credential's stored `max_concurrent` at that moment.
+    ///
+    /// Update semantics are intentionally lazy: a PUT that changes
+    /// `max_concurrent` only updates the DB row, *not* the in-memory
+    /// semaphore. The new cap takes effect on the next process restart, or
+    /// after the entry is explicitly evicted. This avoids the atomic-swap
+    /// edge cases of mid-flight cap changes.
+    ///
+    /// Growth: this DashMap grows monotonically with credentials that have
+    /// received at least one proxy request since startup. At expected scale
+    /// (<= ~10k credentials) the footprint is a few MB. Revisit eviction
+    /// (TTL or LRU) if active credentials exceed that threshold.
+    pub proxy_per_credential_semaphores:
+        std::sync::Arc<dashmap::DashMap<uuid::Uuid, std::sync::Arc<tokio::sync::Semaphore>>>,
 }

@@ -71,10 +71,19 @@ const FORWARDED_RESPONSE_HEADERS: &[&str] = &[
 /// `error.type` discriminants used in the Anthropic-shaped error envelope.
 /// Mirrors the documented Anthropic API error types so unmodified clients
 /// route these the same way they'd route a real api.anthropic.com error.
+//
+// All variants share the `*Error` suffix to mirror Anthropic's wire
+// vocabulary (the `error.type` JSON field).
+#[allow(clippy::enum_variant_names)]
 #[derive(Debug, Clone, Copy)]
 enum ProxyErrorKind {
     AuthenticationError,
     ApiError,
+    /// Mirrors Anthropic's `overloaded_error` — agents already back off
+    /// gracefully on this `type` value, so reusing it for our internal
+    /// concurrency caps keeps client behavior identical to a real upstream
+    /// overload.
+    OverloadedError,
 }
 
 impl ProxyErrorKind {
@@ -82,6 +91,7 @@ impl ProxyErrorKind {
         match self {
             ProxyErrorKind::AuthenticationError => "authentication_error",
             ProxyErrorKind::ApiError => "api_error",
+            ProxyErrorKind::OverloadedError => "overloaded_error",
         }
     }
 }
@@ -147,9 +157,28 @@ pub async fn anthropic_proxy(
         );
     }
 
-    let (user_id, upstream_key) = match authenticate(&state, &headers, &path).await {
-        Ok(pair) => pair,
+    let (user_id, upstream_key, max_concurrent) = match authenticate(&state, &headers, &path).await
+    {
+        Ok(triple) => triple,
         Err(resp) => return resp,
+    };
+
+    // Acquire concurrency permits BEFORE dispatching upstream. Global cap
+    // first, then per-credential — see HeldPermits / build_downstream_response
+    // for why permits travel with the response stream rather than living
+    // as locals.
+    let global_permit = match try_acquire_global_permit(&state, user_id, &path) {
+        Ok(p) => p,
+        Err(resp) => return resp,
+    };
+    let credential_permit =
+        match try_acquire_credential_permit(&state, user_id, max_concurrent, &path) {
+            Ok(p) => p,
+            Err(resp) => return resp,
+        };
+    let permits = HeldPermits {
+        _credential: credential_permit,
+        _global: global_permit,
     };
 
     let upstream_resp = match forward_to_upstream(
@@ -178,18 +207,18 @@ pub async fn anthropic_proxy(
         "proxied request"
     );
 
-    build_downstream_response(upstream_resp)
+    build_downstream_response(upstream_resp, permits)
 }
 
 /// Concern 1: extract `x-api-key`, resolve it to a user, and load that
 /// user's decrypted Anthropic credential. Returns the
-/// `(user_id, upstream_plaintext_key)` pair on success, or an
-/// Anthropic-shaped error envelope on any auth/credential failure.
+/// `(user_id, upstream_plaintext_key, max_concurrent)` triple on success,
+/// or an Anthropic-shaped error envelope on any auth/credential failure.
 async fn authenticate(
     state: &AppState,
     headers: &HeaderMap,
     path: &str,
-) -> Result<(Uuid, String), Response> {
+) -> Result<(Uuid, String, i32), Response> {
     let tv_token = match headers.get("x-api-key").and_then(|v| v.to_str().ok()) {
         Some(t) if !t.is_empty() => t,
         _ => {
@@ -209,8 +238,8 @@ async fn authenticate(
 
     let token_hash = sha256_hex(tv_token);
     let user_id = resolve_token(state, &token_hash).await?;
-    let upstream_key = load_anthropic_key(state, user_id).await?;
-    Ok((user_id, upstream_key))
+    let (upstream_key, max_concurrent) = load_credential(state, user_id).await?;
+    Ok((user_id, upstream_key, max_concurrent))
 }
 
 /// Concern 2: build the upstream request from the user's downstream
@@ -271,10 +300,20 @@ async fn forward_to_upstream(
 /// `Response` — copies status + allow-listed response headers and streams
 /// the body byte-for-byte via `bytes_stream()` so SSE responses pass
 /// through without buffering.
-fn build_downstream_response(upstream_resp: reqwest::Response) -> Response {
+///
+/// `permits` carries any concurrency permits acquired earlier in the
+/// handler. We attach them to the response stream so they are dropped
+/// only when the *streaming body* finishes — not when this function
+/// returns. Otherwise SSE streams would release capacity the moment the
+/// upstream's headers came back, allowing far more concurrent in-flight
+/// upstream connections than the cap allows.
+fn build_downstream_response(upstream_resp: reqwest::Response, permits: HeldPermits) -> Response {
     let upstream_status = upstream_resp.status();
     let upstream_headers = upstream_resp.headers().clone();
-    let body_stream = upstream_resp.bytes_stream();
+    let body_stream = PermitHoldingStream {
+        inner: upstream_resp.bytes_stream(),
+        _permits: permits,
+    };
 
     let mut downstream = Response::builder().status(upstream_status);
     if let Some(hdrs) = downstream.headers_mut() {
@@ -291,6 +330,41 @@ fn build_downstream_response(upstream_resp: reqwest::Response) -> Response {
                 "Failed to construct downstream response",
             )
         })
+}
+
+/// Bundle of concurrency permits that must be held for the lifetime of a
+/// proxy response (including its streaming body). Permits are released
+/// in field-declaration order on drop, so the per-credential permit
+/// releases before the global one — the inverse of acquisition order.
+struct HeldPermits {
+    _credential: tokio::sync::OwnedSemaphorePermit,
+    _global: Option<tokio::sync::OwnedSemaphorePermit>,
+}
+
+/// Stream wrapper that owns concurrency permits alongside the inner
+/// `bytes_stream()`. Dropping the stream (including via the response
+/// body completing or the client disconnecting) drops the permits.
+struct PermitHoldingStream<S> {
+    inner: S,
+    _permits: HeldPermits,
+}
+
+impl<S> futures_util::Stream for PermitHoldingStream<S>
+where
+    S: futures_util::Stream + Unpin,
+{
+    type Item = S::Item;
+
+    fn poll_next(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Self::Item>> {
+        std::pin::Pin::new(&mut self.inner).poll_next(cx)
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.inner.size_hint()
+    }
 }
 
 /// Resolve a sha256'd TV token to a user_id. Returns:
@@ -367,31 +441,14 @@ async fn resolve_token(state: &AppState, token_hash: &str) -> Result<Uuid, Respo
     }
 }
 
-/// Fetch the user's encrypted Anthropic key from `user_anthropic_keys` and
-/// decrypt it with the server's master `encryption_key`. Returns the
-/// plaintext on success or an Anthropic-shaped error envelope on any
-/// failure (no key configured, no master key on this server, ciphertext
-/// corrupted, DB error).
-async fn load_anthropic_key(state: &AppState, user_id: Uuid) -> Result<String, Response> {
-    let row = UserAnthropicKeyRepo::get_ciphertext(&state.pool, user_id)
-        .await
-        .map_err(|e| {
-            tracing::warn!(
-                user_id = %user_id,
-                error_type = "api_error",
-                err = %e,
-                "failed to load user_anthropic_keys row"
-            );
-            anthropic_error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                ProxyErrorKind::ApiError,
-                "Failed to load upstream credentials",
-            )
-        })?;
-
-    let (encrypted, nonce) = match row {
-        Some(r) => r,
-        None => {
+/// Fetch the user's stored credential (encrypted Anthropic key + cap) and
+/// decrypt the key. Returns `(plaintext, max_concurrent)` on success or an
+/// Anthropic-shaped error envelope on any failure (no key configured, no
+/// master key on this server, ciphertext corrupted, DB error).
+async fn load_credential(state: &AppState, user_id: Uuid) -> Result<(String, i32), Response> {
+    let credential = match UserAnthropicKeyRepo::get_credential(&state.pool, user_id).await {
+        Ok(Some(c)) => c,
+        Ok(None) => {
             tracing::warn!(
                 user_id = %user_id,
                 error_type = "authentication_error",
@@ -402,6 +459,19 @@ async fn load_anthropic_key(state: &AppState, user_id: Uuid) -> Result<String, R
                 StatusCode::UNAUTHORIZED,
                 ProxyErrorKind::AuthenticationError,
                 "No Anthropic API key configured — set one at /me/proxy",
+            ));
+        }
+        Err(e) => {
+            tracing::warn!(
+                user_id = %user_id,
+                error_type = "api_error",
+                err = %e,
+                "failed to load user_anthropic_keys row"
+            );
+            return Err(anthropic_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                ProxyErrorKind::ApiError,
+                "Failed to load upstream credentials",
             ));
         }
     };
@@ -419,19 +489,104 @@ async fn load_anthropic_key(state: &AppState, user_id: Uuid) -> Result<String, R
         )
     })?;
 
-    encryption::decrypt(&encrypted, &nonce, master_key).map_err(|e| {
-        tracing::error!(
-            user_id = %user_id,
-            error_type = "api_error",
-            err = %e,
-            "failed to decrypt stored Anthropic key"
-        );
-        anthropic_error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            ProxyErrorKind::ApiError,
-            "Failed to decrypt upstream credentials",
-        )
-    })
+    let plaintext = encryption::decrypt(&credential.encrypted, &credential.nonce, master_key)
+        .map_err(|e| {
+            tracing::error!(
+                user_id = %user_id,
+                error_type = "api_error",
+                err = %e,
+                "failed to decrypt stored Anthropic key"
+            );
+            anthropic_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                ProxyErrorKind::ApiError,
+                "Failed to decrypt upstream credentials",
+            )
+        })?;
+    Ok((plaintext, credential.max_concurrent))
+}
+
+/// Try to acquire a permit from the optional global concurrency cap. If
+/// no global cap is configured, returns `Ok(None)` so the per-credential
+/// cap is the only gate. On capacity exhaustion returns an
+/// Anthropic-shaped 429 with `overloaded_error`.
+//
+// `Result<_, Response>` is the established error-return shape in this
+// module (see `authenticate`, `forward_to_upstream`).
+#[allow(clippy::result_large_err)]
+fn try_acquire_global_permit(
+    state: &AppState,
+    user_id: Uuid,
+    path: &str,
+) -> Result<Option<tokio::sync::OwnedSemaphorePermit>, Response> {
+    let Some(sem) = state.proxy_global_semaphore.as_ref() else {
+        return Ok(None);
+    };
+    match sem.clone().try_acquire_owned() {
+        Ok(p) => Ok(Some(p)),
+        Err(_) => {
+            tracing::warn!(
+                user_id = %user_id,
+                error_type = "overloaded_error",
+                reason = "global_cap",
+                path = %path,
+                "proxy rejected request: global concurrency cap reached"
+            );
+            Err(anthropic_error(
+                StatusCode::TOO_MANY_REQUESTS,
+                ProxyErrorKind::OverloadedError,
+                "Server is at capacity. Retry shortly.",
+            ))
+        }
+    }
+}
+
+/// Try to acquire a permit from the per-credential concurrency cap.
+/// Lazily creates the semaphore on first use, sized to `max_concurrent`.
+/// On capacity exhaustion returns an Anthropic-shaped 429 with
+/// `overloaded_error` and a message naming the configured cap so the user
+/// can debug it from their `/me/proxy/` UI.
+#[allow(clippy::result_large_err)]
+fn try_acquire_credential_permit(
+    state: &AppState,
+    user_id: Uuid,
+    max_concurrent: i32,
+    path: &str,
+) -> Result<tokio::sync::OwnedSemaphorePermit, Response> {
+    // i32 -> usize is safe because the DB CHECK constraint clamps to (0, 256].
+    // Defensive clamp at the lower end protects against an out-of-spec row.
+    let cap = max_concurrent.max(1) as usize;
+
+    // Look up or insert the per-credential semaphore. The DashMap entry
+    // guard is held only across the `.clone()` of the Arc — never across
+    // the .await/.acquire — so there is no chance of a guard living across
+    // a yield point or self-deadlocking on the same shard.
+    let sem = state
+        .proxy_per_credential_semaphores
+        .entry(user_id)
+        .or_insert_with(|| std::sync::Arc::new(tokio::sync::Semaphore::new(cap)))
+        .clone();
+
+    match sem.try_acquire_owned() {
+        Ok(p) => Ok(p),
+        Err(_) => {
+            tracing::warn!(
+                user_id = %user_id,
+                error_type = "overloaded_error",
+                reason = "per_credential_cap",
+                cap_value = max_concurrent,
+                path = %path,
+                "proxy rejected request: per-credential concurrency cap reached"
+            );
+            Err(anthropic_error(
+                StatusCode::TOO_MANY_REQUESTS,
+                ProxyErrorKind::OverloadedError,
+                &format!(
+                    "Too many concurrent requests against this credential (cap: {max_concurrent}). Retry shortly."
+                ),
+            ))
+        }
+    }
 }
 
 /// Copy allow-listed and `anthropic-*` headers from `src` into `dst`.
@@ -563,5 +718,6 @@ mod tests {
             "authentication_error"
         );
         assert_eq!(ProxyErrorKind::ApiError.as_str(), "api_error");
+        assert_eq!(ProxyErrorKind::OverloadedError.as_str(), "overloaded_error");
     }
 }

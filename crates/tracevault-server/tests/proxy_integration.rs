@@ -35,6 +35,9 @@ use wiremock::{
 struct Harness {
     app: Router,
     upstream: MockServer,
+    /// The same PgPool wired into the AppState — useful for tests that
+    /// seed extra users or keys beyond what the harness creates.
+    pool: sqlx::PgPool,
     /// Raw TV session token to send in x-api-key. Test user has a stored
     /// Anthropic key of `sk-ant-test-upstream-key`.
     user_session_token: String,
@@ -76,6 +79,7 @@ async fn build_harness(pool: sqlx::PgPool) -> Harness {
         &encryption_key,
         user_with_key,
         "sk-ant-test-upstream-key",
+        None,
     )
     .await
     .unwrap();
@@ -91,6 +95,8 @@ async fn build_harness(pool: sqlx::PgPool) -> Harness {
         invite_expiry_minutes: 60,
         embedding_service: None,
         anthropic_upstream_base: upstream.uri(),
+        proxy_global_semaphore: None,
+        proxy_per_credential_semaphores: std::sync::Arc::new(dashmap::DashMap::new()),
     };
 
     let app = Router::new()
@@ -115,6 +121,93 @@ async fn build_harness(pool: sqlx::PgPool) -> Harness {
     Harness {
         app,
         upstream,
+        pool,
+        user_session_token,
+        user_no_key_session_token,
+        org_api_key_token: raw_org_token,
+    }
+}
+
+/// Build a harness with explicit concurrency caps. The default `build_harness`
+/// uses `max_concurrent = 8` (DB default) and no global cap, which works for
+/// every test that does not exercise the cap. The cap-specific tests need
+/// tighter knobs:
+///   * `per_credential_cap`: overrides the seeded user's `max_concurrent`.
+///   * `global_cap`: when `Some(n)`, the AppState carries a global
+///     `Semaphore::new(n)`; when `None`, the global cap is disabled.
+async fn build_harness_with_caps(
+    pool: sqlx::PgPool,
+    per_credential_cap: i32,
+    global_cap: Option<usize>,
+) -> Harness {
+    let upstream = MockServer::start().await;
+
+    let org_id = common::seed_org(&pool).await;
+    let user_with_key = common::seed_user(&pool).await;
+    let user_without_key = common::seed_user(&pool).await;
+    let user_session_token = common::seed_auth_session(&pool, user_with_key).await;
+    let user_no_key_session_token = common::seed_auth_session(&pool, user_without_key).await;
+
+    let raw_org_token = format!("tv_ak_{}", Uuid::new_v4());
+    let org_token_hash = tracevault_server::auth::sha256_hex(&raw_org_token);
+    sqlx::query("INSERT INTO api_keys (org_id, key_hash, name) VALUES ($1, $2, $3)")
+        .bind(org_id)
+        .bind(&org_token_hash)
+        .bind("test-org-key")
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    let encryption_key = common::fixture_encryption_key();
+    tracevault_server::repo::user_anthropic_keys::UserAnthropicKeyRepo::upsert(
+        &pool,
+        &encryption_key,
+        user_with_key,
+        "sk-ant-test-upstream-key",
+        Some(per_credential_cap),
+    )
+    .await
+    .unwrap();
+
+    let proxy_global_semaphore =
+        global_cap.map(|n| std::sync::Arc::new(tokio::sync::Semaphore::new(n)));
+
+    let state = AppState {
+        pool: pool.clone(),
+        repo_manager: repo_manager::RepoManager::new("/tmp"),
+        extensions: tracevault_server::extensions::community_registry(),
+        encryption_key: Some(encryption_key),
+        http_client: reqwest::Client::new(),
+        proxy_http_client: reqwest::Client::new(),
+        cors_origin: "*".to_string(),
+        invite_expiry_minutes: 60,
+        embedding_service: None,
+        anthropic_upstream_base: upstream.uri(),
+        proxy_global_semaphore,
+        proxy_per_credential_semaphores: std::sync::Arc::new(dashmap::DashMap::new()),
+    };
+
+    let app = Router::new()
+        .route(
+            "/proxy/anthropic/{*path}",
+            get(api::proxy::anthropic_proxy)
+                .post(api::proxy::anthropic_proxy)
+                .put(api::proxy::anthropic_proxy)
+                .delete(api::proxy::anthropic_proxy),
+        )
+        .layer(DefaultBodyLimit::max(32 * 1024 * 1024))
+        .route(
+            "/api/v1/me/anthropic-key",
+            get(api::me::get_anthropic_key_status)
+                .put(api::me::put_anthropic_key)
+                .delete(api::me::delete_anthropic_key),
+        )
+        .with_state(state);
+
+    Harness {
+        app,
+        upstream,
+        pool,
         user_session_token,
         user_no_key_session_token,
         org_api_key_token: raw_org_token,
@@ -406,6 +499,7 @@ async fn proxy_returns_502_when_upstream_unreachable(pool: sqlx::PgPool) {
         &encryption_key,
         user,
         "sk-ant-doesnt-matter",
+        None,
     )
     .await
     .unwrap();
@@ -425,6 +519,8 @@ async fn proxy_returns_502_when_upstream_unreachable(pool: sqlx::PgPool) {
         invite_expiry_minutes: 60,
         embedding_service: None,
         anthropic_upstream_base: "http://127.0.0.1:1".to_string(),
+        proxy_global_semaphore: None,
+        proxy_per_credential_semaphores: std::sync::Arc::new(dashmap::DashMap::new()),
     };
 
     let app = Router::new()
@@ -600,6 +696,187 @@ async fn proxy_rejects_path_traversal_segments(pool: sqlx::PgPool) {
     );
 }
 
+// --- Proxy: per-credential and global concurrency caps (#210) -------------
+
+use std::time::Duration;
+
+/// Build a request to the proxy with the standard headers + a marker query
+/// so we can tell wiremock-served requests apart.
+fn proxy_request(token: &str) -> Request<Body> {
+    Request::builder()
+        .method("POST")
+        .uri("/proxy/anthropic/v1/messages")
+        .header("x-api-key", token)
+        .header("content-type", "application/json")
+        .body(Body::from(r#"{"model":"claude-haiku","max_tokens":1}"#))
+        .unwrap()
+}
+
+/// Per-credential cap exceeded: with `max_concurrent = 2`, two in-flight
+/// requests succeed (eventually), but the third in-flight request returns
+/// 429 / `overloaded_error` with `reason = per_credential_cap`.
+#[sqlx::test(migrations = "./migrations")]
+async fn proxy_rejects_when_per_credential_cap_exceeded(pool: sqlx::PgPool) {
+    let h = build_harness_with_caps(pool, 2, None).await;
+
+    // Upstream sits on each request for 2s so the in-flight permits are
+    // really held when we issue the rejecting request.
+    Mock::given(method("POST"))
+        .and(wm_path("/v1/messages"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_string("{}")
+                .set_delay(Duration::from_secs(2)),
+        )
+        .mount(&h.upstream)
+        .await;
+
+    let app = h.app.clone();
+    let token = h.user_session_token.clone();
+
+    // Spawn two slow-but-eventually-OK requests so the per-credential
+    // semaphore is at full capacity. We deliberately do not await these;
+    // they keep the permits held until the wiremock delay elapses or the
+    // task is dropped at end-of-test.
+    let _h1 = tokio::spawn({
+        let app = app.clone();
+        let token = token.clone();
+        async move { app.oneshot(proxy_request(&token)).await }
+    });
+    let _h2 = tokio::spawn({
+        let app = app.clone();
+        let token = token.clone();
+        async move { app.oneshot(proxy_request(&token)).await }
+    });
+
+    // Brief yield so both spawned tasks reach the acquire/upstream-send
+    // boundary before we issue the rejecting request.
+    tokio::time::sleep(Duration::from_millis(150)).await;
+
+    let resp = app
+        .clone()
+        .oneshot(proxy_request(&token))
+        .await
+        .expect("third request should respond, not panic");
+    assert_eq!(
+        resp.status(),
+        StatusCode::TOO_MANY_REQUESTS,
+        "third in-flight request must hit the per-credential cap"
+    );
+    let body = read_body_to_value(resp.into_body()).await;
+    assert_eq!(body["type"], "error");
+    assert_eq!(body["error"]["type"], "overloaded_error");
+    let msg = body["error"]["message"].as_str().unwrap_or("");
+    assert!(
+        msg.contains("cap: 2"),
+        "error message should name the configured cap; got: {msg}"
+    );
+}
+
+/// After the in-flight requests complete and release their permits, a
+/// new request must succeed. Guards against the bug where permits leak.
+#[sqlx::test(migrations = "./migrations")]
+async fn proxy_frees_permit_when_request_completes(pool: sqlx::PgPool) {
+    let h = build_harness_with_caps(pool, 1, None).await;
+
+    Mock::given(method("POST"))
+        .and(wm_path("/v1/messages"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_string("{}")
+                .set_delay(Duration::from_millis(100)),
+        )
+        .mount(&h.upstream)
+        .await;
+
+    // Cap is 1. First request must succeed.
+    let r1 = h
+        .app
+        .clone()
+        .oneshot(proxy_request(&h.user_session_token))
+        .await
+        .unwrap();
+    assert_eq!(r1.status(), StatusCode::OK);
+    // Drain the body so the streaming permit is dropped — otherwise the
+    // permit stays held until r1.into_body() is consumed.
+    let _ = read_body_to_bytes(r1.into_body()).await;
+
+    // Second request, sequential, after the first completes: must succeed.
+    // If the permit leaked we'd get 429 here instead.
+    let r2 = h
+        .app
+        .clone()
+        .oneshot(proxy_request(&h.user_session_token))
+        .await
+        .unwrap();
+    assert_eq!(
+        r2.status(),
+        StatusCode::OK,
+        "second sequential request must succeed once the first releases its permit"
+    );
+}
+
+/// Global cap exceeded: with `Semaphore::new(1)`, one in-flight request
+/// from any user holds the only global slot; a request from a *different*
+/// user must be rejected with `reason = global_cap`.
+#[sqlx::test(migrations = "./migrations")]
+async fn proxy_rejects_when_global_cap_exceeded(pool: sqlx::PgPool) {
+    let h = build_harness_with_caps(pool, 8, Some(1)).await;
+
+    // Seed a second user + session with their own Anthropic key so we can
+    // prove the cap is global (cross-user), not per-credential.
+    let second_user = common::seed_user(&h.pool).await;
+    let second_token = common::seed_auth_session(&h.pool, second_user).await;
+    let encryption_key = common::fixture_encryption_key();
+    tracevault_server::repo::user_anthropic_keys::UserAnthropicKeyRepo::upsert(
+        &h.pool,
+        &encryption_key,
+        second_user,
+        "sk-ant-second-upstream-key",
+        Some(8),
+    )
+    .await
+    .unwrap();
+
+    Mock::given(method("POST"))
+        .and(wm_path("/v1/messages"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_string("{}")
+                .set_delay(Duration::from_secs(2)),
+        )
+        .mount(&h.upstream)
+        .await;
+
+    let app = h.app.clone();
+
+    // User 1 holds the only global slot.
+    let token1 = h.user_session_token.clone();
+    let _holder = tokio::spawn({
+        let app = app.clone();
+        async move { app.oneshot(proxy_request(&token1)).await }
+    });
+    tokio::time::sleep(Duration::from_millis(150)).await;
+
+    // User 2 tries to use the proxy — they have their own per-credential
+    // budget but the global cap is exhausted, so this must 429.
+    let resp = app
+        .clone()
+        .oneshot(proxy_request(&second_token))
+        .await
+        .expect("request should respond, not panic");
+    assert_eq!(resp.status(), StatusCode::TOO_MANY_REQUESTS);
+    let body = read_body_to_value(resp.into_body()).await;
+    assert_eq!(body["error"]["type"], "overloaded_error");
+    assert!(
+        body["error"]["message"]
+            .as_str()
+            .unwrap_or("")
+            .contains("Server is at capacity"),
+        "global cap rejection should use the server-wide message: {body}"
+    );
+}
+
 // --- /api/v1/me/anthropic-key HTTP lifecycle (deferred from T02) ---------
 
 #[sqlx::test(migrations = "./migrations")]
@@ -622,6 +899,8 @@ async fn me_anthropic_key_lifecycle(pool: sqlx::PgPool) {
         invite_expiry_minutes: 60,
         embedding_service: None,
         anthropic_upstream_base: upstream.uri(),
+        proxy_global_semaphore: None,
+        proxy_per_credential_semaphores: std::sync::Arc::new(dashmap::DashMap::new()),
     };
 
     let app = Router::new()
