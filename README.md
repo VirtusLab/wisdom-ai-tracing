@@ -307,7 +307,7 @@ npm install --prefix tools/review-mcp
 - **`mcp__cargo__cargo_audit`** — runs `cargo audit`. Required when `Cargo.lock` changes.
 
 **`tools/review-mcp/`** — required by the validation-scoped self-review policy:
-- **`mcp__review__agent_review`** — assembles the diff + full context of touched files and returns a review prompt. Call this inside a validation window before pushing to Rust files.
+- **`mcp__review__agent_review`** — assembles the diff + full context of touched files and returns a review prompt. Call this inside a verification phase before pushing to Rust files.
 
 **Optional — session history queries:**
 
@@ -341,7 +341,7 @@ configured on the server and take precedence over anything below.
 Use conventional commits: https://www.conventionalcommits.org/en/v1.0.0/
 ```
 
-`tracevault agent-policies` fetches Markdown instructions rendered by the server from the active policies — which tools must be called before push, which must succeed, what file patterns trigger conditional checks, and how the validation window works. The same output is available via the `agent_policies` MCP tool and as a **Preview** button on each repo page in the dashboard. When policies change, the output updates automatically.
+`tracevault agent-policies` fetches Markdown instructions rendered by the server from the active policies — which tools must be called before push, which must succeed, what file patterns trigger conditional checks, and how the verification phase works. The same output is available via the `agent_policies` MCP tool and as a **Preview** button on each repo page in the dashboard. When policies change, the output updates automatically.
 
 > **Tool installation:** Rendered instructions reference tools by their literal name (e.g. `mcp__cargo__cargo_fmt`). Make sure those tools are installed in your agent setup. See [Install project-local MCP tools](#4-install-project-local-mcp-tools) for the bundled tools shipped with this repo.
 
@@ -358,7 +358,7 @@ In the Visdom Trace dashboard, under **Repos → [your repo] → Policies**, you
 
 Actions: **Block push** (exit non-zero, prevents `git push`) or **Warn** (logs but allows).
 
-Scope: **Session** (evaluate all tool calls in the session) or **Validation** (evaluate only tools called after `tracevault validation-start`).
+Scope: **Session** (evaluate all tool calls in the session) or **Verification phase** (evaluate only tools called after `tracevault verify-start`).
 
 ## Keys & Secrets
 
@@ -418,7 +418,7 @@ export DATABASE_URL=postgres://user:password@host:5432/tracevault?sslmode=requir
 | `tracevault stream --event <type>` | Handle a Claude Code hook event (reads JSON from stdin) and stream it to the server |
 | `tracevault sync` | Sync repo metadata with the server |
 | `tracevault check` | Evaluate policies against server rules, exit non-zero if blocked |
-| `tracevault validation-start [--session-id ID]` | Open a validation window. Call this when work is complete and you are ready to run pre-push validation tools. Validation-scoped policies only evaluate tools called after this point. Calling it again invalidates the previous window. |
+| `tracevault verify-start [--session-id ID]` | Open a verification phase. Call this when work is complete and you are ready to run pre-push validation tools. Verification-phase-scoped policies only evaluate tools called after this point. Calling it again invalidates the previous phase. |
 | `tracevault stats` | Show local session statistics |
 | `tracevault verify` | Verify commits are registered and sealed on the server (`--commits` or `--range`) |
 | `tracevault status` | Show current session status (not yet implemented) |
@@ -443,11 +443,11 @@ Each policy has a configurable action:
 
 Fail-closed: if the server is unreachable, `tracevault check` blocks the push.
 
-### Validation Scope
+### Verification Scope
 
-A validation window is a pre-push gate phase. When work is complete and the agent is ready to push, it opens a validation window with `tracevault validation-start`, then runs all tools required by Validation-scoped policies (formatters, linters, security scanners, code review tools). Only tools explicitly allowed by those policies should be called between the window opening and the push.
+A verification phase is a pre-push gate phase. When work is complete and the agent is ready to push, it opens a verification phase with `tracevault verify-start`, then runs all tools required by Verification-phase-scoped policies (formatters, linters, security scanners, code review tools). Only tools explicitly allowed by those policies should be called between entering the phase and the push.
 
-If a validation tool fails and the agent needs to make a fix, it must restart the window (`tracevault validation-start` again) before rerunning the tools — the previous window is invalidated and all expected tools must be called again from scratch.
+If a validation tool fails and the agent needs to make a fix, it must restart the phase (`tracevault verify-start` again) before rerunning the tools — the previous phase is invalidated and all expected tools must be called again from scratch.
 
 This ensures the audit trail proves that every required quality gate was run against the final state of the code, not just at some earlier point in a long session.
 
