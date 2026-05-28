@@ -9,7 +9,12 @@
 	interface AnthropicKeyStatus {
 		configured: boolean;
 		configured_at: string | null;
+		max_concurrent: number | null;
 	}
+
+	const DEFAULT_MAX_CONCURRENT = 8;
+	const MIN_MAX_CONCURRENT = 1;
+	const MAX_MAX_CONCURRENT = 256;
 
 	let status: AnthropicKeyStatus | null = $state(null);
 	let loading = $state(true);
@@ -19,6 +24,7 @@
 	let error = $state('');
 	let success = $state('');
 	let newKey = $state('');
+	let newMaxConcurrent: number = $state(DEFAULT_MAX_CONCURRENT);
 	let copied = $state(false);
 
 	const proxyBaseUrl = $derived(
@@ -34,6 +40,11 @@
 		error = '';
 		try {
 			status = await api.get<AnthropicKeyStatus>('/api/v1/me/anthropic-key');
+			// Pre-fill the form's cap with whatever's currently stored so a
+			// "just rotate the key" flow doesn't accidentally reset the cap.
+			if (status?.max_concurrent != null) {
+				newMaxConcurrent = status.max_concurrent;
+			}
 		} catch (err) {
 			error = err instanceof Error ? err.message : 'Failed to load proxy configuration';
 		} finally {
@@ -44,11 +55,25 @@
 	async function handleSave(event: SubmitEvent) {
 		event.preventDefault();
 		if (!newKey.trim()) return;
+		// Defensive client-side bounds check. The server enforces the same
+		// range (DB CHECK + handler validation) but failing here gives a
+		// clearer error than a 400 from the API.
+		if (
+			!Number.isInteger(newMaxConcurrent) ||
+			newMaxConcurrent < MIN_MAX_CONCURRENT ||
+			newMaxConcurrent > MAX_MAX_CONCURRENT
+		) {
+			error = `Max concurrent must be a whole number between ${MIN_MAX_CONCURRENT} and ${MAX_MAX_CONCURRENT}.`;
+			return;
+		}
 		saving = true;
 		error = '';
 		success = '';
 		try {
-			await api.put<void>('/api/v1/me/anthropic-key', { key: newKey.trim() });
+			await api.put<void>('/api/v1/me/anthropic-key', {
+				key: newKey.trim(),
+				max_concurrent: newMaxConcurrent
+			});
 			newKey = '';
 			success = 'Anthropic API key saved.';
 			await loadStatus();
@@ -154,6 +179,11 @@
 								>last set {formatTimestamp(status.configured_at)}</span
 							>
 						{/if}
+						{#if status.max_concurrent != null}
+							<span class="text-muted-foreground" title="Max concurrent proxy requests">
+								&middot; cap {status.max_concurrent}
+							</span>
+						{/if}
 					</div>
 				{:else}
 					<div class="flex items-center gap-2 text-sm">
@@ -185,6 +215,24 @@
 								rel="noreferrer"
 								class="underline">console.anthropic.com</a
 							>.
+						</p>
+					</div>
+
+					<div class="grid gap-2">
+						<Label for="max_concurrent">Max concurrent requests</Label>
+						<Input
+							id="max_concurrent"
+							type="number"
+							min={MIN_MAX_CONCURRENT}
+							max={MAX_MAX_CONCURRENT}
+							step={1}
+							bind:value={newMaxConcurrent}
+							class="max-w-[8rem]"
+						/>
+						<p class="text-muted-foreground text-xs">
+							The proxy rejects further requests for this credential once this many are in
+							flight. Range {MIN_MAX_CONCURRENT}–{MAX_MAX_CONCURRENT}; default {DEFAULT_MAX_CONCURRENT}.
+							New value applies on the next server restart.
 						</p>
 					</div>
 
