@@ -32,9 +32,19 @@ impl FromRequestParts<AppState> for AuthUser {
 
         let token_hash = sha256_hex(header);
 
-        // Try auth_sessions first
+        // Sliding session window: on every successful auth, bump expires_at
+        // to NOW() + 30 days. As long as the user touches TV at least once
+        // per 30 days, the token never expires from their perspective.
+        // Inactive users still hit the 30-day cliff and must re-login.
+        //
+        // Using UPDATE..RETURNING means we atomically (a) verify the token
+        // is still valid (the WHERE filters expired rows out), (b) extend
+        // it, (c) read back the user_id — one round-trip, no race.
         let session_row = sqlx::query_as::<_, (Uuid,)>(
-            "SELECT user_id FROM auth_sessions WHERE token_hash = $1 AND expires_at > NOW()",
+            "UPDATE auth_sessions
+             SET expires_at = NOW() + INTERVAL '30 days'
+             WHERE token_hash = $1 AND expires_at > NOW()
+             RETURNING user_id",
         )
         .bind(&token_hash)
         .fetch_optional(&state.pool)
@@ -120,9 +130,14 @@ impl FromRequestParts<AppState> for OrgAuth {
 
         let org_id = org_row.0;
 
-        // Try session auth
+        // Try session auth — sliding window: same pattern as AuthUser, see
+        // the comment there. UPDATE..RETURNING atomically bumps expires_at
+        // and returns the user_id only when the token is still valid.
         let session_row = sqlx::query_as::<_, (Uuid,)>(
-            "SELECT user_id FROM auth_sessions WHERE token_hash = $1 AND expires_at > NOW()",
+            "UPDATE auth_sessions
+             SET expires_at = NOW() + INTERVAL '30 days'
+             WHERE token_hash = $1 AND expires_at > NOW()
+             RETURNING user_id",
         )
         .bind(&token_hash)
         .fetch_optional(&state.pool)
