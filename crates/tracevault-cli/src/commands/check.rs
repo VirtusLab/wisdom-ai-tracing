@@ -135,31 +135,38 @@ fn collect_session_data(session_dir: &Path) -> Option<SessionCheckData> {
 pub async fn check_policies(project_root: &Path) -> Result<(), Box<dyn std::error::Error>> {
     let (server_url, token) = resolve_credentials(project_root);
 
-    let server_url = match server_url {
-        Some(url) => url,
-        None => {
-            return Err("No server URL configured. Run 'tracevault login' first.".into());
-        }
-    };
+    let server_url = server_url
+        .ok_or("No server URL configured. Run `tracevault login --server-url=<url>` to set one.")?;
 
     if token.is_none() {
-        return Err("Not logged in. Run 'tracevault login' to check policies.".into());
+        return Err(
+            "Not logged in. Run `tracevault login --server-url=<server_url>` to authenticate."
+                .into(),
+        );
     }
 
     let org_slug = TracevaultConfig::load(project_root)
         .and_then(|c| c.org_slug)
-        .ok_or("No org_slug in config. Run 'tracevault init' first.")?;
+        .ok_or("No org_slug in config. Run `tracevault init` first.")?;
 
     let client = ApiClient::new(&server_url, token.as_deref());
 
-    // Resolve repo_id by name
+    // Resolve repo_id by name.
+    //
+    // Connectivity errors here (auth expired, server down, network
+    // unreachable) propagate so the pre-push hook exits non-zero — if a
+    // repo is opted into TraceVault, every push must be evaluated, full
+    // stop. Letting pushes slip when TV is unreachable would defeat the
+    // point of enforcement. We attach an actionable next step to each
+    // error so the user (or agent) knows the recovery command without
+    // guessing — see `connectivity_message` below.
     let repo_name = git_repo_name(project_root);
-    let repos = client.list_repos(&org_slug).await?;
+    let repos = client
+        .list_repos(&org_slug)
+        .await
+        .map_err(|e| connectivity_message(&e.to_string()))?;
     let repo = repos.iter().find(|r| r.name == repo_name).ok_or_else(|| {
-        format!(
-            "Repo '{}' not found on server. Run 'tracevault sync' first.",
-            repo_name
-        )
+        format!("Repo '{repo_name}' not found on server. Run `tracevault sync` first.")
     })?;
 
     // Collect session data from unpushed sessions
@@ -200,7 +207,8 @@ pub async fn check_policies(project_root: &Path) -> Result<(), Box<dyn std::erro
                 commit_sha,
             },
         )
-        .await?;
+        .await
+        .map_err(|e| connectivity_message(&e.to_string()))?;
 
     // Print results
     for r in &result.results {
@@ -226,4 +234,88 @@ pub async fn check_policies(project_root: &Path) -> Result<(), Box<dyn std::erro
     }
 
     Ok(())
+}
+
+/// Wrap an opaque API-client error string with the most useful next step.
+/// Today the api_client surfaces errors as `"Stream failed (401 ...)"` or
+/// `"Server returned 500: ..."` strings; we sniff for the common shapes
+/// and surface a one-line action.
+fn connectivity_message(raw: &str) -> String {
+    let lower = raw.to_ascii_lowercase();
+    let action = if lower.contains("401") || lower.contains("unauthorized") {
+        Some("Session token may be expired. Run `tracevault login --server-url=<server_url>` to refresh.")
+    } else if lower.contains("403") || lower.contains("forbidden") {
+        Some("Your token lacks access to this repo's policies. Check your org membership and rerun `tracevault login`.")
+    } else if lower.contains("dns")
+        || lower.contains("connect")
+        || lower.contains("timed out")
+        || lower.contains("timeout")
+        || lower.contains("connection refused")
+    {
+        Some("Could not reach the TraceVault server. Check network and `server_url` in .tracevault/config.toml.")
+    } else if lower.contains("5") && (lower.contains("server error") || lower.contains("internal"))
+    {
+        Some("TraceVault server returned an error. The team has likely been paged; retry shortly.")
+    } else {
+        None
+    };
+
+    match action {
+        Some(a) => format!("Policy check could not run: {raw}.\n  → {a}"),
+        None => format!("Policy check could not run: {raw}."),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::connectivity_message;
+
+    #[test]
+    fn connectivity_message_suggests_login_on_401() {
+        let m = connectivity_message("Stream failed (401 Unauthorized): bad token");
+        assert!(
+            m.contains("tracevault login"),
+            "401 errors must surface the login hint; got: {m}"
+        );
+    }
+
+    #[test]
+    fn connectivity_message_suggests_login_on_unauthorized_text() {
+        let m = connectivity_message("Server returned: unauthorized request");
+        assert!(m.contains("tracevault login"));
+    }
+
+    #[test]
+    fn connectivity_message_suggests_network_check_on_dns_error() {
+        let m = connectivity_message("error sending request for url: dns error");
+        assert!(
+            m.to_lowercase().contains("network") || m.to_lowercase().contains("server_url"),
+            "DNS errors must surface a network hint; got: {m}"
+        );
+    }
+
+    #[test]
+    fn connectivity_message_suggests_network_check_on_connection_refused() {
+        let m = connectivity_message("connection refused");
+        assert!(m.to_lowercase().contains("network"));
+    }
+
+    #[test]
+    fn connectivity_message_falls_back_when_unrecognized() {
+        let m = connectivity_message("some weird new error shape we have not seen before");
+        // No suggestion — but the raw error must still be in the message so
+        // the user can debug.
+        assert!(m.contains("some weird new error shape"));
+        assert!(!m.contains("→")); // no action arrow
+    }
+
+    #[test]
+    fn connectivity_message_does_not_collide_on_403() {
+        let m = connectivity_message("403 Forbidden");
+        // 403 should suggest org membership, NOT a re-login.
+        assert!(
+            m.to_lowercase().contains("membership"),
+            "403 should mention membership; got: {m}"
+        );
+    }
 }
