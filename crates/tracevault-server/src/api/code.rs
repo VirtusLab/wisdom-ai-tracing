@@ -279,7 +279,10 @@ pub async fn get_tree(
     } else {
         // Prevent path traversal attacks by rejecting paths containing '..'.
         let path = std::path::Path::new(&query.path);
-        if path.components().any(|c| c == std::path::Component::ParentDir) {
+        if path
+            .components()
+            .any(|c| c == std::path::Component::ParentDir)
+        {
             return Err(AppError::BadRequest(format!(
                 "Invalid input: {}",
                 path.display()
