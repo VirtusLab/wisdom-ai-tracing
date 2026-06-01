@@ -260,6 +260,19 @@ async fn main() {
                 .put(api::me::put_anthropic_key)
                 .delete(api::me::delete_anthropic_key),
         )
+        .route("/api/v1/me/credentials", get(api::me::list_credentials))
+        .route(
+            "/api/v1/me/credentials/{name}",
+            put(api::me::put_credential).delete(api::me::delete_credential),
+        )
+        .route(
+            "/api/v1/me/proxy-routing",
+            get(api::me::list_routing_rules).put(api::me::put_routing_rule),
+        )
+        .route(
+            "/api/v1/me/proxy-routing/{id}",
+            delete(api::me::delete_routing_rule),
+        )
         // Org management (create is org-agnostic)
         .route("/api/v1/orgs", post(api::orgs::create_org))
         // Org-scoped: org details & members

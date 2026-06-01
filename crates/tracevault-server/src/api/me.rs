@@ -5,7 +5,11 @@
 //! Future per-user settings (preferences, personal access tokens, etc.) belong
 //! here as they're added.
 
-use axum::{extract::State, http::StatusCode, Json};
+use axum::{
+    extract::{Path, State},
+    http::StatusCode,
+    Json,
+};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -253,4 +257,244 @@ pub async fn delete_anthropic_key(
     // Step 1: the UI manages a single "default" credential.
     CredentialRepo::delete(&state.pool, user_id, "default").await?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+// --- Named credentials CRUD (`/api/v1/me/credentials`) -------------------
+
+/// One credential as surfaced by `GET /api/v1/me/credentials` — never carries
+/// key material.
+#[derive(Serialize)]
+pub struct CredentialItem {
+    pub name: String,
+    pub protocol: String,
+    pub base_url: String,
+    pub max_concurrent: i32,
+    pub configured_at: DateTime<Utc>,
+}
+
+#[derive(Deserialize)]
+pub struct PutCredentialRequest {
+    /// Optional new key. Omit on a settings-only (cap) update of an existing
+    /// credential. At least one of `key`, `max_concurrent`, or `base_url`
+    /// must be present.
+    #[serde(default)]
+    pub key: Option<String>,
+    /// Optional upstream base URL. Only settable alongside a `key` (the row is
+    /// re-encrypted on store), mirroring `put_anthropic_key`.
+    #[serde(default)]
+    pub base_url: Option<String>,
+    /// Optional per-credential proxy concurrency cap (1..=256).
+    #[serde(default)]
+    pub max_concurrent: Option<i32>,
+}
+
+/// GET /api/v1/me/credentials
+///
+/// Lists all of the caller's named credentials (no key material).
+pub async fn list_credentials(
+    State(state): State<AppState>,
+    auth: AuthUser,
+) -> Result<Json<Vec<CredentialItem>>, AppError> {
+    let user_id = require_real_user(&auth)?;
+    let items = CredentialRepo::list(&state.pool, user_id).await?;
+    Ok(Json(
+        items
+            .into_iter()
+            .map(|c| CredentialItem {
+                name: c.name,
+                protocol: c.protocol,
+                base_url: c.base_url,
+                max_concurrent: c.max_concurrent,
+                configured_at: c.configured_at,
+            })
+            .collect(),
+    ))
+}
+
+/// PUT /api/v1/me/credentials/{name}
+///
+/// Creates or updates the named credential. The validation rules mirror
+/// `put_anthropic_key` exactly (key prefix/length, `base_url` SSRF-validation,
+/// cap bounds, and "base_url requires a key"). On the user's first-ever
+/// credential the default routing rule is seeded to point at it.
+pub async fn put_credential(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(name): Path<String>,
+    Json(req): Json<PutCredentialRequest>,
+) -> Result<StatusCode, AppError> {
+    let user_id = require_real_user(&auth)?;
+
+    if req.key.is_none() && req.max_concurrent.is_none() && req.base_url.is_none() {
+        return Err(AppError::BadRequest(
+            "Request must include `key`, `max_concurrent`, or `base_url`".into(),
+        ));
+    }
+
+    if let Some(n) = req.max_concurrent {
+        if !(1..=256).contains(&n) {
+            return Err(AppError::BadRequest(
+                "max_concurrent must be between 1 and 256".into(),
+            ));
+        }
+    }
+
+    match req.key.as_deref() {
+        Some(raw_key) => {
+            store_credential(
+                &state,
+                user_id,
+                &name,
+                raw_key,
+                req.base_url.as_deref(),
+                req.max_concurrent,
+            )
+            .await?;
+            // First credential seeds the default rule pointing at it. A no-op
+            // once the user already has a default rule.
+            RoutingRepo::ensure_default(&state.pool, user_id, &name).await?;
+        }
+        None => {
+            // base_url can only be applied alongside a key (the row is
+            // re-encrypted on store); reject it on the no-key path rather than
+            // silently dropping it — same as `put_anthropic_key`.
+            if req.base_url.is_some() {
+                return Err(AppError::BadRequest(
+                    "Changing base_url requires also providing the key".into(),
+                ));
+            }
+            if let Some(n) = req.max_concurrent {
+                let updated =
+                    CredentialRepo::update_max_concurrent(&state.pool, user_id, &name, n).await?;
+                if !updated {
+                    return Err(AppError::BadRequest(
+                        "Cannot update settings: no credential configured yet".into(),
+                    ));
+                }
+            }
+        }
+    }
+
+    // Flush the in-memory per-credential semaphore so the next request
+    // rebuilds it against the new cap (or freshly-persisted row).
+    state.proxy_per_credential_semaphores.remove(&user_id);
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// DELETE /api/v1/me/credentials/{name}
+///
+/// Removes the named credential. Idempotent — returns 204 even when no such
+/// credential exists. The FK cascade drops any routing rules pointing at it.
+pub async fn delete_credential(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(name): Path<String>,
+) -> Result<StatusCode, AppError> {
+    let user_id = require_real_user(&auth)?;
+    CredentialRepo::delete(&state.pool, user_id, &name).await?;
+    state.proxy_per_credential_semaphores.remove(&user_id);
+    Ok(StatusCode::NO_CONTENT)
+}
+
+// --- Proxy routing rules (`/api/v1/me/proxy-routing`) --------------------
+
+/// One routing rule as surfaced by `GET /api/v1/me/proxy-routing`. A `null`
+/// `match_model` is the default rule (all otherwise-unmatched models).
+#[derive(Serialize)]
+pub struct RoutingRuleItem {
+    pub id: Uuid,
+    pub match_model: Option<String>,
+    pub credential_name: String,
+    pub provider_model: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub struct PutRoutingRuleRequest {
+    /// The request model to match exactly. `null`/omitted repoints the default
+    /// rule (all otherwise-unmatched models).
+    #[serde(default)]
+    pub match_model: Option<String>,
+    /// The credential this rule routes to. Must be one of the caller's
+    /// existing credentials.
+    pub credential_name: String,
+    /// Optional provider-side model to rewrite the request to. `null`/omitted
+    /// forwards the requested model verbatim.
+    #[serde(default)]
+    pub provider_model: Option<String>,
+}
+
+/// GET /api/v1/me/proxy-routing
+///
+/// Lists the caller's routing rules (default rule first, then model rules).
+pub async fn list_routing_rules(
+    State(state): State<AppState>,
+    auth: AuthUser,
+) -> Result<Json<Vec<RoutingRuleItem>>, AppError> {
+    let user_id = require_real_user(&auth)?;
+    let rules = RoutingRepo::list(&state.pool, user_id).await?;
+    Ok(Json(
+        rules
+            .into_iter()
+            .map(|r| RoutingRuleItem {
+                id: r.id,
+                match_model: r.match_model,
+                credential_name: r.credential_name,
+                provider_model: r.provider_model,
+            })
+            .collect(),
+    ))
+}
+
+/// PUT /api/v1/me/proxy-routing
+///
+/// Creates or updates a routing rule keyed by `match_model` (`null` = the
+/// default rule). The referenced `credential_name` must already exist among
+/// the caller's credentials — we check up front and return a 400 with a clear
+/// message, so the FK constraint never surfaces as a generic 500.
+pub async fn put_routing_rule(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Json(req): Json<PutRoutingRuleRequest>,
+) -> Result<StatusCode, AppError> {
+    let user_id = require_real_user(&auth)?;
+
+    // Guard the FK before the upsert: a rule pointing at a missing credential
+    // would otherwise fail with a 500 from the constraint violation.
+    let credentials = CredentialRepo::list(&state.pool, user_id).await?;
+    if !credentials.iter().any(|c| c.name == req.credential_name) {
+        return Err(AppError::BadRequest(format!(
+            "no credential named '{}'",
+            req.credential_name
+        )));
+    }
+
+    RoutingRepo::upsert_rule(
+        &state.pool,
+        user_id,
+        req.match_model.as_deref(),
+        &req.credential_name,
+        req.provider_model.as_deref(),
+    )
+    .await?;
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// DELETE /api/v1/me/proxy-routing/{id}
+///
+/// Removes the model routing rule with the given id. Returns 404 when no such
+/// rule exists or it is the (non-deletable) default rule.
+pub async fn delete_routing_rule(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(id): Path<Uuid>,
+) -> Result<StatusCode, AppError> {
+    let user_id = require_real_user(&auth)?;
+    let deleted = RoutingRepo::delete_rule(&state.pool, user_id, id).await?;
+    if deleted {
+        Ok(StatusCode::NO_CONTENT)
+    } else {
+        Err(AppError::NotFound("routing rule not found".into()))
+    }
 }
