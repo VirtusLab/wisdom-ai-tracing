@@ -51,8 +51,8 @@ struct Harness {
 async fn build_harness(pool: sqlx::PgPool) -> Harness {
     let upstream = MockServer::start().await;
 
-    // Seed: org, two users, two sessions, one user_anthropic_keys row, one
-    // org api_key.
+    // Seed: org, two users, two sessions, one credential + default routing
+    // rule, one org api_key.
     let org_id = common::seed_org(&pool).await;
     let user_with_key = common::seed_user(&pool).await;
     let user_without_key = common::seed_user(&pool).await;
@@ -74,15 +74,20 @@ async fn build_harness(pool: sqlx::PgPool) -> Harness {
 
     let encryption_key = common::fixture_encryption_key();
 
-    tracevault_server::repo::user_anthropic_keys::UserAnthropicKeyRepo::upsert(
+    tracevault_server::repo::credentials::CredentialRepo::upsert(
         &pool,
         &encryption_key,
         user_with_key,
+        "default",
+        &upstream.uri(),
         "sk-ant-test-upstream-key",
         None,
     )
     .await
     .unwrap();
+    tracevault_server::repo::routing::RoutingRepo::ensure_default(&pool, user_with_key, "default")
+        .await
+        .unwrap();
 
     let state = AppState {
         pool: pool.clone(),
@@ -94,7 +99,7 @@ async fn build_harness(pool: sqlx::PgPool) -> Harness {
         cors_origin: "*".to_string(),
         invite_expiry_minutes: 60,
         embedding_service: None,
-        anthropic_upstream_base: upstream.uri(),
+        default_credential_base_url: upstream.uri(),
         proxy_global_semaphore: None,
         proxy_per_credential_semaphores: std::sync::Arc::new(dashmap::DashMap::new()),
     };
@@ -159,15 +164,20 @@ async fn build_harness_with_caps(
         .unwrap();
 
     let encryption_key = common::fixture_encryption_key();
-    tracevault_server::repo::user_anthropic_keys::UserAnthropicKeyRepo::upsert(
+    tracevault_server::repo::credentials::CredentialRepo::upsert(
         &pool,
         &encryption_key,
         user_with_key,
+        "default",
+        &upstream.uri(),
         "sk-ant-test-upstream-key",
         Some(per_credential_cap),
     )
     .await
     .unwrap();
+    tracevault_server::repo::routing::RoutingRepo::ensure_default(&pool, user_with_key, "default")
+        .await
+        .unwrap();
 
     let proxy_global_semaphore =
         global_cap.map(|n| std::sync::Arc::new(tokio::sync::Semaphore::new(n)));
@@ -182,7 +192,7 @@ async fn build_harness_with_caps(
         cors_origin: "*".to_string(),
         invite_expiry_minutes: 60,
         embedding_service: None,
-        anthropic_upstream_base: upstream.uri(),
+        default_credential_base_url: upstream.uri(),
         proxy_global_semaphore,
         proxy_per_credential_semaphores: std::sync::Arc::new(dashmap::DashMap::new()),
     };
@@ -494,15 +504,22 @@ async fn proxy_returns_502_when_upstream_unreachable(pool: sqlx::PgPool) {
     let user = common::seed_user(&pool).await;
     let session = common::seed_auth_session(&pool, user).await;
     let encryption_key = common::fixture_encryption_key();
-    tracevault_server::repo::user_anthropic_keys::UserAnthropicKeyRepo::upsert(
+    // The credential's own base_url is the unreachable address — that is what
+    // the proxy forwards to now (not the AppState field).
+    tracevault_server::repo::credentials::CredentialRepo::upsert(
         &pool,
         &encryption_key,
         user,
+        "default",
+        "http://127.0.0.1:1",
         "sk-ant-doesnt-matter",
         None,
     )
     .await
     .unwrap();
+    tracevault_server::repo::routing::RoutingRepo::ensure_default(&pool, user, "default")
+        .await
+        .unwrap();
 
     let state = AppState {
         pool: pool.clone(),
@@ -518,7 +535,7 @@ async fn proxy_returns_502_when_upstream_unreachable(pool: sqlx::PgPool) {
         cors_origin: "*".to_string(),
         invite_expiry_minutes: 60,
         embedding_service: None,
-        anthropic_upstream_base: "http://127.0.0.1:1".to_string(),
+        default_credential_base_url: "http://127.0.0.1:1".to_string(),
         proxy_global_semaphore: None,
         proxy_per_credential_semaphores: std::sync::Arc::new(dashmap::DashMap::new()),
     };
@@ -668,7 +685,7 @@ async fn proxy_accepts_large_body_within_raised_limit(pool: sqlx::PgPool) {
 
 /// `..` segments in the proxy path must be rejected at the router entry
 /// with an Anthropic-shaped error envelope. Belt-and-braces against future
-/// reconfiguration of `anthropic_upstream_base` to a path-prefixed URL.
+/// reconfiguration of a credential `base_url` to a path-prefixed URL.
 #[sqlx::test(migrations = "./migrations")]
 async fn proxy_rejects_path_traversal_segments(pool: sqlx::PgPool) {
     let h = build_harness(pool).await;
@@ -828,15 +845,20 @@ async fn proxy_rejects_when_global_cap_exceeded(pool: sqlx::PgPool) {
     let second_user = common::seed_user(&h.pool).await;
     let second_token = common::seed_auth_session(&h.pool, second_user).await;
     let encryption_key = common::fixture_encryption_key();
-    tracevault_server::repo::user_anthropic_keys::UserAnthropicKeyRepo::upsert(
+    tracevault_server::repo::credentials::CredentialRepo::upsert(
         &h.pool,
         &encryption_key,
         second_user,
+        "default",
+        &h.upstream.uri(),
         "sk-ant-second-upstream-key",
         Some(8),
     )
     .await
     .unwrap();
+    tracevault_server::repo::routing::RoutingRepo::ensure_default(&h.pool, second_user, "default")
+        .await
+        .unwrap();
 
     Mock::given(method("POST"))
         .and(wm_path("/v1/messages"))
@@ -898,7 +920,7 @@ async fn me_anthropic_key_lifecycle(pool: sqlx::PgPool) {
         cors_origin: "*".to_string(),
         invite_expiry_minutes: 60,
         embedding_service: None,
-        anthropic_upstream_base: upstream.uri(),
+        default_credential_base_url: upstream.uri(),
         proxy_global_semaphore: None,
         proxy_per_credential_semaphores: std::sync::Arc::new(dashmap::DashMap::new()),
     };
@@ -1059,7 +1081,7 @@ async fn build_me_endpoints_only(
         cors_origin: "*".to_string(),
         invite_expiry_minutes: 60,
         embedding_service: None,
-        anthropic_upstream_base: upstream.uri(),
+        default_credential_base_url: upstream.uri(),
         proxy_global_semaphore: None,
         proxy_per_credential_semaphores: sems.clone(),
     };
@@ -1145,12 +1167,11 @@ async fn me_anthropic_key_put_updates_cap_only(pool: sqlx::PgPool) {
     );
 
     // And the encrypted key in the DB really is still the initial one.
-    let cred = tracevault_server::repo::user_anthropic_keys::UserAnthropicKeyRepo::get_credential(
-        &pool, user_id,
-    )
-    .await
-    .unwrap()
-    .unwrap();
+    let cred =
+        tracevault_server::repo::credentials::CredentialRepo::resolve_default(&pool, user_id)
+            .await
+            .unwrap()
+            .unwrap();
     let plaintext = tracevault_server::encryption::decrypt(
         &cred.encrypted,
         &cred.nonce,
@@ -1190,4 +1211,56 @@ async fn me_anthropic_key_put_rejects_empty_body(pool: sqlx::PgPool) {
         .await
         .unwrap();
     assert_eq!(r.status(), StatusCode::BAD_REQUEST);
+}
+
+/// A no-key PUT carrying both `base_url` and `max_concurrent` must be
+/// rejected with 400 (base_url can only ride along with a key) — and it must
+/// be rejected *whole*, never partially applying the cap or silently
+/// dropping the base_url change.
+#[sqlx::test(migrations = "./migrations")]
+async fn me_anthropic_key_put_rejects_base_url_without_key(pool: sqlx::PgPool) {
+    let (app, bearer, user_id, _sems) = build_me_endpoints_only(pool.clone()).await;
+
+    // Seed an initial key with cap=4 so there is a row to (not) mutate.
+    let r = app
+        .clone()
+        .oneshot(put_request(
+            &bearer,
+            serde_json::json!({ "key": "sk-ant-initial-fixture", "max_concurrent": 4 }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(r.status(), StatusCode::NO_CONTENT);
+
+    let original =
+        tracevault_server::repo::credentials::CredentialRepo::resolve_default(&pool, user_id)
+            .await
+            .unwrap()
+            .unwrap();
+
+    // No-key PUT with both base_url and max_concurrent must 400.
+    let r = app
+        .clone()
+        .oneshot(put_request(
+            &bearer,
+            serde_json::json!({ "max_concurrent": 16, "base_url": "https://example.com" }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(r.status(), StatusCode::BAD_REQUEST);
+
+    // The request was rejected whole: neither base_url nor the cap changed.
+    let after =
+        tracevault_server::repo::credentials::CredentialRepo::resolve_default(&pool, user_id)
+            .await
+            .unwrap()
+            .unwrap();
+    assert_eq!(
+        after.base_url, original.base_url,
+        "rejected PUT must not change the stored base_url"
+    );
+    assert_eq!(
+        after.max_concurrent, original.max_concurrent,
+        "rejected PUT must not partially apply the cap"
+    );
 }

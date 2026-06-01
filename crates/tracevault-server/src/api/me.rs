@@ -12,7 +12,8 @@ use uuid::Uuid;
 
 use crate::error::AppError;
 use crate::extractors::AuthUser;
-use crate::repo::user_anthropic_keys::UserAnthropicKeyRepo;
+use crate::repo::credentials::CredentialRepo;
+use crate::repo::routing::RoutingRepo;
 use crate::AppState;
 
 #[derive(Serialize)]
@@ -22,6 +23,10 @@ pub struct AnthropicKeyStatus {
     /// Per-credential proxy concurrency cap. `None` when no key is
     /// configured; otherwise the value stored on the row.
     pub max_concurrent: Option<i32>,
+    /// Name of the default credential, when configured.
+    pub name: Option<String>,
+    /// Where the default credential forwards to, when configured.
+    pub base_url: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -29,7 +34,8 @@ pub struct PutAnthropicKeyRequest {
     /// Optional new Anthropic key. When omitted the existing ciphertext is
     /// preserved — this is the "cap only" update path, used from the UI
     /// when the user wants to change `max_concurrent` without rotating
-    /// the key. At least one of `key` or `max_concurrent` must be present.
+    /// the key. At least one of `key`, `max_concurrent`, or `base_url`
+    /// must be present.
     #[serde(default)]
     pub key: Option<String>,
     /// Optional per-credential proxy concurrency cap. Omit to keep the
@@ -37,6 +43,12 @@ pub struct PutAnthropicKeyRequest {
     /// first insert.
     #[serde(default)]
     pub max_concurrent: Option<i32>,
+    /// Credential name. Defaults to "default" (the single-credential case).
+    #[serde(default)]
+    pub name: Option<String>,
+    /// Upstream base URL. Defaults to the server's configured Anthropic base.
+    #[serde(default)]
+    pub base_url: Option<String>,
 }
 
 /// Reject the synthetic nil user_id that the AuthUser extractor returns when
@@ -63,17 +75,21 @@ pub async fn get_anthropic_key_status(
     auth: AuthUser,
 ) -> Result<Json<AnthropicKeyStatus>, AppError> {
     let user_id = require_real_user(&auth)?;
-    let status = UserAnthropicKeyRepo::status(&state.pool, user_id).await?;
+    let status = CredentialRepo::default_status(&state.pool, user_id).await?;
     Ok(Json(match status {
         Some(s) => AnthropicKeyStatus {
             configured: true,
             configured_at: Some(s.configured_at),
             max_concurrent: Some(s.max_concurrent),
+            name: Some(s.name),
+            base_url: Some(s.base_url),
         },
         None => AnthropicKeyStatus {
             configured: false,
             configured_at: None,
             max_concurrent: None,
+            name: None,
+            base_url: None,
         },
     }))
 }
@@ -81,11 +97,16 @@ pub async fn get_anthropic_key_status(
 /// PUT /api/v1/me/anthropic-key
 ///
 /// Upserts the caller's Anthropic key and/or its concurrency cap. The
-/// request body has two optional fields, `key` and `max_concurrent`, but
-/// at least one must be present. Use cases:
+/// request body has four optional fields — `key`, `max_concurrent`, `name`
+/// (defaults to "default"), and `base_url` (defaults to the server's
+/// configured Anthropic base, and is only settable alongside a `key`) — but
+/// at least one of `key`, `max_concurrent`, or `base_url` must be present.
+/// Use cases:
 ///
 ///   * `{ key: "sk-ant-...", max_concurrent: 16 }` — first-time setup or
 ///     full rotation.
+///   * `{ key: "sk-ant-...", base_url: "https://..." }` — store/rotate the
+///     key and point the credential at a new upstream.
 ///   * `{ key: "sk-ant-..." }` — rotate the key; cap preserved (default 8
 ///     applied if no row yet).
 ///   * `{ max_concurrent: 16 }` — change only the cap; key must already
@@ -103,10 +124,11 @@ pub async fn put_anthropic_key(
     Json(req): Json<PutAnthropicKeyRequest>,
 ) -> Result<StatusCode, AppError> {
     let user_id = require_real_user(&auth)?;
+    let name = req.name.as_deref().unwrap_or("default").to_string();
 
-    if req.key.is_none() && req.max_concurrent.is_none() {
+    if req.key.is_none() && req.max_concurrent.is_none() && req.base_url.is_none() {
         return Err(AppError::BadRequest(
-            "Request must include `key`, `max_concurrent`, or both".into(),
+            "Request must include `key`, `max_concurrent`, or `base_url`".into(),
         ));
     }
 
@@ -122,12 +144,38 @@ pub async fn put_anthropic_key(
     }
 
     match req.key.as_deref() {
-        // Rotate or first-time store the key (an optional cap may ride along).
-        Some(raw_key) => store_anthropic_key(&state, user_id, raw_key, req.max_concurrent).await?,
-        // Settings-only update: max_concurrent is guaranteed present by the
-        // "at least one field" guard above.
+        // Rotate or first-time store the key (optional cap + base_url ride along).
+        Some(raw_key) => {
+            store_credential(
+                &state,
+                user_id,
+                &name,
+                raw_key,
+                req.base_url.as_deref(),
+                req.max_concurrent,
+            )
+            .await?;
+            // First credential seeds the default rule pointing at it.
+            RoutingRepo::ensure_default(&state.pool, user_id, &name).await?;
+        }
         None => {
-            update_cap_only(&state, user_id, req.max_concurrent.expect("guarded above")).await?
+            // Settings-only update on an existing named credential.
+            // base_url can only be applied alongside a key (the row is re-encrypted on
+            // store); reject it on the no-key path rather than silently dropping it.
+            if req.base_url.is_some() {
+                return Err(AppError::BadRequest(
+                    "Changing base_url requires also providing the key".into(),
+                ));
+            }
+            if let Some(n) = req.max_concurrent {
+                let updated =
+                    CredentialRepo::update_max_concurrent(&state.pool, user_id, &name, n).await?;
+                if !updated {
+                    return Err(AppError::BadRequest(
+                        "Cannot update settings: no credential configured yet".into(),
+                    ));
+                }
+            }
         }
     }
 
@@ -141,12 +189,16 @@ pub async fn put_anthropic_key(
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// Validate and store (rotate or first-time insert) the caller's Anthropic
-/// key, optionally setting the per-credential concurrency cap alongside it.
-async fn store_anthropic_key(
+/// Validate and store (rotate or first-time insert) a named credential,
+/// optionally setting the per-credential concurrency cap alongside it.
+/// `base_url` defaults to the server's configured Anthropic base and is
+/// SSRF-validated when provided.
+async fn store_credential(
     state: &AppState,
     user_id: Uuid,
+    name: &str,
     raw_key: &str,
+    base_url: Option<&str>,
     max_concurrent: Option<i32>,
 ) -> Result<(), AppError> {
     let key = raw_key.trim();
@@ -168,25 +220,25 @@ async fn store_anthropic_key(
             "Anthropic key must start with 'sk-ant-'".into(),
         ));
     }
+    let base = match base_url {
+        Some(u) => crate::validate_base_url(u)?,
+        None => state.default_credential_base_url.clone(),
+    };
     let encryption_key = state.encryption_key.as_deref().ok_or_else(|| {
         AppError::Internal(
-            "Server is not configured with an encryption key; cannot store Anthropic keys".into(),
+            "Server is not configured with an encryption key; cannot store credentials".into(),
         )
     })?;
-    UserAnthropicKeyRepo::upsert(&state.pool, encryption_key, user_id, key, max_concurrent).await
-}
-
-/// Update only the per-credential concurrency cap. Requires an existing key
-/// row; refuses with 400 rather than silently inserting a half-row.
-async fn update_cap_only(state: &AppState, user_id: Uuid, new_cap: i32) -> Result<(), AppError> {
-    let updated =
-        UserAnthropicKeyRepo::update_max_concurrent(&state.pool, user_id, new_cap).await?;
-    if !updated {
-        return Err(AppError::BadRequest(
-            "Cannot update settings: no Anthropic key configured yet".into(),
-        ));
-    }
-    Ok(())
+    CredentialRepo::upsert(
+        &state.pool,
+        encryption_key,
+        user_id,
+        name,
+        &base,
+        key,
+        max_concurrent,
+    )
+    .await
 }
 
 /// DELETE /api/v1/me/anthropic-key
@@ -198,6 +250,7 @@ pub async fn delete_anthropic_key(
     auth: AuthUser,
 ) -> Result<StatusCode, AppError> {
     let user_id = require_real_user(&auth)?;
-    UserAnthropicKeyRepo::delete(&state.pool, user_id).await?;
+    // Step 1: the UI manages a single "default" credential.
+    CredentialRepo::delete(&state.pool, user_id, "default").await?;
     Ok(StatusCode::NO_CONTENT)
 }

@@ -647,7 +647,7 @@ async fn main() {
             proxy_http_client: proxy_http_client.clone(),
             cors_origin: cfg.cors_origin.clone(),
             invite_expiry_minutes: cfg.invite_expiry_minutes,
-            anthropic_upstream_base: api::proxy::DEFAULT_ANTHROPIC_UPSTREAM_BASE.to_string(),
+            default_credential_base_url: api::proxy::DEFAULT_ANTHROPIC_UPSTREAM_BASE.to_string(),
             embedding_service,
             proxy_global_semaphore: proxy_global_semaphore.clone(),
             proxy_per_credential_semaphores: proxy_per_credential_semaphores.clone(),
