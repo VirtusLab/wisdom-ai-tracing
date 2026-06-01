@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.16.1](https://github.com/softwaremill/tracevault/compare/v0.16.0...v0.16.1) - 2026-06-01
+
+### Fixed
+
+- *(server,cli)* default session tool to 'claude-code' to fix validation-start 500
+
 ## [0.16.0](https://github.com/softwaremill/tracevault/compare/v0.15.0...v0.16.0) - 2026-05-27
 
 ### Added
