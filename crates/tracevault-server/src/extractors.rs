@@ -32,24 +32,13 @@ impl FromRequestParts<AppState> for AuthUser {
 
         let token_hash = sha256_hex(header);
 
-        // Sliding session window: on every successful auth, bump expires_at
-        // to NOW() + 30 days. As long as the user touches TV at least once
-        // per 30 days, the token never expires from their perspective.
-        // Inactive users still hit the 30-day cliff and must re-login.
-        //
-        // Using UPDATE..RETURNING means we atomically (a) verify the token
-        // is still valid (the WHERE filters expired rows out), (b) extend
-        // it, (c) read back the user_id — one round-trip, no race.
-        let session_row = sqlx::query_as::<_, (Uuid,)>(
-            "UPDATE auth_sessions
-             SET expires_at = NOW() + INTERVAL '30 days'
-             WHERE token_hash = $1 AND expires_at > NOW()
-             RETURNING user_id",
-        )
-        .bind(&token_hash)
-        .fetch_optional(&state.pool)
-        .await
-        .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "Database error"))?;
+        // Sliding session window — validate the token and slide its expiry
+        // forward when due. See `SLIDING_SESSION_AUTH_SQL` for the why.
+        let session_row = sqlx::query_as::<_, (Uuid,)>(crate::auth::SLIDING_SESSION_AUTH_SQL)
+            .bind(&token_hash)
+            .fetch_optional(&state.pool)
+            .await
+            .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "Database error"))?;
 
         if let Some((user_id,)) = session_row {
             return Ok(AuthUser { user_id });
@@ -130,19 +119,13 @@ impl FromRequestParts<AppState> for OrgAuth {
 
         let org_id = org_row.0;
 
-        // Try session auth — sliding window: same pattern as AuthUser, see
-        // the comment there. UPDATE..RETURNING atomically bumps expires_at
-        // and returns the user_id only when the token is still valid.
-        let session_row = sqlx::query_as::<_, (Uuid,)>(
-            "UPDATE auth_sessions
-             SET expires_at = NOW() + INTERVAL '30 days'
-             WHERE token_hash = $1 AND expires_at > NOW()
-             RETURNING user_id",
-        )
-        .bind(&token_hash)
-        .fetch_optional(&state.pool)
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        // Try session auth — sliding window, same statement as `AuthUser`.
+        // See `SLIDING_SESSION_AUTH_SQL` for the why.
+        let session_row = sqlx::query_as::<_, (Uuid,)>(crate::auth::SLIDING_SESSION_AUTH_SQL)
+            .bind(&token_hash)
+            .fetch_optional(&state.pool)
+            .await
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
         if let Some((user_id,)) = session_row {
             // Check membership
