@@ -55,7 +55,7 @@
 	/// True when the user has either typed a new key or changed the cap
 	/// away from what's stored. The submit button is gated on this — it
 	/// prevents the user from submitting a no-op request.
-	const hasUnsavedChange = $derived.by(() => {
+	function computeHasUnsavedChange() {
 		const keyTyped = newKey.trim().length > 0;
 		const capChanged =
 			status?.max_concurrent != null && newMaxConcurrent !== status.max_concurrent;
@@ -63,7 +63,9 @@
 		// can't be the first write (server returns 400 in that case).
 		if (!status?.configured) return keyTyped;
 		return keyTyped || capChanged;
-	});
+	}
+
+	const hasUnsavedChange = $derived.by(computeHasUnsavedChange);
 
 	async function handleSave(event: SubmitEvent) {
 		event.preventDefault();

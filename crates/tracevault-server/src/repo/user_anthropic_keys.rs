@@ -48,10 +48,12 @@ impl UserAnthropicKeyRepo {
         let (encrypted, nonce) = encryption::encrypt(plaintext_key, encryption_key)
             .map_err(|e| AppError::Internal(format!("failed to encrypt anthropic key: {e}")))?;
 
-        // COALESCE-based update lets us either accept an explicit new cap
-        // or preserve whatever was already stored. On INSERT, EXCLUDED's
-        // max_concurrent is NULL when the caller didn't specify one and
-        // the DB default kicks in for the column.
+        // COALESCE supplies the cap explicitly in both arms. On INSERT it
+        // uses the caller's value, or 8 when none is given — the 8 mirrors
+        // the column's DEFAULT in migration 025 (the column default never
+        // actually fires here because the query always provides a value).
+        // On CONFLICT it keeps the stored cap when the caller omits one, or
+        // overwrites it when a new value is provided.
         sqlx::query(
             "INSERT INTO user_anthropic_keys (user_id, key_encrypted, key_nonce, max_concurrent)
              VALUES ($1, $2, $3, COALESCE($4, 8))

@@ -77,12 +77,12 @@ async fn main() {
     // we ship to today. Operators turn this on after capacity testing; a
     // sensible starting value is 256.
     let proxy_global_semaphore: Option<std::sync::Arc<tokio::sync::Semaphore>> =
-        match std::env::var("PROXY_MAX_GLOBAL_CONCURRENT") {
-            Ok(s) => match s.parse::<usize>() {
-                Ok(n) if n > 0 => {
-                    tracing::info!(cap = n, "proxy global concurrency cap enabled");
-                    Some(std::sync::Arc::new(tokio::sync::Semaphore::new(n)))
-                }
+        std::env::var("PROXY_MAX_GLOBAL_CONCURRENT")
+            .ok()
+            .and_then(|s| match s.parse::<usize>() {
+                Ok(n) if n > 0 => Some(n),
+                // Set but not a positive integer — warn and ignore, rather
+                // than silently treating a garbage value as "no cap".
                 _ => {
                     tracing::warn!(
                         value = %s,
@@ -90,9 +90,11 @@ async fn main() {
                     );
                     None
                 }
-            },
-            Err(_) => None,
-        };
+            })
+            .map(|n| {
+                tracing::info!(cap = n, "proxy global concurrency cap enabled");
+                std::sync::Arc::new(tokio::sync::Semaphore::new(n))
+            });
     let proxy_per_credential_semaphores = std::sync::Arc::new(dashmap::DashMap::new());
 
     // Auto-sync repos that are in 'ready' state on startup
