@@ -107,9 +107,9 @@ pub async fn init_in_directory(
     fs::create_dir_all(config_dir.join("sessions"))?;
     fs::create_dir_all(config_dir.join("cache"))?;
 
-    // Keep all tracevault files local — update root .gitignore (unless opted out)
+    // Keep tracevault's files local — update root .gitignore (unless opted out)
     if !no_gitignore {
-        update_root_gitignore(project_root)?;
+        update_root_gitignore(project_root, target)?;
     }
 
     // Register repo on server if authenticated, server URL known, and git remote available
@@ -192,7 +192,10 @@ pub async fn init_in_directory(
     Ok(target)
 }
 
-fn update_root_gitignore(project_root: &Path) -> Result<(), io::Error> {
+fn update_root_gitignore(
+    project_root: &Path,
+    target: ClaudeSettingsTarget,
+) -> Result<(), io::Error> {
     let path = project_root.join(".gitignore");
     let existing = if path.exists() {
         fs::read_to_string(&path)?
@@ -200,18 +203,14 @@ fn update_root_gitignore(project_root: &Path) -> Result<(), io::Error> {
         String::new()
     };
 
-    // Always gitignore both Claude settings files regardless of which target
-    // was chosen: settings.json contains hook config (personal install), and
-    // settings.local.json is the conventional per-user override file.
-    let needed: Vec<&str> = [
-        ".tracevault/",
-        ".claude/settings.json",
-        ".claude/settings.local.json",
-    ]
-    .iter()
-    .copied()
-    .filter(|entry| !existing.lines().any(|line| line.trim() == *entry))
-    .collect();
+    // Only ignore what `init` actually creates or modifies: the `.tracevault/`
+    // directory and the single Claude settings file we wrote hooks into. The
+    // other settings file is left untouched, so we don't add it here.
+    let needed: Vec<&str> = [".tracevault/", target.gitignore_entry()]
+        .iter()
+        .copied()
+        .filter(|entry| !existing.lines().any(|line| line.trim() == *entry))
+        .collect();
 
     if needed.is_empty() {
         return Ok(());

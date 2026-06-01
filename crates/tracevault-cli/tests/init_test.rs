@@ -64,7 +64,9 @@ async fn init_creates_directory_structure() {
     let gitignore = fs::read_to_string(tmp.path().join(".gitignore")).unwrap();
     assert!(gitignore.contains(".tracevault/"));
     assert!(gitignore.contains(".claude/settings.json"));
-    assert!(gitignore.contains(".claude/settings.local.json"));
+    // Only the settings file init actually wrote is gitignored. init never
+    // touched settings.local.json (Shared target), so it must not be added.
+    assert!(!gitignore.contains(".claude/settings.local.json"));
 }
 
 #[tokio::test]
@@ -302,8 +304,9 @@ async fn init_local_target_gitignores_settings_local_json() {
 
     let gitignore = fs::read_to_string(tmp.path().join(".gitignore")).unwrap();
     assert!(gitignore.contains(".claude/settings.local.json"));
-    // settings.json is also always gitignored (contains hook config).
-    assert!(gitignore.contains(".claude/settings.json"));
+    // Only the chosen settings file is gitignored; init didn't touch
+    // settings.json (Local target), so it must not be added.
+    assert!(!gitignore.contains(".claude/settings.json"));
 }
 
 #[tokio::test]
