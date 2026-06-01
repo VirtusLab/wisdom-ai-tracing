@@ -11,12 +11,14 @@
 ALTER TABLE sessions
     RENAME COLUMN validation_window_started_at TO verification_phase_started_at;
 
--- 2. policies: migrate any rows with scope = 'validation_window' to
--- 'verification_phase', then swap the CHECK constraint.
-UPDATE policies SET scope = 'verification_phase' WHERE scope = 'validation_window';
-
+-- 2. policies: swap the CHECK constraint BEFORE migrating rows. The old
+-- constraint only permits 'validation_window', so updating a row to
+-- 'verification_phase' while it is still active raises a check violation.
+-- A fresh DB has no such rows (the UPDATE is a no-op), so this only fails on
+-- a populated prod DB — drop first, then migrate, then re-add the constraint.
 ALTER TABLE policies
     DROP CONSTRAINT IF EXISTS policies_scope_check;
+UPDATE policies SET scope = 'verification_phase' WHERE scope = 'validation_window';
 ALTER TABLE policies
     ADD CONSTRAINT policies_scope_check
         CHECK (scope IN ('session', 'verification_phase', 'both'));
