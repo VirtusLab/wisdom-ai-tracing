@@ -151,18 +151,19 @@ pub fn render_markdown(
     }
 
     if has_verification {
-        // The consequence sentence depends on the enforcement mode. We render
-        // this whole section only when mode is Warn or Block (Disabled cases
-        // never get here because has_verification short-circuits above), so
-        // it is safe to switch on those two arms and `unreachable!` Disabled.
+        // The consequence sentence depends on the enforcement mode. In
+        // practice this section is only reached when mode is Warn or Block
+        // (has_verification short-circuits Disabled above), but that is a
+        // runtime invariant, not one the compiler enforces — so the Disabled
+        // arm yields a neutral empty consequence rather than `unreachable!`.
+        // If the gating logic ever drifts, we render a harmless instruction
+        // instead of panicking in the middle of building agent output.
         let consequence = match verification_phase_mode {
             VerificationPhaseMode::Block => "Any other tool call will fail the push.",
             VerificationPhaseMode::Warn => {
                 "Any other tool call will be recorded as a warning on the push."
             }
-            VerificationPhaseMode::Disabled => unreachable!(
-                "verification phase section is only rendered when mode is Warn or Block"
-            ),
+            VerificationPhaseMode::Disabled => "",
         };
         out.push_str("\n### Verification phase (pre-push gating)\n");
         out.push_str(&format!(
