@@ -135,31 +135,38 @@ fn collect_session_data(session_dir: &Path) -> Option<SessionCheckData> {
 pub async fn check_policies(project_root: &Path) -> Result<(), Box<dyn std::error::Error>> {
     let (server_url, token) = resolve_credentials(project_root);
 
-    let server_url = match server_url {
-        Some(url) => url,
-        None => {
-            return Err("No server URL configured. Run 'tracevault login' first.".into());
-        }
-    };
+    let server_url = server_url
+        .ok_or("No server URL configured. Run `tracevault login --server-url=<url>` to set one.")?;
 
     if token.is_none() {
-        return Err("Not logged in. Run 'tracevault login' to check policies.".into());
+        return Err(
+            "Not logged in. Run `tracevault login --server-url=<server_url>` to authenticate."
+                .into(),
+        );
     }
 
     let org_slug = TracevaultConfig::load(project_root)
         .and_then(|c| c.org_slug)
-        .ok_or("No org_slug in config. Run 'tracevault init' first.")?;
+        .ok_or("No org_slug in config. Run `tracevault init` first.")?;
 
     let client = ApiClient::new(&server_url, token.as_deref());
 
-    // Resolve repo_id by name
+    // Resolve repo_id by name.
+    //
+    // Connectivity errors here (auth expired, server down, network
+    // unreachable) propagate so the pre-push hook exits non-zero — if a
+    // repo is opted into TraceVault, every push must be evaluated, full
+    // stop. Letting pushes slip when TV is unreachable would defeat the
+    // point of enforcement. We attach an actionable next step to each
+    // error so the user (or agent) knows the recovery command without
+    // guessing — see `connectivity_message` below.
     let repo_name = git_repo_name(project_root);
-    let repos = client.list_repos(&org_slug).await?;
+    let repos = client
+        .list_repos(&org_slug)
+        .await
+        .map_err(|e| connectivity_message(&e.to_string()))?;
     let repo = repos.iter().find(|r| r.name == repo_name).ok_or_else(|| {
-        format!(
-            "Repo '{}' not found on server. Run 'tracevault sync' first.",
-            repo_name
-        )
+        format!("Repo '{repo_name}' not found on server. Run `tracevault sync` first.")
     })?;
 
     // Collect session data from unpushed sessions
@@ -200,7 +207,8 @@ pub async fn check_policies(project_root: &Path) -> Result<(), Box<dyn std::erro
                 commit_sha,
             },
         )
-        .await?;
+        .await
+        .map_err(|e| connectivity_message(&e.to_string()))?;
 
     // Print results
     for r in &result.results {
@@ -226,4 +234,154 @@ pub async fn check_policies(project_root: &Path) -> Result<(), Box<dyn std::erro
     }
 
     Ok(())
+}
+
+/// Wrap an opaque API-client error string with the most useful next step.
+/// Today the api_client surfaces errors as `"Stream failed (401 ...)"` or
+/// `"Server returned 500 Internal Server Error: ..."` strings; we sniff for
+/// the common shapes and surface a one-line action.
+fn connectivity_message(raw: &str) -> String {
+    let lower = raw.to_ascii_lowercase();
+
+    // 401 — token rejected. An expired session is the most common cause of
+    // a surprise blocked push, so point straight at the refresh command.
+    if lower.contains("401") || lower.contains("unauthorized") {
+        return with_action(
+            raw,
+            "Session token may be expired. Run `tracevault login --server-url=<server_url>` to refresh.",
+        );
+    }
+    // 403 — authenticated but not allowed. Re-login won't help; this is an
+    // org-membership problem.
+    if lower.contains("403") || lower.contains("forbidden") {
+        return with_action(
+            raw,
+            "Your token lacks access to this repo's policies. Check your org membership and rerun `tracevault login`.",
+        );
+    }
+    // 5xx — server-side fault. Checked before the transport keywords below
+    // so a `504 Gateway Timeout` reads as a server issue, not a local one.
+    if is_server_error(&lower) {
+        return with_action(
+            raw,
+            "TraceVault server returned an error. The team has likely been paged; retry shortly.",
+        );
+    }
+    // Transport-level failure with no HTTP status — DNS, refused, timeout.
+    // ("connect" also covers "connection refused"/"connection reset".)
+    if lower.contains("dns")
+        || lower.contains("connect")
+        || lower.contains("timed out")
+        || lower.contains("timeout")
+    {
+        return with_action(
+            raw,
+            "Could not reach the TraceVault server. Check network and `server_url` in .tracevault/config.toml.",
+        );
+    }
+    // Unrecognized — surface the raw error verbatim, no invented advice.
+    format!("Policy check could not run: {raw}.")
+}
+
+/// Format the standard "could not run" line with an actionable next step.
+fn with_action(raw: &str, action: &str) -> String {
+    format!("Policy check could not run: {raw}.\n  → {action}")
+}
+
+/// Heuristic for a 5xx server-side failure. Matches the textual status
+/// (`internal`, `server error`) and the concrete 5xx codes so a bare
+/// `503 Service Unavailable` — which carries neither phrase — is still
+/// recognized.
+fn is_server_error(lower: &str) -> bool {
+    lower.contains("internal")
+        || lower.contains("server error")
+        || ["500", "501", "502", "503", "504"]
+            .iter()
+            .any(|code| lower.contains(code))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::connectivity_message;
+
+    #[test]
+    fn connectivity_message_suggests_login_on_401() {
+        let m = connectivity_message("Stream failed (401 Unauthorized): bad token");
+        assert!(
+            m.contains("tracevault login"),
+            "401 errors must surface the login hint; got: {m}"
+        );
+    }
+
+    #[test]
+    fn connectivity_message_suggests_login_on_unauthorized_text() {
+        let m = connectivity_message("Server returned: unauthorized request");
+        assert!(m.contains("tracevault login"));
+    }
+
+    #[test]
+    fn connectivity_message_suggests_network_check_on_dns_error() {
+        let m = connectivity_message("error sending request for url: dns error");
+        assert!(
+            m.to_lowercase().contains("network") || m.to_lowercase().contains("server_url"),
+            "DNS errors must surface a network hint; got: {m}"
+        );
+    }
+
+    #[test]
+    fn connectivity_message_suggests_network_check_on_connection_refused() {
+        let m = connectivity_message("connection refused");
+        assert!(m.to_lowercase().contains("network"));
+    }
+
+    #[test]
+    fn connectivity_message_falls_back_when_unrecognized() {
+        let m = connectivity_message("some weird new error shape we have not seen before");
+        // No suggestion — but the raw error must still be in the message so
+        // the user can debug.
+        assert!(m.contains("some weird new error shape"));
+        assert!(!m.contains("→")); // no action arrow
+    }
+
+    #[test]
+    fn connectivity_message_does_not_collide_on_403() {
+        let m = connectivity_message("403 Forbidden");
+        // 403 should suggest org membership, NOT a re-login.
+        assert!(
+            m.to_lowercase().contains("membership"),
+            "403 should mention membership; got: {m}"
+        );
+    }
+
+    #[test]
+    fn connectivity_message_flags_500_as_server_error() {
+        let m = connectivity_message("Server returned 500 Internal Server Error: oops");
+        assert!(
+            m.to_lowercase().contains("server returned an error"),
+            "500 should surface the server-error hint; got: {m}"
+        );
+    }
+
+    #[test]
+    fn connectivity_message_flags_503_without_internal_text() {
+        // `503 Service Unavailable` carries neither "internal" nor
+        // "server error" — the bare code must still be recognized.
+        let m = connectivity_message("Server returned 503 Service Unavailable: ");
+        assert!(
+            m.to_lowercase().contains("server returned an error"),
+            "503 should surface the server-error hint; got: {m}"
+        );
+    }
+
+    #[test]
+    fn connectivity_message_treats_504_as_server_not_network() {
+        // A gateway timeout is a server-side fault even though it contains
+        // the word "timeout"; it must not be misreported as a local network
+        // problem.
+        let m = connectivity_message("Server returned 504 Gateway Timeout: ");
+        assert!(
+            m.to_lowercase().contains("server returned an error"),
+            "504 should be treated as a server error; got: {m}"
+        );
+    }
 }

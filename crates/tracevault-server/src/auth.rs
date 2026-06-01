@@ -68,6 +68,42 @@ pub fn sha256_hex(input: &str) -> String {
     hex::encode(hasher.finalize())
 }
 
+/// Single-statement sliding-session auth check, shared by both request
+/// extractors (`AuthUser`, `OrgAuth`) so the behavior is defined once.
+///
+/// Binds `$1` = `token_hash` and returns the matching `user_id`, or no row
+/// when the token is missing or expired (the `expires_at > NOW()` filter
+/// rejects expired sessions — they are never revived).
+///
+/// Sliding window: as long as a user authenticates at least once per ~30
+/// days the token never expires; genuinely-dormant tokens still hit the
+/// cliff and must re-login.
+///
+/// Why a CTE instead of a plain `UPDATE ... RETURNING`: an unconditional
+/// UPDATE would take a row lock and write a new tuple on *every*
+/// authenticated request. TraceVault streams an event on every agent hook,
+/// so the same token authenticates many times in quick succession (often
+/// concurrently) — an always-write check serializes those requests on one
+/// row lock and amplifies WAL/IO. Here the `session` CTE always reads the
+/// `user_id` for the auth decision, while the `slide` CTE only writes when
+/// the expiry has drifted more than a day from the 30-day target. The
+/// common "already-fresh token" path therefore performs no write and takes
+/// no row lock. A data-modifying CTE always runs to completion even though
+/// nothing selects from it, so the slide still happens when due.
+pub const SLIDING_SESSION_AUTH_SQL: &str = "\
+WITH session AS (
+    SELECT user_id FROM auth_sessions
+    WHERE token_hash = $1 AND expires_at > NOW()
+),
+slide AS (
+    UPDATE auth_sessions
+    SET expires_at = NOW() + INTERVAL '30 days'
+    WHERE token_hash = $1
+      AND expires_at > NOW()
+      AND expires_at < NOW() + INTERVAL '29 days'
+)
+SELECT user_id FROM session";
+
 #[cfg(test)]
 mod tests {
     use super::*;

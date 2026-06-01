@@ -32,14 +32,13 @@ impl FromRequestParts<AppState> for AuthUser {
 
         let token_hash = sha256_hex(header);
 
-        // Try auth_sessions first
-        let session_row = sqlx::query_as::<_, (Uuid,)>(
-            "SELECT user_id FROM auth_sessions WHERE token_hash = $1 AND expires_at > NOW()",
-        )
-        .bind(&token_hash)
-        .fetch_optional(&state.pool)
-        .await
-        .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "Database error"))?;
+        // Sliding session window — validate the token and slide its expiry
+        // forward when due. See `SLIDING_SESSION_AUTH_SQL` for the why.
+        let session_row = sqlx::query_as::<_, (Uuid,)>(crate::auth::SLIDING_SESSION_AUTH_SQL)
+            .bind(&token_hash)
+            .fetch_optional(&state.pool)
+            .await
+            .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "Database error"))?;
 
         if let Some((user_id,)) = session_row {
             return Ok(AuthUser { user_id });
@@ -120,14 +119,13 @@ impl FromRequestParts<AppState> for OrgAuth {
 
         let org_id = org_row.0;
 
-        // Try session auth
-        let session_row = sqlx::query_as::<_, (Uuid,)>(
-            "SELECT user_id FROM auth_sessions WHERE token_hash = $1 AND expires_at > NOW()",
-        )
-        .bind(&token_hash)
-        .fetch_optional(&state.pool)
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        // Try session auth — sliding window, same statement as `AuthUser`.
+        // See `SLIDING_SESSION_AUTH_SQL` for the why.
+        let session_row = sqlx::query_as::<_, (Uuid,)>(crate::auth::SLIDING_SESSION_AUTH_SQL)
+            .bind(&token_hash)
+            .fetch_optional(&state.pool)
+            .await
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
         if let Some((user_id,)) = session_row {
             // Check membership
