@@ -52,6 +52,49 @@ impl RoutingRepo {
         Ok(res.rows_affected() > 0)
     }
 
+    /// Upsert a rule keyed by (user_id, match_model). match_model = Some(m) is
+    /// a model rule; None repoints the default rule. provider_model None =
+    /// forward the requested model verbatim.
+    pub async fn upsert_rule(
+        pool: &PgPool,
+        user_id: Uuid,
+        match_model: Option<&str>,
+        credential_name: &str,
+        provider_model: Option<&str>,
+    ) -> Result<(), AppError> {
+        // Two ON CONFLICT targets because the unique indexes are partial
+        // (one for match_model IS NULL, one for NOT NULL). Branch on it.
+        if match_model.is_some() {
+            sqlx::query(
+                "INSERT INTO proxy_routing_rules (user_id, match_model, credential_name, provider_model)
+                 VALUES ($1, $2, $3, $4)
+                 ON CONFLICT (user_id, match_model) WHERE match_model IS NOT NULL
+                 DO UPDATE SET credential_name = EXCLUDED.credential_name,
+                               provider_model = EXCLUDED.provider_model, updated_at = now()",
+            )
+            .bind(user_id)
+            .bind(match_model)
+            .bind(credential_name)
+            .bind(provider_model)
+            .execute(pool)
+            .await?;
+        } else {
+            sqlx::query(
+                "INSERT INTO proxy_routing_rules (user_id, match_model, credential_name, provider_model)
+                 VALUES ($1, NULL, $2, $3)
+                 ON CONFLICT (user_id) WHERE match_model IS NULL
+                 DO UPDATE SET credential_name = EXCLUDED.credential_name,
+                               provider_model = EXCLUDED.provider_model, updated_at = now()",
+            )
+            .bind(user_id)
+            .bind(credential_name)
+            .bind(provider_model)
+            .execute(pool)
+            .await?;
+        }
+        Ok(())
+    }
+
     /// The credential name the default rule points at, if any.
     pub async fn default_credential_name(
         pool: &PgPool,

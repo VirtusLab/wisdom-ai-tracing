@@ -31,7 +31,88 @@ pub struct CredentialStatus {
     pub max_concurrent: i32,
 }
 
+/// A credential resolved for a specific request model: where/how/key/cap,
+/// plus the provider-side model to rewrite to (None = forward as-is).
+pub struct RoutedCredential {
+    pub protocol: String,
+    pub base_url: String,
+    pub encrypted: String,
+    pub nonce: String,
+    pub max_concurrent: i32,
+    pub provider_model: Option<String>,
+}
+
+/// One credential as listed in the management UI (no key material).
+pub struct CredentialListItem {
+    pub name: String,
+    pub protocol: String,
+    pub base_url: String,
+    pub max_concurrent: i32,
+    pub configured_at: DateTime<Utc>,
+}
+
 impl CredentialRepo {
+    /// Resolve the credential for a request `model`: an exact-match routing
+    /// rule wins; otherwise the default rule. Returns None if the user has no
+    /// usable rule/credential.
+    pub async fn resolve_for_model(
+        pool: &PgPool,
+        user_id: Uuid,
+        model: Option<&str>,
+    ) -> Result<Option<RoutedCredential>, AppError> {
+        // A single query: pick the rule that matches the model, else the
+        // default (match_model IS NULL), preferring the model match. ORDER BY
+        // puts the exact match first; LIMIT 1 takes it.
+        let row = sqlx::query_as::<_, (String, String, String, String, i32, Option<String>)>(
+            "SELECT c.protocol, c.base_url, c.key_encrypted, c.key_nonce, c.max_concurrent, r.provider_model
+             FROM proxy_routing_rules r
+             JOIN credentials c ON c.user_id = r.user_id AND c.name = r.credential_name
+             WHERE r.user_id = $1 AND (r.match_model = $2 OR r.match_model IS NULL)
+             ORDER BY (r.match_model = $2) DESC NULLS LAST
+             LIMIT 1",
+        )
+        .bind(user_id)
+        .bind(model) // Option<&str> binds as NULL when None; `match_model = NULL` is never true, so only the default matches
+        .fetch_optional(pool)
+        .await?;
+
+        Ok(row.map(
+            |(protocol, base_url, encrypted, nonce, max_concurrent, provider_model)| {
+                RoutedCredential {
+                    protocol,
+                    base_url,
+                    encrypted,
+                    nonce,
+                    max_concurrent,
+                    provider_model,
+                }
+            },
+        ))
+    }
+
+    /// All of `user_id`'s credentials for the management UI (no key material).
+    pub async fn list(pool: &PgPool, user_id: Uuid) -> Result<Vec<CredentialListItem>, AppError> {
+        let rows = sqlx::query_as::<_, (String, String, String, i32, DateTime<Utc>)>(
+            "SELECT name, protocol, base_url, max_concurrent, updated_at
+             FROM credentials WHERE user_id = $1 ORDER BY name",
+        )
+        .bind(user_id)
+        .fetch_all(pool)
+        .await?;
+        Ok(rows
+            .into_iter()
+            .map(
+                |(name, protocol, base_url, max_concurrent, configured_at)| CredentialListItem {
+                    name,
+                    protocol,
+                    base_url,
+                    max_concurrent,
+                    configured_at,
+                },
+            )
+            .collect())
+    }
+
     /// Upsert a named credential for `user_id`. On conflict (same user_id+name)
     /// the key/base_url are overwritten and `updated_at` advances; the cap is
     /// kept when `max_concurrent` is None, or set when Some.
