@@ -14,6 +14,7 @@ pub mod password_policy;
 pub mod permissions;
 pub mod pricing;
 pub mod pricing_sync;
+mod proxy_url;
 pub mod repo;
 pub mod repo_manager;
 pub mod service;
@@ -21,6 +22,7 @@ pub mod signing;
 pub mod story;
 
 pub use error::AppError;
+pub use proxy_url::validate_base_url;
 
 /// Stable replacement for `str::floor_char_boundary` (nightly-only).
 /// Returns the largest byte index `<= index` that is a char boundary.

@@ -36,6 +36,7 @@ futures-util = "0.3"
 async-trait = "0.1"
 aes-gcm = "0.10"
 dotenvy = "0.15.7"
+url = "2"
 urlencoding = "2"
 thiserror.workspace = true
 tower_governor = "0.8"
