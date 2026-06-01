@@ -122,54 +122,12 @@ pub async fn put_anthropic_key(
     }
 
     match req.key.as_deref() {
-        Some(raw_key) => {
-            let key = raw_key.trim();
-            if key.is_empty() {
-                return Err(AppError::BadRequest(
-                    "Anthropic key must not be empty".into(),
-                ));
-            }
-            // Real Anthropic keys are ~110 chars; cap at 256 to leave generous
-            // headroom for future formats while preventing the endpoint from
-            // accepting a ~2 MB junk string and persisting it encrypted.
-            if key.len() > 256 {
-                return Err(AppError::BadRequest(
-                    "Anthropic key is unreasonably long (max 256 chars)".into(),
-                ));
-            }
-            if !key.starts_with("sk-ant-") {
-                return Err(AppError::BadRequest(
-                    "Anthropic key must start with 'sk-ant-'".into(),
-                ));
-            }
-            let encryption_key = state.encryption_key.as_deref().ok_or_else(|| {
-                AppError::Internal(
-                    "Server is not configured with an encryption key; cannot store Anthropic keys"
-                        .into(),
-                )
-            })?;
-            UserAnthropicKeyRepo::upsert(
-                &state.pool,
-                encryption_key,
-                user_id,
-                key,
-                req.max_concurrent,
-            )
-            .await?;
-        }
+        // Rotate or first-time store the key (an optional cap may ride along).
+        Some(raw_key) => store_anthropic_key(&state, user_id, raw_key, req.max_concurrent).await?,
+        // Settings-only update: max_concurrent is guaranteed present by the
+        // "at least one field" guard above.
         None => {
-            // Settings-only update — the caller explicitly passed
-            // max_concurrent without a new key. Requires an existing row;
-            // otherwise there is nothing to update and we refuse with 400
-            // rather than silently inserting a half-row.
-            let new_cap = req.max_concurrent.expect("checked above");
-            let updated =
-                UserAnthropicKeyRepo::update_max_concurrent(&state.pool, user_id, new_cap).await?;
-            if !updated {
-                return Err(AppError::BadRequest(
-                    "Cannot update settings: no Anthropic key configured yet".into(),
-                ));
-            }
+            update_cap_only(&state, user_id, req.max_concurrent.expect("guarded above")).await?
         }
     }
 
@@ -181,6 +139,54 @@ pub async fn put_anthropic_key(
     state.proxy_per_credential_semaphores.remove(&user_id);
 
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// Validate and store (rotate or first-time insert) the caller's Anthropic
+/// key, optionally setting the per-credential concurrency cap alongside it.
+async fn store_anthropic_key(
+    state: &AppState,
+    user_id: Uuid,
+    raw_key: &str,
+    max_concurrent: Option<i32>,
+) -> Result<(), AppError> {
+    let key = raw_key.trim();
+    if key.is_empty() {
+        return Err(AppError::BadRequest(
+            "Anthropic key must not be empty".into(),
+        ));
+    }
+    // Real Anthropic keys are ~110 chars; cap at 256 to leave generous
+    // headroom for future formats while preventing the endpoint from
+    // accepting a ~2 MB junk string and persisting it encrypted.
+    if key.len() > 256 {
+        return Err(AppError::BadRequest(
+            "Anthropic key is unreasonably long (max 256 chars)".into(),
+        ));
+    }
+    if !key.starts_with("sk-ant-") {
+        return Err(AppError::BadRequest(
+            "Anthropic key must start with 'sk-ant-'".into(),
+        ));
+    }
+    let encryption_key = state.encryption_key.as_deref().ok_or_else(|| {
+        AppError::Internal(
+            "Server is not configured with an encryption key; cannot store Anthropic keys".into(),
+        )
+    })?;
+    UserAnthropicKeyRepo::upsert(&state.pool, encryption_key, user_id, key, max_concurrent).await
+}
+
+/// Update only the per-credential concurrency cap. Requires an existing key
+/// row; refuses with 400 rather than silently inserting a half-row.
+async fn update_cap_only(state: &AppState, user_id: Uuid, new_cap: i32) -> Result<(), AppError> {
+    let updated =
+        UserAnthropicKeyRepo::update_max_concurrent(&state.pool, user_id, new_cap).await?;
+    if !updated {
+        return Err(AppError::BadRequest(
+            "Cannot update settings: no Anthropic key configured yet".into(),
+        ));
+    }
+    Ok(())
 }
 
 /// DELETE /api/v1/me/anthropic-key
