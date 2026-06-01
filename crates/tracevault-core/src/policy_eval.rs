@@ -20,7 +20,7 @@ pub struct WindowGateOutcome {
 /// is an "unknown tool" violation.
 ///
 /// `window_tool_calls` — tool name → stats for calls *inside* the window.
-/// `covered_tools` — tool names that have a `validation_window` or `both`
+/// `covered_tools` — tool names that have a `verification_phase` or `both`
 ///   scoped policy (regardless of action — even `allow` covers the tool).
 pub fn evaluate_window_gate(
     window_tool_calls: &HashMap<String, ToolCallStats>,

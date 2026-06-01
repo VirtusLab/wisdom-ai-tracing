@@ -70,17 +70,17 @@ enum Cli {
         #[arg(long)]
         range: Option<String>,
     },
-    /// Open (or re-open) a validation window for the current session.
+    /// Open (or re-open) a verification phase for the current session.
     ///
-    /// A validation window declares that the agent has finished making changes
+    /// A verification phase declares that the agent has finished making changes
     /// and is now running quality checks. Only tool calls made after this point
-    /// are evaluated by validation_window-scoped policies. Calling this again
-    /// resets the window, discarding earlier window events.
+    /// are evaluated by verification_phase-scoped policies. Calling this again
+    /// resets the phase, discarding earlier verification events.
     ///
     /// In single-agent setups the current session is detected automatically.
     /// In multi-agent setups, pass --session-id to target the correct session.
-    #[command(name = "validation-start")]
-    ValidationStart {
+    #[command(name = "verify-start")]
+    VerifyStart {
         /// Explicit session ID to open the window for. When omitted, the most
         /// recently active session under .tracevault/sessions/ is used.
         #[arg(long)]
@@ -195,10 +195,10 @@ async fn main() {
                 std::process::exit(1);
             }
         }
-        Cli::ValidationStart { session_id } => {
+        Cli::VerifyStart { session_id } => {
             let cwd = env::current_dir().expect("Cannot determine current directory");
             if let Err(e) =
-                commands::validation_window::open_validation_window(&cwd, session_id.as_deref())
+                commands::verification_phase::open_verification_phase(&cwd, session_id.as_deref())
                     .await
             {
                 eprintln!("Error: {e}");

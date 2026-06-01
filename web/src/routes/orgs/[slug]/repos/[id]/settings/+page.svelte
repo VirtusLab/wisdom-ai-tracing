@@ -13,7 +13,7 @@
 		clone_status: string;
 		has_deploy_key: boolean;
 		last_fetched_at: string | null;
-		validation_window_mode: string;
+		verification_phase_mode: string;
 	}
 
 	interface Repo {
@@ -36,7 +36,7 @@
 
 	let githubUrl = $state('');
 	let deployKey = $state('');
-	let validationWindowMode = $state('disabled');
+	let verificationPhaseMode = $state('disabled');
 	let pollTimer: ReturnType<typeof setInterval> | null = $state(null);
 
 	onMount(async () => {
@@ -61,7 +61,7 @@
 		try {
 			settings = await api.get<RepoSettings>(`/api/v1/orgs/${slug}/repos/${repoId}/settings`);
 			githubUrl = settings.github_url ?? '';
-			validationWindowMode = settings.validation_window_mode ?? 'disabled';
+			verificationPhaseMode = settings.verification_phase_mode ?? 'disabled';
 		} catch (err) {
 			error = err instanceof Error ? err.message : 'Failed to load settings';
 		} finally {
@@ -77,7 +77,7 @@
 			const body: Record<string, string> = {};
 			if (githubUrl) body.github_url = githubUrl;
 			if (deployKey.trim()) body.deploy_key = deployKey.trim();
-			body.validation_window_mode = validationWindowMode;
+			body.verification_phase_mode = verificationPhaseMode;
 
 			settings = await api.put<RepoSettings>(`/api/v1/orgs/${slug}/repos/${repoId}/settings`, body);
 
@@ -269,25 +269,31 @@
 			</div>
 		</div>
 
-		<!-- Validation Window Mode -->
+		<!-- Verification Phase Mode -->
 		<div class="border-border overflow-hidden rounded-lg border">
-			<div class="bg-muted/30 px-4 py-3 text-sm font-semibold">Validation Window</div>
-			<div class="p-4 space-y-3">
+			<div class="bg-muted/30 px-4 py-3 text-sm font-semibold">Verification phase</div>
+			<div class="p-4 space-y-4">
+				<p class="text-sm text-muted-foreground">
+					Lock the agent into a "review only" mode before each push. When an agent runs
+					<code>tracevault verify-start</code>, it declares that it is done changing code.
+					From that point until the push, only tools you whitelist below
+					(<code>verification_phase</code>-scoped policies) are allowed to run.
+				</p>
 				<p class="text-xs text-muted-foreground">
-					Controls what happens when an unknown tool (not covered by any
-					<code>validation_window</code>-scoped policy) is called inside a declared validation window.
-					Agents open a window with <code>tracevault validation-start</code>.
+					Catches agents that pretend to self-review while still making code changes —
+					any tool call inside the phase that is not on the allow-list will either warn
+					or block the push, depending on the mode you pick.
 				</p>
 				<div class="grid gap-2">
-					<Label>Unknown Tool Mode</Label>
-					<Select.Root type="single" value={validationWindowMode} onValueChange={(v) => { if (v) validationWindowMode = v; }}>
+					<Label>If the agent calls an unknown tool inside the phase</Label>
+					<Select.Root type="single" value={verificationPhaseMode} onValueChange={(v) => { if (v) verificationPhaseMode = v; }}>
 						<Select.Trigger>
-							{{ disabled: 'Disabled', warn: 'Warn', block: 'Block Push' }[validationWindowMode] ?? validationWindowMode}
+							{{ disabled: 'Disabled (no enforcement)', warn: 'Warn (record but allow push)', block: 'Block the push' }[verificationPhaseMode] ?? verificationPhaseMode}
 						</Select.Trigger>
 						<Select.Content>
-							<Select.Item value="disabled">Disabled</Select.Item>
-							<Select.Item value="warn">Warn</Select.Item>
-							<Select.Item value="block">Block Push</Select.Item>
+							<Select.Item value="disabled">Disabled (no enforcement)</Select.Item>
+							<Select.Item value="warn">Warn (record but allow push)</Select.Item>
+							<Select.Item value="block">Block the push</Select.Item>
 						</Select.Content>
 					</Select.Root>
 				</div>

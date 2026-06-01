@@ -213,7 +213,7 @@ pub struct RepoSettingsResponse {
     pub has_deploy_key: bool,
     pub has_webhook_secret: bool,
     pub last_fetched_at: Option<chrono::DateTime<chrono::Utc>>,
-    pub validation_window_mode: String,
+    pub verification_phase_mode: String,
 }
 
 pub async fn get_settings(
@@ -244,7 +244,7 @@ pub async fn get_settings(
         has_deploy_key: row.2.is_some(),
         has_webhook_secret: row.3.is_some(),
         last_fetched_at: row.4,
-        validation_window_mode: row.5,
+        verification_phase_mode: row.5,
     }))
 }
 
@@ -253,7 +253,7 @@ pub struct UpdateSettingsRequest {
     pub github_url: Option<String>,
     pub deploy_key: Option<String>,
     pub webhook_secret: Option<String>,
-    pub validation_window_mode: Option<String>,
+    pub verification_phase_mode: Option<String>,
 }
 
 pub async fn update_settings(
@@ -302,17 +302,17 @@ pub async fn update_settings(
         .await?;
     }
 
-    // Update validation_window_mode if provided
+    // Update verification_phase_mode if provided
     const VALID_WINDOW_MODES: &[&str] = &["disabled", "warn", "block"];
-    if let Some(ref mode) = req.validation_window_mode {
+    if let Some(ref mode) = req.verification_phase_mode {
         if !VALID_WINDOW_MODES.contains(&mode.as_str()) {
             return Err(AppError::BadRequest(format!(
-                "validation_window_mode must be one of: {}",
+                "verification_phase_mode must be one of: {}",
                 VALID_WINDOW_MODES.join(", ")
             )));
         }
         sqlx::query(include_str!(
-            "../repo/sql/update_repo_validation_window_mode.sql"
+            "../repo/sql/update_repo_verification_phase_mode.sql"
         ))
         .bind(mode)
         .bind(id)
@@ -360,7 +360,7 @@ pub async fn update_settings(
     let has_deploy_key = row.2.is_some();
     let has_webhook_secret = row.4.is_some();
     let last_fetched_at = row.5;
-    let validation_window_mode = row.6.clone();
+    let verification_phase_mode = row.6.clone();
 
     // Auto-trigger clone/sync if both github_url and deploy_key are set
     if let Some(url) = &github_url {
@@ -385,7 +385,7 @@ pub async fn update_settings(
                     has_deploy_key,
                     has_webhook_secret,
                     last_fetched_at,
-                    validation_window_mode,
+                    verification_phase_mode,
                 }));
             }
             "ready" => {
@@ -412,6 +412,6 @@ pub async fn update_settings(
         has_deploy_key,
         has_webhook_secret,
         last_fetched_at,
-        validation_window_mode,
+        verification_phase_mode,
     }))
 }

@@ -4,7 +4,9 @@
 //! the dashboard preview. Lives in `tracevault-core` so there is exactly one
 //! rendering implementation regardless of which frontend asks for it.
 
-use crate::policy::{PolicyAction, PolicyCondition, PolicyRule, PolicyScope, ValidationWindowMode};
+use crate::policy::{
+    PolicyAction, PolicyCondition, PolicyRule, PolicyScope, VerificationPhaseMode,
+};
 
 /// One rendered tool-requirement line.
 #[derive(Debug, Clone)]
@@ -83,22 +85,22 @@ fn scope_applies_to_session(scope: &PolicyScope) -> bool {
     matches!(scope, PolicyScope::Session | PolicyScope::Both)
 }
 
-fn scope_applies_to_validation(scope: &PolicyScope) -> bool {
-    matches!(scope, PolicyScope::ValidationWindow | PolicyScope::Both)
+fn scope_applies_to_verification(scope: &PolicyScope) -> bool {
+    matches!(scope, PolicyScope::VerificationPhase | PolicyScope::Both)
 }
 
 /// Render agent instructions as Markdown.
 ///
 /// `policies` may include disabled entries — they're filtered out here.
-/// `validation_window_mode` controls whether the validation window section is
+/// `verification_phase_mode` controls whether the verification phase section is
 /// rendered at all (it is hidden entirely when mode is `Disabled`).
 pub fn render_markdown(
     policies: &[PolicyRule],
-    validation_window_mode: &ValidationWindowMode,
+    verification_phase_mode: &VerificationPhaseMode,
 ) -> String {
     let mut session_reqs: Vec<ToolRequirement> = Vec::new();
-    let mut validation_required: Vec<ToolRequirement> = Vec::new();
-    let mut validation_allowed: Vec<ToolRequirement> = Vec::new();
+    let mut verification_required: Vec<ToolRequirement> = Vec::new();
+    let mut verification_allowed: Vec<ToolRequirement> = Vec::new();
 
     for p in policies.iter().filter(|p| p.enabled) {
         let reqs = condition_to_requirements(&p.condition, p.action);
@@ -109,24 +111,24 @@ pub fn render_markdown(
         if scope_applies_to_session(&p.scope) {
             session_reqs.extend(reqs.iter().cloned());
         }
-        if scope_applies_to_validation(&p.scope)
-            && !matches!(validation_window_mode, ValidationWindowMode::Disabled)
+        if scope_applies_to_verification(&p.scope)
+            && !matches!(verification_phase_mode, VerificationPhaseMode::Disabled)
         {
             for r in &reqs {
                 if r.action == PolicyAction::Allow {
-                    validation_allowed.push(r.clone());
+                    verification_allowed.push(r.clone());
                 } else {
-                    validation_required.push(r.clone());
+                    verification_required.push(r.clone());
                 }
             }
         }
     }
 
     let has_session = !session_reqs.is_empty();
-    let has_validation = (!validation_required.is_empty() || !validation_allowed.is_empty())
-        && !matches!(validation_window_mode, ValidationWindowMode::Disabled);
+    let has_verification = (!verification_required.is_empty() || !verification_allowed.is_empty())
+        && !matches!(verification_phase_mode, VerificationPhaseMode::Disabled);
 
-    if !has_session && !has_validation {
+    if !has_session && !has_verification {
         return "## Visdom Trace — agent policy instructions\n\n\
                 No active policies for this repository.\n"
             .into();
@@ -148,36 +150,49 @@ pub fn render_markdown(
         }
     }
 
-    if has_validation {
-        out.push_str("\n### Validation window (pre-push gating)\n");
-        out.push_str(
-            "A validation window restricts which tools can be called before push, \
-            gating the push on a clean validation run. Before pushing, open a \
-            validation window:\n\n    tracevault validation-start\n\n\
-            The window stays open until you push, or until you open a new window. \
-            Opening a new window invalidates the prior one.\n",
-        );
+    if has_verification {
+        // The consequence sentence depends on the enforcement mode. In
+        // practice this section is only reached when mode is Warn or Block
+        // (has_verification short-circuits Disabled above), but that is a
+        // runtime invariant, not one the compiler enforces — so the Disabled
+        // arm yields a neutral empty consequence rather than `unreachable!`.
+        // If the gating logic ever drifts, we render a harmless instruction
+        // instead of panicking in the middle of building agent output.
+        let consequence = match verification_phase_mode {
+            VerificationPhaseMode::Block => "Any other tool call will fail the push.",
+            VerificationPhaseMode::Warn => {
+                "Any other tool call will be recorded as a warning on the push."
+            }
+            VerificationPhaseMode::Disabled => "",
+        };
+        out.push_str("\n### Verification phase (pre-push gating)\n");
+        out.push_str(&format!(
+            "When you are done changing code and ready to push, you must enter a \
+            **verification phase** by running:\n\n    tracevault verify-start\n\n\
+            From that point until the push, you are only allowed to call the tools \
+            listed below. {consequence}\n\n\
+            The intent: catch agents that pretend to review while still editing. \
+            If you need to make a code change after entering the phase, that is fine — \
+            make the change, then run `tracevault verify-start` again to restart the \
+            phase and rerun the required tools. The most recent `verify-start` is the \
+            only one that counts.\n",
+        ));
 
-        if !validation_required.is_empty() {
-            out.push_str("\nRequired tools (must be called inside the window):\n");
-            for r in &validation_required {
+        if !verification_required.is_empty() {
+            out.push_str("\n**Required** — must be called inside the phase:\n");
+            for r in &verification_required {
                 out.push_str(&r.render_line());
                 out.push('\n');
             }
         }
 
-        if !validation_allowed.is_empty() {
-            out.push_str("\nAllowed tools (may be called freely inside the window):\n");
-            for r in &validation_allowed {
+        if !verification_allowed.is_empty() {
+            out.push_str("\n**Allowed** — may be called inside the phase without restriction:\n");
+            for r in &verification_allowed {
                 out.push_str(&r.render_line());
                 out.push('\n');
             }
         }
-
-        out.push_str(
-            "\nIf you need to call additional tools after opening the window, open a new window \
-            afterwards and rerun all required tools.\n",
-        );
     }
 
     out
@@ -226,10 +241,10 @@ mod tests {
 
     #[test]
     fn no_policies_renders_terse_message() {
-        let out = render_markdown(&[], &ValidationWindowMode::Disabled);
+        let out = render_markdown(&[], &VerificationPhaseMode::Disabled);
         assert!(out.contains("No active policies"));
         assert!(!out.contains("Before push"));
-        assert!(!out.contains("Validation window"));
+        assert!(!out.contains("Verification phase"));
     }
 
     #[test]
@@ -240,7 +255,7 @@ mod tests {
             PolicyScope::Session,
             false,
         );
-        let out = render_markdown(&[p], &ValidationWindowMode::Disabled);
+        let out = render_markdown(&[p], &VerificationPhaseMode::Disabled);
         assert!(out.contains("No active policies"));
     }
 
@@ -252,7 +267,7 @@ mod tests {
             PolicyScope::Session,
             true,
         );
-        let out = render_markdown(&[p], &ValidationWindowMode::Disabled);
+        let out = render_markdown(&[p], &VerificationPhaseMode::Disabled);
         assert!(out.contains("### Before push"));
         assert!(out.contains("`cargo_fmt`"));
         assert!(out.contains("must be called"));
@@ -266,7 +281,7 @@ mod tests {
             PolicyScope::Session,
             true,
         );
-        let out = render_markdown(&[p], &ValidationWindowMode::Disabled);
+        let out = render_markdown(&[p], &VerificationPhaseMode::Disabled);
         let tool_line = out
             .lines()
             .find(|l| l.starts_with("- `cargo_fmt`"))
@@ -283,7 +298,7 @@ mod tests {
             PolicyScope::Session,
             true,
         );
-        let out_block = render_markdown(&[p_block], &ValidationWindowMode::Disabled);
+        let out_block = render_markdown(&[p_block], &VerificationPhaseMode::Disabled);
         assert!(out_block.contains("must be called and must succeed"));
 
         let p_warn = rule(
@@ -292,7 +307,7 @@ mod tests {
             PolicyScope::Session,
             true,
         );
-        let out_warn = render_markdown(&[p_warn], &ValidationWindowMode::Disabled);
+        let out_warn = render_markdown(&[p_warn], &VerificationPhaseMode::Disabled);
         assert!(out_warn.contains("should be called and should succeed"));
     }
 
@@ -304,35 +319,35 @@ mod tests {
             PolicyScope::Session,
             true,
         );
-        let out = render_markdown(&[p], &ValidationWindowMode::Disabled);
+        let out = render_markdown(&[p], &VerificationPhaseMode::Disabled);
         assert!(out.contains("when files matching `Cargo.lock` are changed"));
         assert!(out.contains("must be called and must succeed"));
     }
 
     #[test]
-    fn validation_window_required_section_renders() {
+    fn verification_phase_required_section_renders() {
         let p = rule(
             required(&["agent_review"], true),
             PolicyAction::BlockPush,
-            PolicyScope::ValidationWindow,
+            PolicyScope::VerificationPhase,
             true,
         );
-        let out = render_markdown(&[p], &ValidationWindowMode::Block);
-        assert!(out.contains("### Validation window"));
-        assert!(out.contains("Required tools"));
+        let out = render_markdown(&[p], &VerificationPhaseMode::Block);
+        assert!(out.contains("### Verification phase"));
+        assert!(out.contains("**Required**"));
         assert!(out.contains("`agent_review`"));
     }
 
     #[test]
-    fn validation_window_allowed_section_renders() {
+    fn verification_phase_allowed_section_renders() {
         let p = rule(
             required(&["Read", "Grep"], false),
             PolicyAction::Allow,
-            PolicyScope::ValidationWindow,
+            PolicyScope::VerificationPhase,
             true,
         );
-        let out = render_markdown(&[p], &ValidationWindowMode::Block);
-        assert!(out.contains("Allowed tools"));
+        let out = render_markdown(&[p], &VerificationPhaseMode::Block);
+        assert!(out.contains("**Allowed**"));
         assert!(out.contains("`Read`"));
         assert!(out.contains("`Grep`"));
         // Allow-listed tools render bare — no must/should language on those lines.
@@ -342,15 +357,15 @@ mod tests {
     }
 
     #[test]
-    fn validation_window_section_hidden_when_mode_disabled() {
+    fn verification_phase_section_hidden_when_mode_disabled() {
         let p = rule(
             required(&["agent_review"], false),
             PolicyAction::BlockPush,
-            PolicyScope::ValidationWindow,
+            PolicyScope::VerificationPhase,
             true,
         );
-        let out = render_markdown(&[p], &ValidationWindowMode::Disabled);
-        assert!(!out.contains("### Validation window"));
+        let out = render_markdown(&[p], &VerificationPhaseMode::Disabled);
+        assert!(!out.contains("### Verification phase"));
         assert!(out.contains("No active policies"));
     }
 
@@ -365,7 +380,7 @@ mod tests {
             PolicyScope::Session,
             true,
         );
-        let out = render_markdown(&[p], &ValidationWindowMode::Disabled);
+        let out = render_markdown(&[p], &VerificationPhaseMode::Disabled);
         assert!(out.contains("No active policies"));
     }
 
@@ -377,24 +392,50 @@ mod tests {
             PolicyScope::Both,
             true,
         );
-        let out = render_markdown(&[p], &ValidationWindowMode::Block);
+        let out = render_markdown(&[p], &VerificationPhaseMode::Block);
         assert!(out.contains("### Before push"));
-        assert!(out.contains("### Validation window"));
+        assert!(out.contains("### Verification phase"));
         assert_eq!(out.matches("`cargo_fmt`").count(), 2);
     }
 
     #[test]
-    fn warn_mode_does_not_advertise_blocking_in_window() {
+    fn warn_mode_does_not_advertise_blocking_in_phase() {
         let p = rule(
             required(&["agent_review"], false),
             PolicyAction::Warn,
-            PolicyScope::ValidationWindow,
+            PolicyScope::VerificationPhase,
             true,
         );
-        let out = render_markdown(&[p], &ValidationWindowMode::Warn);
-        assert!(out.contains("### Validation window"));
-        assert!(!out.contains("will block the push"));
-        assert!(!out.contains("blocked"));
+        let out = render_markdown(&[p], &VerificationPhaseMode::Warn);
+        assert!(out.contains("### Verification phase"));
+        // Critical: in Warn mode the consequence sentence must NOT promise to
+        // fail the push — that wording belongs to Block mode only.
+        assert!(
+            !out.contains("will fail the push"),
+            "Warn mode must not advertise blocking behavior; output: {out}"
+        );
+        assert!(out.contains("recorded as a warning"));
         assert!(out.contains("should be called"));
+    }
+
+    #[test]
+    fn block_mode_advertises_failing_the_push() {
+        let p = rule(
+            required(&["agent_review"], false),
+            PolicyAction::BlockPush,
+            PolicyScope::VerificationPhase,
+            true,
+        );
+        let out = render_markdown(&[p], &VerificationPhaseMode::Block);
+        assert!(out.contains("### Verification phase"));
+        // Critical: in Block mode the consequence sentence must say so.
+        assert!(
+            out.contains("will fail the push"),
+            "Block mode must explicitly state the push will fail; output: {out}"
+        );
+        assert!(
+            !out.contains("recorded as a warning"),
+            "Block mode must not use Warn-mode phrasing; output: {out}"
+        );
     }
 }

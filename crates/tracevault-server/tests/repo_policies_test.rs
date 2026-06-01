@@ -329,10 +329,10 @@ async fn evaluation_row_survives_policy_delete(pool: sqlx::PgPool) {
     assert_eq!(rows[0].policy_name, "will-be-deleted");
 }
 
-// ── Validation window scope tests ─────────────────────────────────────────────
+// ── Verification phase scope tests ─────────────────────────────────────────────
 
 #[sqlx::test(migrations = "./migrations")]
-async fn validation_window_policy_skipped_when_no_window(pool: sqlx::PgPool) {
+async fn verification_phase_policy_skipped_when_no_phase(pool: sqlx::PgPool) {
     use tracevault_server::repo::policies::PolicyRepo;
 
     let org_id = common::seed_org(&pool).await;
@@ -347,7 +347,7 @@ async fn validation_window_policy_skipped_when_no_window(pool: sqlx::PgPool) {
         &json!({"type": "RequiredToolCall", "tool_names": ["cargo_fmt"]}),
         "block_push",
         "medium",
-        "validation_window",
+        "verification_phase",
         true,
     )
     .await
@@ -357,12 +357,12 @@ async fn validation_window_policy_skipped_when_no_window(pool: sqlx::PgPool) {
         .await
         .unwrap();
 
-    // A validation_window-scoped policy with no tool calls and no window
+    // A verification_phase-scoped policy with no tool calls and no window
     // should be skipped (not fail) — the check_policies handler handles this,
     // but here we verify the DB layer returns scope correctly.
     assert!(policies
         .iter()
-        .any(|(id, _, _, _, _, scope)| *id == policy_id && scope == "validation_window"));
+        .any(|(id, _, _, _, _, scope)| *id == policy_id && scope == "verification_phase"));
 }
 
 #[sqlx::test(migrations = "./migrations")]
@@ -381,7 +381,7 @@ async fn allow_scope_policy_stored_correctly(pool: sqlx::PgPool) {
         &json!({"type": "RequiredToolCall", "tool_names": ["Read"]}),
         "allow",
         "low",
-        "validation_window",
+        "verification_phase",
         true,
     )
     .await
@@ -395,7 +395,7 @@ async fn allow_scope_policy_stored_correctly(pool: sqlx::PgPool) {
     assert!(row.is_some());
     let (_, _, _, action, _, scope) = row.unwrap();
     assert_eq!(action, "allow");
-    assert_eq!(scope, "validation_window");
+    assert_eq!(scope, "verification_phase");
 }
 
 #[sqlx::test(migrations = "./migrations")]
@@ -431,13 +431,13 @@ async fn both_scope_policy_stored_correctly(pool: sqlx::PgPool) {
 }
 
 #[sqlx::test(migrations = "./migrations")]
-async fn get_validation_window_mode_default_is_disabled(pool: sqlx::PgPool) {
+async fn get_verification_phase_mode_default_is_disabled(pool: sqlx::PgPool) {
     use tracevault_server::repo::policies::PolicyRepo;
 
     let org_id = common::seed_org(&pool).await;
     let repo_id = common::seed_repo(&pool, org_id).await;
 
-    let mode = PolicyRepo::get_validation_window_mode(&pool, repo_id)
+    let mode = PolicyRepo::get_verification_phase_mode(&pool, repo_id)
         .await
         .unwrap();
     assert_eq!(mode, "disabled");
@@ -487,9 +487,10 @@ async fn window_tool_call_stats_after_timestamp(pool: sqlx::PgPool) {
     .await
     .unwrap();
 
-    let stats = EventRepo::get_window_tool_call_stats(&pool, session_db_id, before_window)
-        .await
-        .unwrap();
+    let stats =
+        EventRepo::get_verification_phase_tool_call_stats(&pool, session_db_id, before_window)
+            .await
+            .unwrap();
 
     assert_eq!(stats.get("cargo_fmt").map(|s| s.total), Some(1));
     assert_eq!(stats.get("cargo_fmt").map(|s| s.successful), Some(1));
@@ -540,9 +541,10 @@ async fn window_tool_call_stats_excludes_pre_window_events(pool: sqlx::PgPool) {
     let window_start = chrono::Utc::now();
 
     // Stats should be empty — event happened before the window
-    let stats = EventRepo::get_window_tool_call_stats(&pool, session_db_id, window_start)
-        .await
-        .unwrap();
+    let stats =
+        EventRepo::get_verification_phase_tool_call_stats(&pool, session_db_id, window_start)
+            .await
+            .unwrap();
 
     assert!(stats.is_empty());
 }

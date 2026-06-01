@@ -317,7 +317,7 @@ pub async fn check_policies(
     let rows = PolicyRepo::list_enabled_for_check(&state.pool, auth.org_id, repo_id).await?;
 
     // Fetch validation window mode for this repo
-    let window_mode = PolicyRepo::get_validation_window_mode(&state.pool, repo_id).await?;
+    let window_mode = PolicyRepo::get_verification_phase_mode(&state.pool, repo_id).await?;
 
     // Aggregate session-level tool calls and files across all sessions
     let mut all_tool_calls: std::collections::HashMap<String, ToolCallStats> =
@@ -344,15 +344,16 @@ pub async fn check_policies(
     }
 
     // Batch-resolve window stats: single query fetches (session_id, db_id,
-    // validation_window_started_at) for all sessions in this push, then a
+    // verification_phase_started_at) for all sessions in this push, then a
     // second query aggregates window tool-call stats for all sessions that
     // have an open window. This avoids N+1 round-trips.
-    let window_rows: Vec<(String, Uuid, Option<chrono::DateTime<chrono::Utc>>)> =
-        sqlx::query_as(include_str!("../repo/sql/get_sessions_window_data.sql"))
-            .bind(repo_id)
-            .bind(&session_ids)
-            .fetch_all(&state.pool)
-            .await?;
+    let window_rows: Vec<(String, Uuid, Option<chrono::DateTime<chrono::Utc>>)> = sqlx::query_as(
+        include_str!("../repo/sql/get_sessions_verification_phase_data.sql"),
+    )
+    .bind(repo_id)
+    .bind(&session_ids)
+    .fetch_all(&state.pool)
+    .await?;
 
     let mut window_tool_calls: std::collections::HashMap<String, ToolCallStats> =
         std::collections::HashMap::new();
@@ -363,7 +364,8 @@ pub async fn check_policies(
             continue;
         };
         has_any_window = true;
-        let stats = EventRepo::get_window_tool_call_stats(&state.pool, *db_id, *ts).await?;
+        let stats =
+            EventRepo::get_verification_phase_tool_call_stats(&state.pool, *db_id, *ts).await?;
         for (name, s) in stats {
             let entry = window_tool_calls.entry(name).or_default();
             entry.total += s.total;
@@ -419,12 +421,12 @@ pub async fn check_policies(
         }
 
         // Select the evaluation dataset based on scope.
-        // "validation_window" evaluates only tool calls after validation-start;
+        // "verification_phase" evaluates only tool calls after verify-start;
         // "session" (default) evaluates all tool calls in the session.
         // Legacy "both" entries fall through to session evaluation.
         let datasets: &[(&std::collections::HashMap<String, ToolCallStats>, &str)] =
             match scope.as_str() {
-                "validation_window" => {
+                "verification_phase" => {
                     if !has_any_window {
                         // No window opened — skip entirely.
                         results.push(CheckResult {
@@ -502,7 +504,7 @@ pub async fn check_policies(
     if has_any_window && window_mode != "disabled" {
         let covered_tools: Vec<String> = rows
             .iter()
-            .filter(|(_, _, _, _, _, scope)| scope == "validation_window")
+            .filter(|(_, _, _, _, _, scope)| scope == "verification_phase")
             .flat_map(|(_, _, condition, _, _, _)| extract_policy_tool_names(condition))
             .collect();
 
@@ -534,7 +536,7 @@ pub async fn check_policies(
             auth.org_id,
             repo_id,
             None,
-            "validation_window_gate",
+            "verification_phase_gate",
             session_id_for_log,
             req.commit_sha.as_deref(),
             gate_result,
@@ -546,11 +548,11 @@ pub async fn check_policies(
         )
         .await
         {
-            tracing::warn!(error = %e, "failed to record validation_window_gate evaluation");
+            tracing::warn!(error = %e, "failed to record verification_phase_gate evaluation");
         }
 
         results.push(CheckResult {
-            rule_name: "validation_window_gate".into(),
+            rule_name: "verification_phase_gate".into(),
             result: gate_result.into(),
             action: gate_action.into(),
             severity: "medium".into(),
@@ -733,7 +735,7 @@ fn classify_result(outcome: &tracevault_core::policy_eval::EvalOutcome) -> &'sta
 const VALID_ACTIONS: &[&str] = &["block_push", "warn", "allow"];
 
 /// Valid scope values. Keep in sync with `PolicyScope` in tracevault-core.
-const VALID_SCOPES: &[&str] = &["session", "validation_window"];
+const VALID_SCOPES: &[&str] = &["session", "verification_phase"];
 
 fn validate_action(action: &str) -> Result<(), AppError> {
     if !VALID_ACTIONS.contains(&action) {

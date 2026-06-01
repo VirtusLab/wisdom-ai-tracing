@@ -132,7 +132,7 @@ impl EventRepo {
     /// Aggregate tool call stats for a session that occurred *after* a given
     /// timestamp (i.e. inside the validation window).
     /// Returns a map of tool_name → (total, successful).
-    pub async fn get_window_tool_call_stats(
+    pub async fn get_verification_phase_tool_call_stats(
         pool: &PgPool,
         session_db_id: Uuid,
         window_started_at: DateTime<Utc>,
@@ -140,12 +140,13 @@ impl EventRepo {
         std::collections::HashMap<String, tracevault_core::policy_eval::ToolCallStats>,
         AppError,
     > {
-        let rows: Vec<(String, i64, i64)> =
-            sqlx::query_as(include_str!("sql/get_window_tool_call_stats.sql"))
-                .bind(session_db_id)
-                .bind(window_started_at)
-                .fetch_all(pool)
-                .await?;
+        let rows: Vec<(String, i64, i64)> = sqlx::query_as(include_str!(
+            "sql/get_verification_phase_tool_call_stats.sql"
+        ))
+        .bind(session_db_id)
+        .bind(window_started_at)
+        .fetch_all(pool)
+        .await?;
 
         let map = rows
             .into_iter()

@@ -291,7 +291,7 @@ const AGENT_POLICIES_DESCRIPTION =
   "Fetch agent-readable Markdown instructions describing the active policies " +
   "for the current repository — which tools must be called before push, which " +
   "must succeed, which file patterns trigger conditional tool calls, and how " +
-  "the validation window works. Call this at session start so your behaviour " +
+  "the verification phase works. Call this at session start so your behaviour " +
   "matches the policies configured on the TraceVault server. The instructions " +
   "take precedence over any manual project rules.";
 
