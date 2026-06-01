@@ -48,6 +48,14 @@
 	let confirmingDelete = $state<string | null>(null);
 	let deletingCred = $state(false);
 
+	// Per-credential edit form (keyed by name).
+	let editingName = $state<string | null>(null);
+	let editBaseUrl = $state('');
+	let editMaxConcurrent = $state(DEFAULT_MAX_CONCURRENT);
+	let editKey = $state('');
+	let savingEdit = $state(false);
+	let editError = $state('');
+
 	// --- Default-rule repoint state ---
 	let savingDefault = $state(false);
 
@@ -175,6 +183,74 @@
 			error = err instanceof Error ? err.message : 'Failed to remove credential';
 		} finally {
 			deletingCred = false;
+		}
+	}
+
+	function openEdit(cred: Credential) {
+		editingName = cred.name;
+		editBaseUrl = cred.base_url;
+		editMaxConcurrent = cred.max_concurrent;
+		editKey = '';
+		editError = '';
+		confirmingDelete = null;
+	}
+
+	function cancelEdit() {
+		editingName = null;
+		editKey = '';
+		editError = '';
+	}
+
+	async function handleEditCredential(event: SubmitEvent) {
+		event.preventDefault();
+		editError = '';
+		clearBanners();
+
+		const name = editingName;
+		if (!name) return;
+
+		const baseUrl = editBaseUrl.trim();
+		const key = editKey.trim();
+
+		if (!baseUrl.startsWith('https://')) {
+			editError = 'Base URL must be an https:// URL.';
+			return;
+		}
+		if (
+			!Number.isInteger(editMaxConcurrent) ||
+			editMaxConcurrent < MIN_MAX_CONCURRENT ||
+			editMaxConcurrent > MAX_MAX_CONCURRENT
+		) {
+			editError = `Max concurrent must be a whole number between ${MIN_MAX_CONCURRENT} and ${MAX_MAX_CONCURRENT}.`;
+			return;
+		}
+		if (key) {
+			if (!key.startsWith(KEY_PREFIX)) {
+				editError = `API key must start with "${KEY_PREFIX}".`;
+				return;
+			}
+			if (key.length > KEY_MAX_LEN) {
+				editError = `API key must be at most ${KEY_MAX_LEN} characters.`;
+				return;
+			}
+		}
+
+		const body: { base_url: string; max_concurrent: number; key?: string } = {
+			base_url: baseUrl,
+			max_concurrent: editMaxConcurrent
+		};
+		if (key) body.key = key;
+
+		savingEdit = true;
+		try {
+			await api.put<void>(`/api/v1/me/credentials/${encodeURIComponent(name)}`, body);
+			success = `Credential "${name}" updated.`;
+			cancelEdit();
+			await loadAll();
+		} catch (err) {
+			editError = err instanceof Error ? err.message : 'Failed to update credential';
+		} finally {
+			savingEdit = false;
 		}
 	}
 
@@ -362,7 +438,17 @@
 												<Button
 													variant="outline"
 													size="sm"
-													onclick={() => (confirmingDelete = cred.name)}
+													onclick={() => openEdit(cred)}
+												>
+													Edit
+												</Button>
+												<Button
+													variant="outline"
+													size="sm"
+													onclick={() => {
+														confirmingDelete = cred.name;
+														editingName = null;
+													}}
 												>
 													Delete
 												</Button>
@@ -370,6 +456,72 @@
 										</div>
 									</Table.Cell>
 								</Table.Row>
+								{#if editingName === cred.name}
+									<Table.Row>
+										<Table.Cell colspan={5} class="bg-muted/20 px-4 py-3">
+											<form onsubmit={handleEditCredential} class="grid max-w-lg gap-3">
+												<p class="text-sm font-medium">Edit "{cred.name}"</p>
+												{#if editError}
+													<p class="text-destructive text-sm">{editError}</p>
+												{/if}
+												<div class="grid gap-2">
+													<Label>Name</Label>
+													<p class="text-muted-foreground text-xs font-medium">{cred.name}</p>
+												</div>
+												<div class="grid gap-2">
+													<Label for="edit_base_url">Base URL</Label>
+													<Input
+														id="edit_base_url"
+														bind:value={editBaseUrl}
+														placeholder={DEFAULT_BASE_URL}
+														autocomplete="off"
+													/>
+												</div>
+												<div class="grid gap-2">
+													<Label for="edit_cap">Max concurrent requests</Label>
+													<Input
+														id="edit_cap"
+														type="number"
+														min={MIN_MAX_CONCURRENT}
+														max={MAX_MAX_CONCURRENT}
+														step={1}
+														bind:value={editMaxConcurrent}
+														class="max-w-[8rem]"
+													/>
+													<p class="text-muted-foreground text-xs">
+														Range {MIN_MAX_CONCURRENT}–{MAX_MAX_CONCURRENT}.
+													</p>
+												</div>
+												<div class="grid gap-2">
+													<Label for="edit_key">New key (leave blank to keep current key)</Label>
+													<Input
+														id="edit_key"
+														type="password"
+														autocomplete="off"
+														bind:value={editKey}
+														placeholder="sk-ant-..."
+													/>
+													<p class="text-muted-foreground text-xs">
+														The existing key is never shown. Enter a new key only to rotate it.
+													</p>
+												</div>
+												<div class="flex gap-2">
+													<Button type="submit" disabled={savingEdit}>
+														{savingEdit ? 'Saving...' : 'Save'}
+													</Button>
+													<Button
+														type="button"
+														variant="ghost"
+														disabled={savingEdit}
+														onclick={cancelEdit}
+													>
+														Cancel
+													</Button>
+												</div>
+											</form>
+										</Table.Cell>
+									</Table.Row>
+								{/if}
 							{/each}
 						</Table.Body>
 					</Table.Root>
