@@ -266,3 +266,83 @@ async fn complete_minimal(pool: sqlx::PgPool) {
         .unwrap();
     assert_eq!(status.as_deref(), Some("completed"));
 }
+
+/// `tracevault validation-start` (and `verify-start`) send a stream event
+/// with `tool: None`. The `sessions.tool` column is NOT NULL (migration
+/// 011), and Postgres enforces NOT NULL on the proposed INSERT tuple before
+/// `ON CONFLICT` can redirect to the UPDATE — so a null tool used to raise a
+/// not-null violation, surfacing as a 500 on the server. The upsert must
+/// instead default a missing tool to 'claude-code'.
+#[sqlx::test(migrations = "./migrations")]
+async fn upsert_with_null_tool_defaults_to_claude_code(pool: sqlx::PgPool) {
+    let org_id = common::seed_org(&pool).await;
+    let repo_id = common::seed_repo(&pool, org_id).await;
+    let user_id = common::seed_user(&pool).await;
+
+    let id = SessionRepo::upsert(
+        &pool,
+        &UpsertSession {
+            org_id,
+            repo_id,
+            user_id,
+            session_id: "s-null-tool".into(),
+            model: None,
+            cwd: None,
+            tool: None,
+            timestamp: Some(Utc::now()),
+        },
+    )
+    .await
+    .expect("a null tool must not error — it should default, not violate NOT NULL");
+
+    let (tool,): (String,) = sqlx::query_as("SELECT tool FROM sessions WHERE id = $1")
+        .bind(id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        tool, "claude-code",
+        "missing tool should default to claude-code"
+    );
+}
+
+/// A later event with a null tool (e.g. validation-start, fired after the
+/// hook events already created the session) must not error and must leave
+/// the originally-recorded tool intact.
+#[sqlx::test(migrations = "./migrations")]
+async fn upsert_with_null_tool_preserves_existing_tool_on_conflict(pool: sqlx::PgPool) {
+    let org_id = common::seed_org(&pool).await;
+    let repo_id = common::seed_repo(&pool, org_id).await;
+    let user_id = common::seed_user(&pool).await;
+
+    let make = |tool: Option<String>| UpsertSession {
+        org_id,
+        repo_id,
+        user_id,
+        session_id: "s-null-tool-conflict".into(),
+        model: None,
+        cwd: None,
+        tool,
+        timestamp: Some(Utc::now()),
+    };
+
+    // First event records a non-default tool.
+    let id1 = SessionRepo::upsert(&pool, &make(Some("codex".into())))
+        .await
+        .unwrap();
+    // A subsequent event omits the tool entirely.
+    let id2 = SessionRepo::upsert(&pool, &make(None))
+        .await
+        .expect("a null tool on a follow-up event must not error");
+    assert_eq!(id1, id2);
+
+    let (tool,): (String,) = sqlx::query_as("SELECT tool FROM sessions WHERE id = $1")
+        .bind(id1)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        tool, "codex",
+        "a null tool on conflict must preserve the existing tool, not clobber it"
+    );
+}
