@@ -42,9 +42,44 @@ pub struct AppState {
     pub repo_manager: repo_manager::RepoManager,
     pub extensions: extensions::ExtensionRegistry,
     pub encryption_key: Option<String>,
+    /// General-purpose HTTP client (pricing sync, future short-lived
+    /// outbound calls). Built with reqwest defaults — no per-request
+    /// timeout, suitable for one-shot non-streaming calls.
     pub http_client: reqwest::Client,
+    /// HTTP client dedicated to the Anthropic proxy. Has a bounded
+    /// `connect_timeout` so a stalled TCP handshake on api.anthropic.com
+    /// cannot park the proxy task indefinitely; intentionally has no
+    /// overall `timeout()` because the proxy carries long-lived SSE
+    /// streams whose total duration depends on the model's output.
+    pub proxy_http_client: reqwest::Client,
     pub cors_origin: String,
     pub invite_expiry_minutes: u64,
     pub embedding_service:
         Option<std::sync::Arc<crate::service::chat_embeddings::EmbeddingService>>,
+    /// Base URL the Anthropic proxy forwards requests to. Defaults to
+    /// `https://api.anthropic.com` in production; overridden in tests so a
+    /// wiremock stub upstream can stand in for the real Anthropic API.
+    pub anthropic_upstream_base: String,
+    /// Optional global cap on in-flight proxy requests across all users.
+    /// `None` = unlimited (default); set the operator env var
+    /// `PROXY_MAX_GLOBAL_CONCURRENT` to enable.
+    pub proxy_global_semaphore: Option<std::sync::Arc<tokio::sync::Semaphore>>,
+    /// Per-credential concurrency semaphores. Keyed by
+    /// `user_anthropic_keys.user_id` (effectively the credential ID today;
+    /// generalizes to org/credential IDs once those land). Each semaphore is
+    /// lazily created on first request for a credential, sized to the
+    /// credential's stored `max_concurrent` at that moment.
+    ///
+    /// Update semantics are intentionally lazy: a PUT that changes
+    /// `max_concurrent` only updates the DB row, *not* the in-memory
+    /// semaphore. The new cap takes effect on the next process restart, or
+    /// after the entry is explicitly evicted. This avoids the atomic-swap
+    /// edge cases of mid-flight cap changes.
+    ///
+    /// Growth: this DashMap grows monotonically with credentials that have
+    /// received at least one proxy request since startup. At expected scale
+    /// (<= ~10k credentials) the footprint is a few MB. Revisit eviction
+    /// (TTL or LRU) if active credentials exceed that threshold.
+    pub proxy_per_credential_semaphores:
+        std::sync::Arc<dashmap::DashMap<uuid::Uuid, std::sync::Arc<tokio::sync::Semaphore>>>,
 }

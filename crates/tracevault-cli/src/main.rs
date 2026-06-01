@@ -94,6 +94,18 @@ enum Cli {
     /// policies configured on the TraceVault server.
     #[command(name = "agent-policies")]
     AgentPolicies,
+    /// LLM proxy commands.
+    Proxy {
+        #[command(subcommand)]
+        cmd: ProxyCmd,
+    },
+}
+
+#[derive(clap::Subcommand)]
+enum ProxyCmd {
+    /// Print the proxy URL and setup instructions for AI tools (Claude Code,
+    /// GSD2, Cursor, Codex CLI, etc.).
+    Info,
 }
 
 #[tokio::main]
@@ -212,5 +224,13 @@ async fn main() {
                 std::process::exit(1);
             }
         }
+        Cli::Proxy { cmd } => match cmd {
+            ProxyCmd::Info => {
+                let code = commands::proxy::run_proxy_info();
+                if code != 0 {
+                    std::process::exit(code);
+                }
+            }
+        },
     }
 }

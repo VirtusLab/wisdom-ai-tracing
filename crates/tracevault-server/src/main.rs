@@ -1,4 +1,5 @@
 use axum::{
+    extract::DefaultBodyLimit,
     routing::{delete, get, post, put},
     Router,
 };
@@ -60,6 +61,41 @@ async fn main() {
     let repo_manager = repo_manager::RepoManager::new(&cfg.repos_dir);
     let extensions = build_extensions(&cfg);
     let http_client = reqwest::Client::new();
+    // Dedicated client for the Anthropic proxy. `connect_timeout` bounds
+    // how long a stalled TCP/TLS handshake can park the proxy task; we
+    // intentionally do *not* set an overall `timeout()` because the proxy
+    // carries SSE streams whose total duration is bounded by the model's
+    // output, not by the wall clock.
+    let proxy_http_client = reqwest::Client::builder()
+        .connect_timeout(std::time::Duration::from_secs(10))
+        .pool_idle_timeout(Some(std::time::Duration::from_secs(90)))
+        .build()
+        .expect("Failed to build proxy reqwest client");
+
+    // Optional global concurrency cap across all proxy requests. Unset = no
+    // global limit; this is the right default for the small-team deployments
+    // we ship to today. Operators turn this on after capacity testing; a
+    // sensible starting value is 256.
+    let proxy_global_semaphore: Option<std::sync::Arc<tokio::sync::Semaphore>> =
+        std::env::var("PROXY_MAX_GLOBAL_CONCURRENT")
+            .ok()
+            .and_then(|s| match s.parse::<usize>() {
+                Ok(n) if n > 0 => Some(n),
+                // Set but not a positive integer — warn and ignore, rather
+                // than silently treating a garbage value as "no cap".
+                _ => {
+                    tracing::warn!(
+                        value = %s,
+                        "PROXY_MAX_GLOBAL_CONCURRENT is set but not a positive integer; ignoring"
+                    );
+                    None
+                }
+            })
+            .map(|n| {
+                tracing::info!(cap = n, "proxy global concurrency cap enabled");
+                std::sync::Arc::new(tokio::sync::Semaphore::new(n))
+            });
+    let proxy_per_credential_semaphores = std::sync::Arc::new(dashmap::DashMap::new());
 
     // Auto-sync repos that are in 'ready' state on startup
     sync_repos_on_startup(&pool, &repo_manager, &extensions).await;
@@ -218,6 +254,12 @@ async fn main() {
         .route("/api/v1/auth/me", get(api::auth::me))
         // User endpoints
         .route("/api/v1/me/orgs", get(api::auth::list_my_orgs))
+        .route(
+            "/api/v1/me/anthropic-key",
+            get(api::me::get_anthropic_key_status)
+                .put(api::me::put_anthropic_key)
+                .delete(api::me::delete_anthropic_key),
+        )
         // Org management (create is org-agnostic)
         .route("/api/v1/orgs", post(api::orgs::create_org))
         // Org-scoped: org details & members
@@ -570,10 +612,30 @@ async fn main() {
             post(api::ci::verify_commits),
         );
 
+    // Anthropic LLM proxy — authenticates via x-api-key inside the handler
+    // (not the standard Authorization-bearer extractor), so it is its own
+    // router with no rate-limiting layer. Issue #207 / parent #181.
+    //
+    // Body limit: Axum's default `Bytes` cap is 2 MB, which silently rejects
+    // legitimate Anthropic requests (vision inputs, long conversations,
+    // large `system` prompts). Raise to 32 MB to match Anthropic's own
+    // request size envelope while still bounding worst-case server memory
+    // per in-flight request.
+    let proxy_routes = Router::new()
+        .route(
+            "/proxy/anthropic/{*path}",
+            get(api::proxy::anthropic_proxy)
+                .post(api::proxy::anthropic_proxy)
+                .put(api::proxy::anthropic_proxy)
+                .delete(api::proxy::anthropic_proxy),
+        )
+        .layer(DefaultBodyLimit::max(32 * 1024 * 1024));
+
     let app = Router::new()
         .merge(auth_routes)
         .merge(public_routes)
         .merge(authenticated_routes)
+        .merge(proxy_routes)
         .layer(TraceLayer::new_for_http())
         .layer(cors)
         .with_state(AppState {
@@ -582,9 +644,13 @@ async fn main() {
             extensions,
             encryption_key: cfg.encryption_key.clone(),
             http_client: http_client.clone(),
+            proxy_http_client: proxy_http_client.clone(),
             cors_origin: cfg.cors_origin.clone(),
             invite_expiry_minutes: cfg.invite_expiry_minutes,
+            anthropic_upstream_base: api::proxy::DEFAULT_ANTHROPIC_UPSTREAM_BASE.to_string(),
             embedding_service,
+            proxy_global_semaphore: proxy_global_semaphore.clone(),
+            proxy_per_credential_semaphores: proxy_per_credential_semaphores.clone(),
         });
 
     let listener = tokio::net::TcpListener::bind(&bind_addr).await.unwrap();
