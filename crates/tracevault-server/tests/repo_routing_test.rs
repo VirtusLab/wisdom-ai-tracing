@@ -65,3 +65,60 @@ async fn set_default_returns_false_without_rule(pool: sqlx::PgPool) {
         .unwrap()
         .is_none());
 }
+
+#[sqlx::test(migrations = "./migrations")]
+async fn rule_crud(pool: sqlx::PgPool) {
+    let user_id = common::seed_user(&pool).await;
+    seed_credential(&pool, user_id, "default").await;
+    seed_credential(&pool, user_id, "fast").await;
+    RoutingRepo::ensure_default(&pool, user_id, "default")
+        .await
+        .unwrap();
+
+    // add a model rule
+    RoutingRepo::upsert_rule(
+        &pool,
+        user_id,
+        Some("claude-haiku"),
+        "fast",
+        Some("x-haiku"),
+    )
+    .await
+    .unwrap();
+    let rules = RoutingRepo::list(&pool, user_id).await.unwrap();
+    assert_eq!(rules.len(), 2); // default + model rule
+    let model_rule = rules
+        .iter()
+        .find(|r| r.match_model.as_deref() == Some("claude-haiku"))
+        .unwrap();
+    assert_eq!(model_rule.credential_name, "fast");
+    assert_eq!(model_rule.provider_model.as_deref(), Some("x-haiku"));
+
+    // upsert same model updates it
+    RoutingRepo::upsert_rule(&pool, user_id, Some("claude-haiku"), "default", None)
+        .await
+        .unwrap();
+    let rules = RoutingRepo::list(&pool, user_id).await.unwrap();
+    assert_eq!(
+        rules
+            .iter()
+            .filter(|r| r.match_model.as_deref() == Some("claude-haiku"))
+            .count(),
+        1
+    );
+
+    // delete by id
+    let id = rules
+        .iter()
+        .find(|r| r.match_model.as_deref() == Some("claude-haiku"))
+        .unwrap()
+        .id;
+    assert!(RoutingRepo::delete_rule(&pool, user_id, id).await.unwrap());
+
+    // FK: rule pointing at a missing credential is rejected
+    assert!(
+        RoutingRepo::upsert_rule(&pool, user_id, Some("m"), "ghost", None)
+            .await
+            .is_err()
+    );
+}

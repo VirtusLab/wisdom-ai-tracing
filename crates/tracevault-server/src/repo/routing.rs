@@ -9,6 +9,14 @@ use crate::error::AppError;
 
 pub struct RoutingRepo;
 
+/// One routing rule as returned by `list`.
+pub struct RuleRow {
+    pub id: Uuid,
+    pub match_model: Option<String>,
+    pub credential_name: String,
+    pub provider_model: Option<String>,
+}
+
 impl RoutingRepo {
     /// Ensure a default rule exists for `user_id`. If none exists, create one
     /// pointing at `credential_name`. If one already exists it is left alone
@@ -93,6 +101,43 @@ impl RoutingRepo {
             .await?;
         }
         Ok(())
+    }
+
+    /// All routing rules for the user: default rule (match_model IS NULL) first,
+    /// then model rules ordered alphabetically.
+    pub async fn list(pool: &PgPool, user_id: Uuid) -> Result<Vec<RuleRow>, AppError> {
+        let rows = sqlx::query_as::<_, (Uuid, Option<String>, String, Option<String>)>(
+            "SELECT id, match_model, credential_name, provider_model
+             FROM proxy_routing_rules WHERE user_id = $1
+             ORDER BY match_model NULLS FIRST",
+        )
+        .bind(user_id)
+        .fetch_all(pool)
+        .await?;
+        Ok(rows
+            .into_iter()
+            .map(
+                |(id, match_model, credential_name, provider_model)| RuleRow {
+                    id,
+                    match_model,
+                    credential_name,
+                    provider_model,
+                },
+            )
+            .collect())
+    }
+
+    /// Delete a model routing rule by id. The default rule (match_model IS NULL)
+    /// is never deleted via this path. Returns true if a row was deleted.
+    pub async fn delete_rule(pool: &PgPool, user_id: Uuid, id: Uuid) -> Result<bool, AppError> {
+        let res = sqlx::query(
+            "DELETE FROM proxy_routing_rules WHERE user_id = $1 AND id = $2 AND match_model IS NOT NULL",
+        )
+        .bind(user_id)
+        .bind(id)
+        .execute(pool)
+        .await?;
+        Ok(res.rows_affected() > 0)
     }
 
     /// The credential name the default rule points at, if any.
