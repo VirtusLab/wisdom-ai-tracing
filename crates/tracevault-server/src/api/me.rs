@@ -355,22 +355,26 @@ pub async fn put_credential(
             RoutingRepo::ensure_default(&state.pool, user_id, &name).await?;
         }
         None => {
-            // base_url can only be applied alongside a key (the row is
-            // re-encrypted on store); reject it on the no-key path rather than
-            // silently dropping it — same as `put_anthropic_key`.
-            if req.base_url.is_some() {
-                return Err(AppError::BadRequest(
-                    "Changing base_url requires also providing the key".into(),
-                ));
-            }
-            if let Some(n) = req.max_concurrent {
-                let updated =
-                    CredentialRepo::update_max_concurrent(&state.pool, user_id, &name, n).await?;
-                if !updated {
-                    return Err(AppError::BadRequest(
-                        "Cannot update settings: no credential configured yet".into(),
-                    ));
-                }
+            // No new key: update metadata (base_url and/or cap) on an EXISTING
+            // credential. base_url is a plain column, so it can change without
+            // re-supplying the key. Validate base_url; require the credential to
+            // already exist (creating one needs a key).
+            let validated_base = match req.base_url.as_deref() {
+                Some(u) => Some(crate::validate_base_url(u)?),
+                None => None,
+            };
+            let updated = CredentialRepo::update_metadata(
+                &state.pool,
+                user_id,
+                &name,
+                validated_base.as_deref(),
+                req.max_concurrent,
+            )
+            .await?;
+            if !updated {
+                return Err(AppError::BadRequest(format!(
+                    "No credential named '{name}' — provide `key` to create one"
+                )));
             }
         }
     }

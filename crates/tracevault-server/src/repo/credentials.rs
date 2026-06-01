@@ -207,6 +207,32 @@ impl CredentialRepo {
         ))
     }
 
+    /// Update base_url and/or max_concurrent on an existing credential WITHOUT
+    /// touching the key material. Each field is updated only when Some (COALESCE
+    /// keeps the current value otherwise). Returns false if no such credential.
+    pub async fn update_metadata(
+        pool: &PgPool,
+        user_id: Uuid,
+        name: &str,
+        base_url: Option<&str>,
+        max_concurrent: Option<i32>,
+    ) -> Result<bool, AppError> {
+        let res = sqlx::query(
+            "UPDATE credentials
+             SET base_url = COALESCE($3, base_url),
+                 max_concurrent = COALESCE($4, max_concurrent),
+                 updated_at = now()
+             WHERE user_id = $1 AND name = $2",
+        )
+        .bind(user_id)
+        .bind(name)
+        .bind(base_url)
+        .bind(max_concurrent)
+        .execute(pool)
+        .await?;
+        Ok(res.rows_affected() > 0)
+    }
+
     /// Update only the cap on a named credential. Returns false if no such row.
     pub async fn update_max_concurrent(
         pool: &PgPool,

@@ -225,3 +225,70 @@ async fn credentials_and_routing_lifecycle(pool: sqlx::PgPool) {
     assert_eq!(arr.len(), 1);
     assert_eq!(arr[0]["name"], "default");
 }
+
+#[sqlx::test(migrations = "./migrations")]
+async fn me_credentials_put_edits_metadata_without_key(pool: sqlx::PgPool) {
+    let (app, bearer) = setup(pool).await;
+
+    // Create credential "work" with key, base_url, and max_concurrent.
+    let status = put_json(
+        &app,
+        &bearer,
+        "/api/v1/me/credentials/work",
+        r#"{"key":"sk-ant-initial","base_url":"https://api.anthropic.com","max_concurrent":8}"#,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+
+    // Update base_url and max_concurrent WITHOUT re-supplying the key -> 204.
+    let status = put_json(
+        &app,
+        &bearer,
+        "/api/v1/me/credentials/work",
+        r#"{"base_url":"https://gw.example.com","max_concurrent":20}"#,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+
+    // GET /me/credentials and verify the metadata was updated.
+    let (status, list) = get_value(&app, &bearer, "/api/v1/me/credentials").await;
+    assert_eq!(status, StatusCode::OK);
+    let arr = list.as_array().unwrap();
+    let work = arr.iter().find(|c| c["name"] == "work").unwrap();
+    assert_eq!(
+        work["base_url"], "https://gw.example.com",
+        "base_url should be updated without re-supplying key"
+    );
+    assert_eq!(
+        work["max_concurrent"], 20,
+        "max_concurrent should be updated without re-supplying key"
+    );
+
+    // Attempt to update a credential that doesn't exist (no key supplied) -> 400.
+    let status = put_json(
+        &app,
+        &bearer,
+        "/api/v1/me/credentials/ghost",
+        r#"{"base_url":"https://x.example.com"}"#,
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::BAD_REQUEST,
+        "creating a credential without a key should be rejected"
+    );
+
+    // SSRF validator still applies on the no-key path -> 400.
+    let status = put_json(
+        &app,
+        &bearer,
+        "/api/v1/me/credentials/work",
+        r#"{"base_url":"http://insecure"}"#,
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::BAD_REQUEST,
+        "insecure (http) base_url should be rejected even without a key"
+    );
+}
