@@ -65,7 +65,11 @@ pub async fn open_validation_window(
 
     let event = StreamEventRequest {
         protocol_version: 2,
-        tool: None,
+        // Carry the tool like the hook stream path does — the server's
+        // `sessions.tool` column is NOT NULL, so sending None makes the
+        // session upsert fail. (The server also defends against this, but
+        // there's no reason to send a null here.)
+        tool: Some("claude-code".to_string()),
         event_type: StreamEventType::ValidationWindowStart,
         session_id: session_id.clone(),
         timestamp: chrono::Utc::now(),

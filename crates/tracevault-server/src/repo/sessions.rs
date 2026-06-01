@@ -31,8 +31,16 @@ impl SessionRepo {
     /// INSERT INTO sessions ... ON CONFLICT (repo_id, session_id) DO UPDATE ... RETURNING id
     pub async fn upsert(pool: &PgPool, req: &UpsertSession) -> Result<Uuid, AppError> {
         let id: Uuid = sqlx::query_scalar(
+            // `tool` is NOT NULL (migration 011). Clients that don't carry a
+            // tool (e.g. `validation-start`/`verify-start`, which send None)
+            // must not trip the constraint: default a missing tool to
+            // 'claude-code'. Postgres enforces NOT NULL on the proposed
+            // INSERT tuple before ON CONFLICT can redirect to the UPDATE, so
+            // the COALESCE has to live in VALUES, not just the update arm.
+            // The conflict arm intentionally leaves `tool` untouched so the
+            // first non-null writer wins and a later null event can't clobber.
             "INSERT INTO sessions (org_id, repo_id, user_id, session_id, model, cwd, tool, started_at)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+             VALUES ($1, $2, $3, $4, $5, $6, COALESCE($7, 'claude-code'), $8)
              ON CONFLICT (repo_id, session_id) DO UPDATE SET
                  updated_at = now(),
                  model = COALESCE(EXCLUDED.model, sessions.model),
