@@ -713,6 +713,142 @@ async fn proxy_rejects_path_traversal_segments(pool: sqlx::PgPool) {
     );
 }
 
+// --- Proxy: per-model routing (step 2) ------------------------------------
+
+/// Seed a second credential (`fast` → `fast_upstream.uri()`) and a model rule
+/// `claude-haiku → fast (provider_model = claude-3-5-haiku-latest)` for the
+/// harness user, returning the second MockServer. The harness already wires
+/// the `default` credential at `h.upstream` + a default routing rule, so this
+/// gives us a two-target routing setup.
+async fn seed_model_routing(h: &Harness, user_token_owner: Uuid) -> MockServer {
+    let fast_upstream = MockServer::start().await;
+    let encryption_key = common::fixture_encryption_key();
+    tracevault_server::repo::credentials::CredentialRepo::upsert(
+        &h.pool,
+        &encryption_key,
+        user_token_owner,
+        "fast",
+        &fast_upstream.uri(),
+        "sk-ant-fast-upstream-key",
+        Some(8),
+    )
+    .await
+    .unwrap();
+    tracevault_server::repo::routing::RoutingRepo::upsert_rule(
+        &h.pool,
+        user_token_owner,
+        Some("claude-haiku"),
+        "fast",
+        Some("claude-3-5-haiku-latest"),
+    )
+    .await
+    .unwrap();
+    fast_upstream
+}
+
+/// Resolve the harness `user_session_token` back to its user_id (the harness
+/// owns the raw token but not the id, so look it up by its hash).
+async fn user_id_for_token(pool: &sqlx::PgPool, token: &str) -> Uuid {
+    let token_hash = tracevault_server::auth::sha256_hex(token);
+    sqlx::query_scalar::<_, Uuid>("SELECT user_id FROM auth_sessions WHERE token_hash = $1")
+        .bind(token_hash)
+        .fetch_one(pool)
+        .await
+        .unwrap()
+}
+
+/// A request whose `model` matches a routing rule must be forwarded to the
+/// matched credential's `base_url` (mock B / `fast`) — NOT the default
+/// (mock A) — and the body's `model` must be rewritten to the rule's
+/// `provider_model` before it reaches upstream.
+#[sqlx::test(migrations = "./migrations")]
+async fn proxy_routes_matching_model_to_matched_credential_and_rewrites_model(pool: sqlx::PgPool) {
+    let h = build_harness(pool).await;
+    let user_id = user_id_for_token(&h.pool, &h.user_session_token).await;
+    let fast_upstream = seed_model_routing(&h, user_id).await;
+
+    // Default (mock A): must NOT be hit for the routed model.
+    Mock::given(method("POST"))
+        .and(wm_path("/v1/messages"))
+        .respond_with(ResponseTemplate::new(200).set_body_string("{}"))
+        .expect(0)
+        .mount(&h.upstream)
+        .await;
+
+    // Matched credential (mock B / `fast`): must be hit with the upstream
+    // `fast` key and the rewritten model.
+    Mock::given(method("POST"))
+        .and(wm_path("/v1/messages"))
+        .and(header("x-api-key", "sk-ant-fast-upstream-key"))
+        .and(wiremock::matchers::body_json(json!({
+            "model": "claude-3-5-haiku-latest",
+            "max_tokens": 1
+        })))
+        .respond_with(ResponseTemplate::new(200).set_body_string("{}"))
+        .expect(1)
+        .mount(&fast_upstream)
+        .await;
+
+    let req = Request::builder()
+        .method("POST")
+        .uri("/proxy/anthropic/v1/messages")
+        .header("x-api-key", &h.user_session_token)
+        .header("content-type", "application/json")
+        .body(Body::from(
+            serde_json::to_vec(&json!({ "model": "claude-haiku", "max_tokens": 1 })).unwrap(),
+        ))
+        .unwrap();
+
+    let resp = h.app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    // Drain so the streaming permit drops cleanly.
+    let _ = read_body_to_bytes(resp.into_body()).await;
+}
+
+/// A request whose `model` matches NO rule must fall back to the default
+/// credential (mock A) with the body's `model` left unchanged.
+#[sqlx::test(migrations = "./migrations")]
+async fn proxy_routes_unmatched_model_to_default_credential_unchanged(pool: sqlx::PgPool) {
+    let h = build_harness(pool).await;
+    let user_id = user_id_for_token(&h.pool, &h.user_session_token).await;
+    let fast_upstream = seed_model_routing(&h, user_id).await;
+
+    // Default (mock A): hit with the default key and the model UNCHANGED.
+    Mock::given(method("POST"))
+        .and(wm_path("/v1/messages"))
+        .and(header("x-api-key", "sk-ant-test-upstream-key"))
+        .and(wiremock::matchers::body_json(json!({
+            "model": "claude-opus",
+            "max_tokens": 1
+        })))
+        .respond_with(ResponseTemplate::new(200).set_body_string("{}"))
+        .expect(1)
+        .mount(&h.upstream)
+        .await;
+
+    // Matched credential (mock B / `fast`): must NOT be hit.
+    Mock::given(method("POST"))
+        .and(wm_path("/v1/messages"))
+        .respond_with(ResponseTemplate::new(200).set_body_string("{}"))
+        .expect(0)
+        .mount(&fast_upstream)
+        .await;
+
+    let req = Request::builder()
+        .method("POST")
+        .uri("/proxy/anthropic/v1/messages")
+        .header("x-api-key", &h.user_session_token)
+        .header("content-type", "application/json")
+        .body(Body::from(
+            serde_json::to_vec(&json!({ "model": "claude-opus", "max_tokens": 1 })).unwrap(),
+        ))
+        .unwrap();
+
+    let resp = h.app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let _ = read_body_to_bytes(resp.into_body()).await;
+}
+
 // --- Proxy: per-credential and global concurrency caps (#210) -------------
 
 use std::time::Duration;
