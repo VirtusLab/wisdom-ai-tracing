@@ -104,7 +104,9 @@ pub async fn get_anthropic_key_status(
 /// request body has four optional fields — `key`, `max_concurrent`, `name`
 /// (defaults to "default"), and `base_url` (defaults to the server's
 /// configured Anthropic base, and is only settable alongside a `key`) — but
-/// at least one of `key`, `max_concurrent`, or `base_url` must be present.
+/// at least one of `key` or `max_concurrent` must be present. (`base_url`
+/// alone is not enough: it rides along with a `key` and is rejected on the
+/// no-key path, so the guard does not count it.)
 /// Use cases:
 ///
 ///   * `{ key: "sk-ant-...", max_concurrent: 16 }` — first-time setup or
@@ -130,9 +132,14 @@ pub async fn put_anthropic_key(
     let user_id = require_real_user(&auth)?;
     let name = req.name.as_deref().unwrap_or("default").to_string();
 
-    if req.key.is_none() && req.max_concurrent.is_none() && req.base_url.is_none() {
+    // `base_url` is intentionally absent from this guard: on this legacy
+    // single-key endpoint it only applies alongside a `key` (see the no-key
+    // branch below, which rejects it). Counting it here would let a
+    // base_url-only request pass the guard and then 400 anyway — a
+    // contradictory accepted-but-impossible path.
+    if req.key.is_none() && req.max_concurrent.is_none() {
         return Err(AppError::BadRequest(
-            "Request must include `key`, `max_concurrent`, or `base_url`".into(),
+            "Request must include `key` or `max_concurrent`".into(),
         ));
     }
 

@@ -1385,6 +1385,19 @@ async fn me_anthropic_key_put_rejects_base_url_without_key(pool: sqlx::PgPool) {
         .unwrap();
     assert_eq!(r.status(), StatusCode::BAD_REQUEST);
 
+    // A base_url-only PUT must also 400: base_url is not a standalone field
+    // on this endpoint, so it is rejected at the required-fields guard rather
+    // than passing it and then failing on the no-key path.
+    let r = app
+        .clone()
+        .oneshot(put_request(
+            &bearer,
+            serde_json::json!({ "base_url": "https://example.com" }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(r.status(), StatusCode::BAD_REQUEST);
+
     // The request was rejected whole: neither base_url nor the cap changed.
     let after =
         tracevault_server::repo::credentials::CredentialRepo::resolve_default(&pool, user_id)

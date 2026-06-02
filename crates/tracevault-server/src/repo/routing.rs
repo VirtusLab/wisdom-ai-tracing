@@ -71,7 +71,9 @@ impl RoutingRepo {
         provider_model: Option<&str>,
     ) -> Result<(), AppError> {
         // Two ON CONFLICT targets because the unique indexes are partial
-        // (one for match_model IS NULL, one for NOT NULL). Branch on it.
+        // (one for match_model IS NULL, one for NOT NULL). The model-rule
+        // branch returns early so the default-rule query sits at the top
+        // level instead of nested in an else.
         if match_model.is_some() {
             sqlx::query(
                 "INSERT INTO proxy_routing_rules (user_id, match_model, credential_name, provider_model)
@@ -86,20 +88,21 @@ impl RoutingRepo {
             .bind(provider_model)
             .execute(pool)
             .await?;
-        } else {
-            sqlx::query(
-                "INSERT INTO proxy_routing_rules (user_id, match_model, credential_name, provider_model)
-                 VALUES ($1, NULL, $2, $3)
-                 ON CONFLICT (user_id) WHERE match_model IS NULL
-                 DO UPDATE SET credential_name = EXCLUDED.credential_name,
-                               provider_model = EXCLUDED.provider_model, updated_at = now()",
-            )
-            .bind(user_id)
-            .bind(credential_name)
-            .bind(provider_model)
-            .execute(pool)
-            .await?;
+            return Ok(());
         }
+
+        sqlx::query(
+            "INSERT INTO proxy_routing_rules (user_id, match_model, credential_name, provider_model)
+             VALUES ($1, NULL, $2, $3)
+             ON CONFLICT (user_id) WHERE match_model IS NULL
+             DO UPDATE SET credential_name = EXCLUDED.credential_name,
+                           provider_model = EXCLUDED.provider_model, updated_at = now()",
+        )
+        .bind(user_id)
+        .bind(credential_name)
+        .bind(provider_model)
+        .execute(pool)
+        .await?;
         Ok(())
     }
 
