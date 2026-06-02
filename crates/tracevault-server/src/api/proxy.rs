@@ -6,9 +6,9 @@
 //! TV `auth_sessions` token as the `x-api-key` value. The handler:
 //!
 //! 1. Resolves the TV session token in `x-api-key` to a user.
-//! 2. Loads that user's encrypted Anthropic key from `user_anthropic_keys`,
-//!    decrypts it, and substitutes it into `x-api-key`.
-//! 3. Forwards the request to `https://api.anthropic.com/{path}` with an
+//! 2. Resolves that user's default routing rule to a `credentials` row,
+//!    decrypts its key, and substitutes it into `x-api-key`.
+//! 3. Forwards the request to the credential's `base_url`/{path} with an
 //!    allow-listed set of headers.
 //! 4. Streams the response body back byte-for-byte via
 //!    `reqwest::Response::bytes_stream()` — no SSE parsing.
@@ -34,11 +34,11 @@ use uuid::Uuid;
 
 use crate::auth::sha256_hex;
 use crate::encryption;
-use crate::repo::user_anthropic_keys::UserAnthropicKeyRepo;
+use crate::repo::credentials::CredentialRepo;
 use crate::AppState;
 
-/// Default Anthropic API base URL used in production. Overridden in tests
-/// via `AppState.anthropic_upstream_base`.
+/// Default Anthropic API base URL. Seeds `AppState.default_credential_base_url`
+/// (the base applied to newly-stored credentials that don't specify one).
 pub const DEFAULT_ANTHROPIC_UPSTREAM_BASE: &str = "https://api.anthropic.com";
 
 /// Request headers we forward upstream. Anything not on this list is dropped
@@ -110,6 +110,21 @@ fn anthropic_error(status: StatusCode, kind: ProxyErrorKind, message: &str) -> R
         .into_response()
 }
 
+/// Replace the top-level `model` field in a JSON request body with the
+/// routing rule's provider-side model name, re-serializing the result.
+/// Returns None if the body is not a JSON object (the caller keeps the
+/// original bytes), so a non-JSON body or one without an object root is
+/// forwarded verbatim rather than dropped or mangled.
+fn rewrite_model(body: &Bytes, provider_model: &str) -> Option<Bytes> {
+    let mut v: serde_json::Value = serde_json::from_slice(body).ok()?;
+    let obj = v.as_object_mut()?;
+    obj.insert(
+        "model".into(),
+        serde_json::Value::String(provider_model.to_string()),
+    );
+    Some(Bytes::from(serde_json::to_vec(&v).ok()?))
+}
+
 /// Catch-all proxy handler. Mounted at `/proxy/anthropic/{*path}`.
 ///
 /// Path layout: `path` is everything after `/proxy/anthropic/` (no leading
@@ -138,8 +153,8 @@ pub async fn anthropic_proxy(
     // Defense in depth: reject `..` segments in the captured path before
     // composing the upstream URL. `reqwest`/`url` normalize `..` before
     // sending, so today this only collapses paths within api.anthropic.com
-    // (no host escape is possible). But `anthropic_upstream_base` is a
-    // configurable string — if it ever carries a path prefix (e.g. a
+    // (no host escape is possible). But the credential `base_url` is a
+    // user-configurable string — if it ever carries a path prefix (e.g. a
     // future Anthropic regional endpoint with `/v1/` baked in), `..` could
     // escape that prefix. Rejecting at the entry point keeps this safe
     // regardless of how the base URL is configured later.
@@ -157,10 +172,27 @@ pub async fn anthropic_proxy(
         );
     }
 
-    let (user_id, upstream_key, max_concurrent) = match authenticate(&state, &headers, &path).await
-    {
-        Ok(triple) => triple,
-        Err(resp) => return resp,
+    // Best-effort parse of the request `model` from the JSON body. A non-JSON
+    // body or a missing `model` field yields None, which routes to the user's
+    // default credential — the parse never fails the request.
+    let requested_model = serde_json::from_slice::<serde_json::Value>(&body)
+        .ok()
+        .and_then(|v| v.get("model").and_then(|m| m.as_str()).map(str::to_string));
+
+    let (user_id, upstream_key, max_concurrent, base_url, protocol, provider_model) =
+        match authenticate(&state, &headers, &path, requested_model.as_deref()).await {
+            Ok(tuple) => tuple,
+            Err(resp) => return resp,
+        };
+
+    // If the matched routing rule rewrites the model, patch the body's
+    // top-level `model` before forwarding. On parse failure we keep the
+    // original bytes (a body that survived as JSON above will re-serialize
+    // fine; this is purely defensive).
+    let body = if let Some(pm) = provider_model.as_deref() {
+        rewrite_model(&body, pm).unwrap_or(body)
+    } else {
+        body
     };
 
     // Acquire concurrency permits BEFORE dispatching upstream. Global cap
@@ -189,6 +221,8 @@ pub async fn anthropic_proxy(
         &headers,
         body,
         &upstream_key,
+        &base_url,
+        &protocol,
         user_id,
         start,
     )
@@ -211,14 +245,19 @@ pub async fn anthropic_proxy(
 }
 
 /// Concern 1: extract `x-api-key`, resolve it to a user, and load that
-/// user's decrypted Anthropic credential. Returns the
-/// `(user_id, upstream_plaintext_key, max_concurrent)` triple on success,
-/// or an Anthropic-shaped error envelope on any auth/credential failure.
+/// user's decrypted Anthropic credential — selected by the request `model`
+/// (an exact-match routing rule wins; otherwise the user's default rule).
+/// Returns the
+/// `(user_id, upstream_plaintext_key, max_concurrent, base_url, protocol, provider_model)`
+/// tuple on success, or an Anthropic-shaped error envelope on any
+/// auth/credential failure. `provider_model` is Some when the matched rule
+/// rewrites the model to a provider-side name.
 async fn authenticate(
     state: &AppState,
     headers: &HeaderMap,
     path: &str,
-) -> Result<(Uuid, String, i32), Response> {
+    model: Option<&str>,
+) -> Result<(Uuid, String, i32, String, String, Option<String>), Response> {
     let tv_token = match headers.get("x-api-key").and_then(|v| v.to_str().ok()) {
         Some(t) if !t.is_empty() => t,
         _ => {
@@ -238,8 +277,16 @@ async fn authenticate(
 
     let token_hash = sha256_hex(tv_token);
     let user_id = resolve_token(state, &token_hash).await?;
-    let (upstream_key, max_concurrent) = load_credential(state, user_id).await?;
-    Ok((user_id, upstream_key, max_concurrent))
+    let (upstream_key, max_concurrent, base_url, protocol, provider_model) =
+        load_credential(state, user_id, model).await?;
+    Ok((
+        user_id,
+        upstream_key,
+        max_concurrent,
+        base_url,
+        protocol,
+        provider_model,
+    ))
 }
 
 /// Concern 2: build the upstream request from the user's downstream
@@ -254,10 +301,12 @@ async fn forward_to_upstream(
     headers: &HeaderMap,
     body: Bytes,
     upstream_key: &str,
+    base_url: &str,
+    protocol: &str,
     user_id: Uuid,
     start: Instant,
 ) -> Result<reqwest::Response, Response> {
-    let base = state.anthropic_upstream_base.trim_end_matches('/');
+    let base = base_url.trim_end_matches('/');
     let upstream_url = if query.is_empty() {
         format!("{base}/{path}")
     } else {
@@ -274,10 +323,26 @@ async fn forward_to_upstream(
             upstream_req = upstream_req.header(*header_name, value);
         }
     }
-    // Inject the decrypted upstream key. Done after the allow-list loop so
-    // a client-sent x-api-key cannot bleed through even if the allow-list
-    // is ever broadened by mistake.
-    upstream_req = upstream_req.header("x-api-key", upstream_key);
+    // Inject the decrypted upstream key per the credential's protocol. Done
+    // after the allow-list loop so a client-sent auth header cannot bleed
+    // through even if the allow-list is ever broadened by mistake.
+    match protocol {
+        "anthropic" => {
+            upstream_req = upstream_req.header("x-api-key", upstream_key);
+        }
+        other => {
+            tracing::error!(
+                user_id = %user_id,
+                protocol = %other,
+                "unsupported credential protocol reached forward path"
+            );
+            return Err(anthropic_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                ProxyErrorKind::ApiError,
+                "Unsupported credential protocol",
+            ));
+        }
+    }
 
     upstream_req.send().await.map_err(|e| {
         tracing::warn!(
@@ -441,12 +506,20 @@ async fn resolve_token(state: &AppState, token_hash: &str) -> Result<Uuid, Respo
     }
 }
 
-/// Fetch the user's stored credential (encrypted Anthropic key + cap) and
-/// decrypt the key. Returns `(plaintext, max_concurrent)` on success or an
-/// Anthropic-shaped error envelope on any failure (no key configured, no
-/// master key on this server, ciphertext corrupted, DB error).
-async fn load_credential(state: &AppState, user_id: Uuid) -> Result<(String, i32), Response> {
-    let credential = match UserAnthropicKeyRepo::get_credential(&state.pool, user_id).await {
+/// Fetch the user's stored credential (encrypted Anthropic key + cap +
+/// upstream) for the request `model` and decrypt the key. An exact-match
+/// routing rule selects the credential; otherwise the user's default rule
+/// applies. Returns the
+/// `(plaintext_key, max_concurrent, base_url, protocol, provider_model)`
+/// tuple on success or an Anthropic-shaped error envelope on any failure (no
+/// key configured, no master key on this server, ciphertext corrupted, DB
+/// error). `provider_model` is Some when the matched rule rewrites the model.
+async fn load_credential(
+    state: &AppState,
+    user_id: Uuid,
+    model: Option<&str>,
+) -> Result<(String, i32, String, String, Option<String>), Response> {
+    let credential = match CredentialRepo::resolve_for_model(&state.pool, user_id, model).await {
         Ok(Some(c)) => c,
         Ok(None) => {
             tracing::warn!(
@@ -466,7 +539,7 @@ async fn load_credential(state: &AppState, user_id: Uuid) -> Result<(String, i32
                 user_id = %user_id,
                 error_type = "api_error",
                 err = %e,
-                "failed to load user_anthropic_keys row"
+                "failed to load credential row"
             );
             return Err(anthropic_error(
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -480,7 +553,7 @@ async fn load_credential(state: &AppState, user_id: Uuid) -> Result<(String, i32
         tracing::error!(
             user_id = %user_id,
             error_type = "api_error",
-            "server has no encryption_key configured but a row exists in user_anthropic_keys"
+            "server has no encryption_key configured but a credential row exists"
         );
         anthropic_error(
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -503,7 +576,13 @@ async fn load_credential(state: &AppState, user_id: Uuid) -> Result<(String, i32
                 "Failed to decrypt upstream credentials",
             )
         })?;
-    Ok((plaintext, credential.max_concurrent))
+    Ok((
+        plaintext,
+        credential.max_concurrent,
+        credential.base_url,
+        credential.protocol,
+        credential.provider_model,
+    ))
 }
 
 /// Try to acquire a permit from the optional global concurrency cap. If

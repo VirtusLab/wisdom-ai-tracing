@@ -42,15 +42,21 @@ async fn build_real_state(pool: &sqlx::PgPool, upstream_key: &str) -> (AppState,
     let session_token = common::seed_auth_session(pool, user).await;
     let encryption_key = common::fixture_encryption_key();
 
-    tracevault_server::repo::user_anthropic_keys::UserAnthropicKeyRepo::upsert(
+    // Forward to the real api.anthropic.com — exactly what we want here.
+    tracevault_server::repo::credentials::CredentialRepo::upsert(
         pool,
         &encryption_key,
         user,
+        "default",
+        api::proxy::DEFAULT_ANTHROPIC_UPSTREAM_BASE,
         upstream_key,
         None,
     )
     .await
     .unwrap();
+    tracevault_server::repo::routing::RoutingRepo::ensure_default(pool, user, "default")
+        .await
+        .unwrap();
 
     let state = AppState {
         pool: pool.clone(),
@@ -65,8 +71,7 @@ async fn build_real_state(pool: &sqlx::PgPool, upstream_key: &str) -> (AppState,
         cors_origin: "*".to_string(),
         invite_expiry_minutes: 60,
         embedding_service: None,
-        // Defaults to the real api.anthropic.com — exactly what we want here.
-        anthropic_upstream_base: api::proxy::DEFAULT_ANTHROPIC_UPSTREAM_BASE.to_string(),
+        default_credential_base_url: api::proxy::DEFAULT_ANTHROPIC_UPSTREAM_BASE.to_string(),
         proxy_global_semaphore: None,
         proxy_per_credential_semaphores: std::sync::Arc::new(dashmap::DashMap::new()),
     };

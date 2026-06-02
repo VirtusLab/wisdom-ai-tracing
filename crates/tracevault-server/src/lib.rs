@@ -14,6 +14,7 @@ pub mod password_policy;
 pub mod permissions;
 pub mod pricing;
 pub mod pricing_sync;
+mod proxy_url;
 pub mod repo;
 pub mod repo_manager;
 pub mod service;
@@ -21,6 +22,7 @@ pub mod signing;
 pub mod story;
 
 pub use error::AppError;
+pub use proxy_url::validate_base_url;
 
 /// Stable replacement for `str::floor_char_boundary` (nightly-only).
 /// Returns the largest byte index `<= index` that is a char boundary.
@@ -56,16 +58,18 @@ pub struct AppState {
     pub invite_expiry_minutes: u64,
     pub embedding_service:
         Option<std::sync::Arc<crate::service::chat_embeddings::EmbeddingService>>,
-    /// Base URL the Anthropic proxy forwards requests to. Defaults to
-    /// `https://api.anthropic.com` in production; overridden in tests so a
-    /// wiremock stub upstream can stand in for the real Anthropic API.
-    pub anthropic_upstream_base: String,
+    /// Default upstream base URL applied to newly-stored credentials when the
+    /// caller does not supply one. Defaults to `https://api.anthropic.com` in
+    /// production; overridden in tests so a wiremock stub upstream can stand in
+    /// for the real Anthropic API. The proxy forwards to each credential's own
+    /// stored `base_url`, not this field.
+    pub default_credential_base_url: String,
     /// Optional global cap on in-flight proxy requests across all users.
     /// `None` = unlimited (default); set the operator env var
     /// `PROXY_MAX_GLOBAL_CONCURRENT` to enable.
     pub proxy_global_semaphore: Option<std::sync::Arc<tokio::sync::Semaphore>>,
     /// Per-credential concurrency semaphores. Keyed by
-    /// `user_anthropic_keys.user_id` (effectively the credential ID today;
+    /// `credentials.user_id` (effectively the credential ID today;
     /// generalizes to org/credential IDs once those land). Each semaphore is
     /// lazily created on first request for a credential, sized to the
     /// credential's stored `max_concurrent` at that moment.
