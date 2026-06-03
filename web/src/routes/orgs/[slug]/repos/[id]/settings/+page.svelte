@@ -11,6 +11,7 @@
 	interface RepoSettings {
 		github_url: string | null;
 		clone_status: string;
+		clone_error: string | null;
 		has_deploy_key: boolean;
 		last_fetched_at: string | null;
 		verification_phase_mode: string;
@@ -243,12 +244,20 @@
 								Cloning...
 							</span>
 						{:else if settings.clone_status === 'error'}
-							<span class="rounded-full px-2 py-0.5 text-[10px]" style="background: rgba(240,101,101,0.12); color: #f06565; border: 1px solid rgba(240,101,101,0.25)">Error</span>
+							<span class="rounded-full px-2 py-0.5 text-[10px]" title={settings.clone_error ?? undefined} style="background: rgba(240,101,101,0.12); color: #f06565; border: 1px solid rgba(240,101,101,0.25)">Error</span>
 						{:else}
 							<span class="rounded-full px-2 py-0.5 text-[10px]" style="background: rgba(79,110,247,0.12); color: #4f6ef7; border: 1px solid rgba(79,110,247,0.25)">Not cloned</span>
 						{/if}
 					</span>
 				</div>
+				{#if settings.clone_status === 'error' && settings.clone_error}
+					<div
+						class="rounded-md px-3 py-2 text-xs"
+						style="background: rgba(240,101,101,0.08); color: #f06565; border: 1px solid rgba(240,101,101,0.2)"
+					>
+						<span class="break-all whitespace-pre-wrap">{settings.clone_error}</span>
+					</div>
+				{/if}
 				<div class="flex items-center justify-between py-1.5 text-sm">
 					<span class="text-muted-foreground text-xs">Last fetched</span>
 					<span class="text-xs">{formatDateTime(settings.last_fetched_at)}</span>

@@ -97,7 +97,22 @@ async fn main() {
             });
     let proxy_per_credential_semaphores = std::sync::Arc::new(dashmap::DashMap::new());
 
-    // Auto-sync repos that are in 'ready' state on startup
+    // Recover clones orphaned by the previous shutdown and re-clone them; a
+    // failure falls through to the normal backoff retry. Spawned so a slow
+    // clone doesn't delay startup. Then auto-sync repos that are 'ready'.
+    {
+        let pool = pool.clone();
+        let repo_manager = repo_manager.clone();
+        let extensions = extensions.clone();
+        tokio::spawn(async move {
+            tracevault_server::service::clone_recovery::recover_orphaned_on_startup(
+                &pool,
+                &repo_manager,
+                &extensions,
+            )
+            .await;
+        });
+    }
     sync_repos_on_startup(&pool, &repo_manager, &extensions).await;
 
     // Sync pricing from LiteLLM on startup (non-blocking on failure)
@@ -168,6 +183,27 @@ async fn main() {
                     &pool,
                     encryption_key.as_deref(),
                     30, // inactive for 30 minutes
+                )
+                .await;
+            }
+        });
+    }
+
+    // Background auto-retry of failed clones (every 5 minutes). Capped, with
+    // backoff, so transient failures self-heal without a manual sync.
+    {
+        let pool = pool.clone();
+        let repo_manager = repo_manager.clone();
+        let extensions = extensions.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(300));
+            interval.tick().await; // skip immediate tick
+            loop {
+                interval.tick().await;
+                tracevault_server::service::clone_recovery::retry_failed_clones(
+                    &pool,
+                    &repo_manager,
+                    &extensions,
                 )
                 .await;
             }

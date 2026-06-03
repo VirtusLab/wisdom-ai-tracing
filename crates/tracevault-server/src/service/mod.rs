@@ -4,5 +4,6 @@ pub mod chat_chunking;
 pub mod chat_embeddings;
 pub mod chat_indexing;
 pub mod chat_summarization;
+pub mod clone_recovery;
 pub mod sealing;
 pub mod stream;
