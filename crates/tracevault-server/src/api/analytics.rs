@@ -1427,11 +1427,29 @@ pub async fn get_cost(
     .fetch_one(&state.pool)
     .await?;
 
+    // Fold ledger (proxy) cost and cache-read tokens into the session-derived
+    // KPIs.  Coexistence assumption: a user uses EITHER the hook OR the proxy,
+    // so simple addition gives correct org-wide totals without double-counting.
+    let led = crate::repo::llm_calls::LlmCallRepo::kpis(
+        &state.pool,
+        org_id,
+        q.repo.as_deref(),
+        q.author.as_deref(),
+        q.from,
+        q.to,
+    )
+    .await?;
+
+    // avg_cost_per_session stays session-only (it is a per-session metric;
+    // proxy calls are not sessions and must not affect this denominator).
+    let total_cost = totals.0 + led.cost_usd;
+    let total_cache_read = totals.2 + led.cache_read_tokens;
+
     // Approximate cache savings using Sonnet rates for aggregate
     let cache_savings = state
         .extensions
         .pricing
-        .estimate_cache_savings("sonnet", totals.2);
+        .estimate_cache_savings("sonnet", total_cache_read);
 
     // Cost over time (daily). Session rows are UNION ALL'd with ledger
     // (proxy) rows; the outer aggregate sums both per day. Bind order is
@@ -1571,7 +1589,7 @@ pub async fn get_cost(
     .await?;
 
     Ok(Json(CostResponse {
-        total_cost: totals.0,
+        total_cost,
         avg_cost_per_session: totals.1,
         cache_savings_usd: cache_savings,
         cost_over_time: cost_time
