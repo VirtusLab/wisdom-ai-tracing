@@ -2,7 +2,14 @@ use git2::Repository;
 use sqlx::PgPool;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::time::Duration;
 use uuid::Uuid;
+
+/// Total wall-clock budget for a `git clone`. Bounds clones that hang on a
+/// stalled network or auth so the repo lands in 'error' instead of being stuck
+/// in 'cloning' forever. Kept below the sync-handler staleness threshold so a
+/// hung clone resolves itself with a precise error before a retry kicks in.
+const CLONE_TIMEOUT: Duration = Duration::from_secs(300);
 
 #[derive(Clone)]
 pub struct RepoManager {
@@ -38,19 +45,35 @@ fn cleanup_temp_key(path: &Path) {
     std::fs::remove_file(path).ok();
 }
 
-/// Run a git command with optional deploy key SSH configuration.
+/// `GIT_SSH_COMMAND` value for deploy-key auth. The connect/keepalive timeouts
+/// bound the common "SSH hangs forever" failure mode (dead network, silent
+/// firewall drop) so git fails instead of stalling indefinitely.
+fn ssh_command(deploy_key_path: &Path) -> String {
+    format!(
+        "ssh -i {} -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new \
+         -o ConnectTimeout=15 -o ServerAliveInterval=15 -o ServerAliveCountMax=3",
+        deploy_key_path.display()
+    )
+}
+
+/// Run a (blocking) git command with optional deploy key SSH configuration.
 fn git_cmd(deploy_key_path: Option<&Path>) -> Command {
     let mut cmd = Command::new("git");
     if let Some(key_path) = deploy_key_path {
-        cmd.env(
-            "GIT_SSH_COMMAND",
-            format!(
-                "ssh -i {} -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new",
-                key_path.display()
-            ),
-        );
+        cmd.env("GIT_SSH_COMMAND", ssh_command(key_path));
     }
     cmd
+}
+
+/// Clamp a git error message so a pathological stderr can't bloat the DB row.
+fn truncate_error(msg: &str) -> String {
+    const MAX: usize = 2000;
+    if msg.chars().count() <= MAX {
+        msg.to_string()
+    } else {
+        let head: String = msg.chars().take(MAX).collect();
+        format!("{head}…")
+    }
 }
 
 impl RepoManager {
@@ -75,44 +98,72 @@ impl RepoManager {
     ) -> Result<(), String> {
         let path = self.repo_path(repo_id);
 
-        sqlx::query("UPDATE repos SET clone_status = 'cloning' WHERE id = $1")
-            .bind(repo_id)
-            .execute(pool)
-            .await
-            .map_err(|e| e.to_string())?;
+        sqlx::query(
+            "UPDATE repos SET clone_status = 'cloning', clone_started_at = now(), clone_error = NULL WHERE id = $1",
+        )
+        .bind(repo_id)
+        .execute(pool)
+        .await
+        .map_err(|e| e.to_string())?;
 
         let temp_key = deploy_key_pem.map(write_temp_key).transpose()?;
 
-        let output = git_cmd(temp_key.as_deref())
-            .args(["clone", "--bare", github_url])
+        // Async process + wall-clock timeout: a hung clone is killed
+        // (`kill_on_drop`) rather than leaving the repo stuck in 'cloning'.
+        let mut cmd = tokio::process::Command::new("git");
+        if let Some(ref kp) = temp_key {
+            cmd.env("GIT_SSH_COMMAND", ssh_command(kp));
+        }
+        cmd.args(["clone", "--bare", github_url])
             .arg(&path)
-            .output()
-            .map_err(|e| format!("failed to run git clone: {e}"));
+            .kill_on_drop(true);
+
+        let result = match tokio::time::timeout(CLONE_TIMEOUT, cmd.output()).await {
+            Ok(Ok(output)) => Ok(output),
+            Ok(Err(e)) => Err(format!("failed to run git clone: {e}")),
+            Err(_) => Err(format!(
+                "git clone timed out after {}s",
+                CLONE_TIMEOUT.as_secs()
+            )),
+        };
 
         if let Some(ref kp) = temp_key {
             cleanup_temp_key(kp);
         }
 
-        let output = output?;
+        // Collapse the outcome to an optional failure message.
+        let failure = match result {
+            Ok(output) if output.status.success() => None,
+            Ok(output) => Some(format!(
+                "git clone failed: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            )),
+            Err(e) => Some(e),
+        };
 
-        if output.status.success() {
-            sqlx::query("UPDATE repos SET clone_status = 'ready', clone_path = $1, last_fetched_at = now() WHERE id = $2")
+        let Some(msg) = failure else {
+            // Success — clear the failure bookkeeping so the retry budget resets.
+            sqlx::query("UPDATE repos SET clone_status = 'ready', clone_path = $1, last_fetched_at = now(), clone_error = NULL, clone_failed_at = NULL, clone_retry_count = 0 WHERE id = $2")
                 .bind(path.to_string_lossy().to_string())
                 .bind(repo_id)
                 .execute(pool)
                 .await
                 .map_err(|e| e.to_string())?;
-            Ok(())
-        } else {
-            std::fs::remove_dir_all(&path).ok();
-            sqlx::query("UPDATE repos SET clone_status = 'error' WHERE id = $1")
-                .bind(repo_id)
-                .execute(pool)
-                .await
-                .ok();
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            Err(format!("git clone failed: {stderr}"))
-        }
+            return Ok(());
+        };
+
+        // Failure — drop the partial clone and record the error. The retry
+        // budget (clone_retry_count) is owned by the sweeper, so leave it be.
+        std::fs::remove_dir_all(&path).ok();
+        sqlx::query(
+            "UPDATE repos SET clone_status = 'error', clone_error = $2, clone_failed_at = now() WHERE id = $1",
+        )
+        .bind(repo_id)
+        .bind(truncate_error(&msg))
+        .execute(pool)
+        .await
+        .ok();
+        Err(msg)
     }
 
     /// Fetch latest changes for a bare repo.

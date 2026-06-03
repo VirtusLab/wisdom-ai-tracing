@@ -11,6 +11,38 @@ use crate::error::AppError;
 use crate::extractors::OrgAuth;
 use crate::repo::repos::GitRepoRepo;
 
+/// A repo stuck in 'cloning' for longer than this is treated as orphaned (the
+/// owning clone task died, e.g. a redeploy) and a sync is allowed to retry it.
+/// Comfortably above the clone wall-clock timeout so a genuinely in-progress
+/// clone is never pre-empted.
+const STALE_CLONE_SECS: i64 = 600;
+
+/// True if a 'cloning' row is stale enough to retry — no start time recorded
+/// (orphaned before the timestamp could be set) or older than the threshold.
+fn is_stale_clone(started_at: Option<chrono::DateTime<chrono::Utc>>) -> bool {
+    started_at.is_none_or(|t| (chrono::Utc::now() - t).num_seconds() > STALE_CLONE_SECS)
+}
+
+/// Spawn a detached background clone. `clone_repo` moves the row through
+/// 'cloning' → 'ready'/'error' and persists any failure to `clone_error`; here
+/// we only log so the spawned task never panics silently.
+fn spawn_clone(
+    pool: sqlx::PgPool,
+    repo_mgr: crate::repo_manager::RepoManager,
+    repo_id: Uuid,
+    github_url: String,
+    deploy_key: Option<String>,
+) {
+    tokio::spawn(async move {
+        if let Err(e) = repo_mgr
+            .clone_repo(&pool, repo_id, &github_url, deploy_key.as_deref())
+            .await
+        {
+            tracing::error!("Failed to clone repo {repo_id}: {e}");
+        }
+    });
+}
+
 #[derive(Debug, Deserialize)]
 pub struct RegisterRepoRequest {
     pub repo_name: String,
@@ -37,14 +69,13 @@ pub async fn register_repo(
 
     // Trigger background clone if github_url is provided
     if let Some(url) = &req.github_url {
-        let pool = state.pool.clone();
-        let repo_mgr = state.repo_manager.clone();
-        let url = url.clone();
-        tokio::spawn(async move {
-            if let Err(e) = repo_mgr.clone_repo(&pool, repo_id, &url, None).await {
-                tracing::error!("Failed to clone repo {repo_id}: {e}");
-            }
-        });
+        spawn_clone(
+            state.pool.clone(),
+            state.repo_manager.clone(),
+            repo_id,
+            url.clone(),
+            None,
+        );
     }
 
     Ok((StatusCode::CREATED, Json(RegisterRepoResponse { repo_id })))
@@ -78,8 +109,8 @@ pub async fn sync_repo(
     auth: OrgAuth,
     Path((_slug, repo_id)): Path<(String, Uuid)>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let repo = sqlx::query_as::<_, (String, Option<String>)>(
-        "SELECT clone_status, github_url FROM repos WHERE id = $1 AND org_id = $2",
+    let repo = sqlx::query_as::<_, (String, Option<String>, Option<chrono::DateTime<chrono::Utc>>)>(
+        "SELECT clone_status, github_url, clone_started_at FROM repos WHERE id = $1 AND org_id = $2",
     )
     .bind(repo_id)
     .bind(auth.org_id)
@@ -90,6 +121,9 @@ pub async fn sync_repo(
     let deploy_key =
         get_deploy_key(&state.pool, repo_id, state.extensions.encryption.as_ref()).await?;
 
+    // Decide whether to (re)trigger a clone. 'cloning' normally means a clone is
+    // already running and we must not start another — but a stale 'cloning' row
+    // is an orphan (its task died), so we retry it.
     match repo.0.as_str() {
         "ready" => {
             // Already cloned — just fetch latest
@@ -104,34 +138,36 @@ pub async fn sync_repo(
                 .await
                 .ok();
 
-            Ok(Json(serde_json::json!({"status": "synced"})))
+            return Ok(Json(serde_json::json!({"status": "synced"})));
         }
-        "pending" | "error" => {
-            // Not yet cloned or previous clone failed — trigger clone
-            let github_url = repo.1.ok_or_else(|| {
-                AppError::BadRequest(
-                    "Repo has no github_url set. Update the repo with a github_url first.".into(),
-                )
-            })?;
-
-            let pool = state.pool.clone();
-            let repo_mgr = state.repo_manager.clone();
-            tokio::spawn(async move {
-                if let Err(e) = repo_mgr
-                    .clone_repo(&pool, repo_id, &github_url, deploy_key.as_deref())
-                    .await
-                {
-                    tracing::error!("Failed to clone repo {repo_id}: {e}");
-                }
-            });
-
-            Ok(Json(serde_json::json!({"status": "cloning"})))
+        "pending" | "error" => {}
+        "cloning" if is_stale_clone(repo.2) => {
+            tracing::warn!("Repo {repo_id} stuck in 'cloning'; retrying clone");
         }
-        "cloning" => Ok(Json(serde_json::json!({"status": "cloning"}))),
-        other => Err(AppError::BadRequest(format!(
-            "Unknown clone status: {other}"
-        ))),
+        "cloning" => return Ok(Json(serde_json::json!({"status": "cloning"}))),
+        other => {
+            return Err(AppError::BadRequest(format!(
+                "Unknown clone status: {other}"
+            )))
+        }
     }
+
+    // Not yet cloned, previous clone failed, or a stale clone — trigger one.
+    let github_url = repo.1.ok_or_else(|| {
+        AppError::BadRequest(
+            "Repo has no github_url set. Update the repo with a github_url first.".into(),
+        )
+    })?;
+
+    spawn_clone(
+        state.pool.clone(),
+        state.repo_manager.clone(),
+        repo_id,
+        github_url,
+        deploy_key,
+    );
+
+    Ok(Json(serde_json::json!({"status": "cloning"})))
 }
 
 #[derive(Debug, Serialize)]
@@ -140,6 +176,7 @@ pub struct RepoResponse {
     pub name: String,
     pub github_url: Option<String>,
     pub clone_status: String,
+    pub clone_error: Option<String>,
     pub created_at: chrono::DateTime<chrono::Utc>,
 }
 
@@ -148,8 +185,8 @@ pub async fn get_repo(
     auth: OrgAuth,
     Path((_slug, id)): Path<(String, Uuid)>,
 ) -> Result<Json<RepoResponse>, AppError> {
-    let row = sqlx::query_as::<_, (Uuid, String, Option<String>, String, chrono::DateTime<chrono::Utc>)>(
-        "SELECT id, name, github_url, clone_status, created_at FROM repos WHERE id = $1 AND org_id = $2",
+    let row = sqlx::query_as::<_, (Uuid, String, Option<String>, String, Option<String>, chrono::DateTime<chrono::Utc>)>(
+        "SELECT id, name, github_url, clone_status, clone_error, created_at FROM repos WHERE id = $1 AND org_id = $2",
     )
     .bind(id)
     .bind(auth.org_id)
@@ -162,7 +199,8 @@ pub async fn get_repo(
         name: row.1,
         github_url: row.2,
         clone_status: row.3,
-        created_at: row.4,
+        clone_error: row.4,
+        created_at: row.5,
     }))
 }
 
@@ -179,6 +217,7 @@ pub async fn list_repos(
             name: r.name,
             github_url: r.github_url,
             clone_status: r.clone_status,
+            clone_error: r.clone_error,
             created_at: r.created_at,
         })
         .collect();
@@ -210,6 +249,7 @@ pub async fn delete_repo(
 pub struct RepoSettingsResponse {
     pub github_url: Option<String>,
     pub clone_status: String,
+    pub clone_error: Option<String>,
     pub has_deploy_key: bool,
     pub has_webhook_secret: bool,
     pub last_fetched_at: Option<chrono::DateTime<chrono::Utc>>,
@@ -230,6 +270,7 @@ pub async fn get_settings(
             Option<String>,
             Option<chrono::DateTime<chrono::Utc>>,
             String,
+            Option<String>,
         ),
     >(include_str!("../repo/sql/get_repo_settings.sql"))
     .bind(id)
@@ -245,6 +286,7 @@ pub async fn get_settings(
         has_webhook_secret: row.3.is_some(),
         last_fetched_at: row.4,
         verification_phase_mode: row.5,
+        clone_error: row.6,
     }))
 }
 
@@ -349,6 +391,8 @@ pub async fn update_settings(
             Option<String>,
             Option<chrono::DateTime<chrono::Utc>>,
             String,
+            Option<chrono::DateTime<chrono::Utc>>,
+            Option<String>,
         ),
     >(include_str!("../repo/sql/get_repo_settings_by_id.sql"))
     .bind(id)
@@ -361,54 +405,70 @@ pub async fn update_settings(
     let has_webhook_secret = row.4.is_some();
     let last_fetched_at = row.5;
     let verification_phase_mode = row.6.clone();
+    let clone_started_at = row.7;
+    let clone_error = row.8.clone();
 
-    // Auto-trigger clone/sync if both github_url and deploy_key are set
-    if let Some(url) = &github_url {
-        match clone_status.as_str() {
-            "pending" | "error" => {
-                let deploy_key =
-                    get_deploy_key(&state.pool, id, state.extensions.encryption.as_ref()).await?;
-                let pool = state.pool.clone();
-                let repo_mgr = state.repo_manager.clone();
-                let url = url.clone();
-                tokio::spawn(async move {
-                    if let Err(e) = repo_mgr
-                        .clone_repo(&pool, id, &url, deploy_key.as_deref())
-                        .await
-                    {
-                        tracing::error!("Failed to clone repo {id}: {e}");
-                    }
-                });
-                return Ok(Json(RepoSettingsResponse {
-                    github_url,
-                    clone_status: "cloning".into(),
-                    has_deploy_key,
-                    has_webhook_secret,
-                    last_fetched_at,
-                    verification_phase_mode,
-                }));
-            }
-            "ready" => {
-                // Fetch latest
-                let deploy_key =
-                    get_deploy_key(&state.pool, id, state.extensions.encryption.as_ref()).await?;
-                state
-                    .repo_manager
-                    .fetch_repo(id, deploy_key.as_deref())
-                    .map_err(|e| AppError::Internal(e.to_string()))?;
-                sqlx::query("UPDATE repos SET last_fetched_at = now() WHERE id = $1")
-                    .bind(id)
-                    .execute(&state.pool)
-                    .await
-                    .ok();
-            }
-            _ => {} // cloning — do nothing
-        }
+    // Nothing to clone/sync without a github_url — return the current state.
+    let Some(url) = &github_url else {
+        return Ok(Json(RepoSettingsResponse {
+            github_url,
+            clone_status,
+            clone_error,
+            has_deploy_key,
+            has_webhook_secret,
+            last_fetched_at,
+            verification_phase_mode,
+        }));
+    };
+
+    // Auto-trigger a clone when needed. A stale 'cloning' row is an orphan (its
+    // task died, e.g. a redeploy), so retry it like 'error'.
+    let needs_clone = match clone_status.as_str() {
+        "pending" | "error" => true,
+        "cloning" => is_stale_clone(clone_started_at),
+        _ => false,
+    };
+
+    if needs_clone {
+        let deploy_key =
+            get_deploy_key(&state.pool, id, state.extensions.encryption.as_ref()).await?;
+        spawn_clone(
+            state.pool.clone(),
+            state.repo_manager.clone(),
+            id,
+            url.clone(),
+            deploy_key,
+        );
+        return Ok(Json(RepoSettingsResponse {
+            github_url,
+            clone_status: "cloning".into(),
+            clone_error: None,
+            has_deploy_key,
+            has_webhook_secret,
+            last_fetched_at,
+            verification_phase_mode,
+        }));
+    }
+
+    if clone_status == "ready" {
+        // Fetch latest
+        let deploy_key =
+            get_deploy_key(&state.pool, id, state.extensions.encryption.as_ref()).await?;
+        state
+            .repo_manager
+            .fetch_repo(id, deploy_key.as_deref())
+            .map_err(|e| AppError::Internal(e.to_string()))?;
+        sqlx::query("UPDATE repos SET last_fetched_at = now() WHERE id = $1")
+            .bind(id)
+            .execute(&state.pool)
+            .await
+            .ok();
     }
 
     Ok(Json(RepoSettingsResponse {
         github_url,
         clone_status,
+        clone_error,
         has_deploy_key,
         has_webhook_secret,
         last_fetched_at,

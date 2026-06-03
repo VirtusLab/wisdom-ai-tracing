@@ -43,6 +43,7 @@
 		name: string;
 		github_url: string | null;
 		clone_status: string;
+		clone_error: string | null;
 		created_at: string;
 	}
 
@@ -217,7 +218,12 @@
 				{#if !repo?.github_url}
 					<span class="text-xs text-muted-foreground">No GitHub URL configured</span>
 				{:else if cloneStatus === 'error'}
-					<span class="rounded-full px-2 py-0.5 text-[10px]" style="background: rgba(240,101,101,0.12); color: #f06565; border: 1px solid rgba(240,101,101,0.25)">Clone failed</span>
+					<span
+						class="rounded-full px-2 py-0.5 text-[10px]"
+						title={repo?.clone_error ?? undefined}
+						style="background: rgba(240,101,101,0.12); color: #f06565; border: 1px solid rgba(240,101,101,0.25)"
+						>Clone failed</span
+					>
 				{:else}
 					<span class="rounded-full px-2 py-0.5 text-[10px]" style="background: rgba(79,110,247,0.12); color: #4f6ef7; border: 1px solid rgba(79,110,247,0.25)">Not cloned</span>
 				{/if}
@@ -234,6 +240,17 @@
 			</a>
 		</div>
 	</div>
+
+	<!-- Clone failure detail -->
+	{#if cloneStatus === 'error' && repo?.clone_error}
+		<div
+			class="rounded-md px-3 py-2 text-xs"
+			style="background: rgba(240,101,101,0.08); color: #f06565; border: 1px solid rgba(240,101,101,0.2)"
+		>
+			<span class="font-medium">Clone failed:</span>
+			<span class="break-all whitespace-pre-wrap">{repo.clone_error}</span>
+		</div>
+	{/if}
 
 	<!-- Policies -->
 	<RepoPolicies
