@@ -27,6 +27,13 @@ pub async fn seed_invite(
 }
 
 #[allow(dead_code)]
+pub async fn seed_org_with_member(pool: &PgPool, user_id: Uuid) -> Uuid {
+    let org_id = seed_org(pool).await;
+    seed_membership(pool, user_id, org_id, "admin").await;
+    org_id
+}
+
+#[allow(dead_code)]
 pub async fn seed_org(pool: &PgPool) -> Uuid {
     sqlx::query_scalar::<_, Uuid>(
         "INSERT INTO orgs (name) VALUES ('test-org-' || gen_random_uuid()::text) RETURNING id",
