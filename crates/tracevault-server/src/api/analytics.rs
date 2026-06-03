@@ -596,7 +596,7 @@ pub async fn get_tokens(
     .fetch_all(&state.pool)
     .await?;
 
-    // Cache token totals
+    // Cache token totals (session-only query; ledger rows are folded in below)
     let cache_totals = sqlx::query_as::<_, (i64, i64)>(
         "SELECT COALESCE(CAST(SUM(s.cache_read_tokens) AS BIGINT), 0),
                 COALESCE(CAST(SUM(s.cache_write_tokens) AS BIGINT), 0)
@@ -617,10 +617,27 @@ pub async fn get_tokens(
     .fetch_one(&state.pool)
     .await?;
 
+    // Fold ledger (proxy) cache tokens into the session-derived KPIs.
+    // Coexistence assumption: a user uses EITHER the hook OR the proxy, not both,
+    // so simple addition gives the correct org-wide totals with no double-counting.
+    let led = crate::repo::llm_calls::LlmCallRepo::kpis(
+        &state.pool,
+        org_id,
+        q.repo.as_deref(),
+        q.author.as_deref(),
+        q.from,
+        q.to,
+    )
+    .await?;
+
+    let cache_read_tokens = cache_totals.0 + led.cache_read_tokens;
+    let cache_write_tokens = cache_totals.1 + led.cache_write_tokens;
+
+    // Recompute cache savings from the augmented cache-read total, mirroring get_cost.
     let cache_savings = state
         .extensions
         .pricing
-        .estimate_cache_savings("sonnet", cache_totals.0);
+        .estimate_cache_savings("sonnet", cache_read_tokens);
 
     Ok(Json(TokensResponse {
         time_series: time_series
@@ -648,8 +665,8 @@ pub async fn get_tokens(
                 total: t,
             })
             .collect(),
-        cache_read_tokens: cache_totals.0,
-        cache_write_tokens: cache_totals.1,
+        cache_read_tokens,
+        cache_write_tokens,
         cache_savings_usd: cache_savings,
     }))
 }
