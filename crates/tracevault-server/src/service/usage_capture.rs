@@ -11,7 +11,7 @@ pub struct ParsedUsage {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub enum BodyKind {
+enum BodyKind {
     Sse,
     Json,
 }
@@ -71,26 +71,26 @@ fn apply_usage(parsed: &mut ParsedUsage, usage: &Value) {
 fn parse_json(buf: &[u8]) -> Option<ParsedUsage> {
     let v: Value = serde_json::from_slice(buf).ok()?;
     let mut parsed = ParsedUsage::default();
+    let mut seen = false;
 
     if let Some(model) = v.get("model").and_then(|v| v.as_str()) {
         parsed.model = Some(model.to_string());
+        seen = true;
     }
     if let Some(stop_reason) = v.get("stop_reason").and_then(|v| v.as_str()) {
         parsed.stop_reason = Some(stop_reason.to_string());
+        seen = true;
     }
     if let Some(usage) = v.get("usage") {
         apply_usage(&mut parsed, usage);
+        seen = true;
     }
 
-    if parsed == ParsedUsage::default() {
-        None
-    } else {
-        Some(parsed)
-    }
+    seen.then_some(parsed)
 }
 
 fn parse_sse(buf: &[u8]) -> Option<ParsedUsage> {
-    let text = std::str::from_utf8(buf).ok()?;
+    let text = String::from_utf8_lossy(buf);
     let mut parsed = ParsedUsage::default();
     let mut seen_usage = false;
 
@@ -110,6 +110,7 @@ fn parse_sse(buf: &[u8]) -> Option<ParsedUsage> {
         match v.get("type").and_then(|t| t.as_str()) {
             Some("message_start") => {
                 if let Some(message) = v.get("message") {
+                    // Keep the first model name seen; a resumed stream might repeat message_start.
                     if parsed.model.is_none() {
                         if let Some(model) = message.get("model").and_then(|m| m.as_str()) {
                             parsed.model = Some(model.to_string());
@@ -203,6 +204,13 @@ mod tests {
         let mut cap = UsageCapture::new(Some("application/json"));
         cap.feed(b"not json at all");
         assert!(cap.finish().is_none());
+    }
+
+    #[test]
+    fn defaults_to_json_when_no_content_type() {
+        let mut cap = UsageCapture::new(None);
+        cap.feed(br#"{"model":"m","usage":{"input_tokens":1,"output_tokens":2}}"#);
+        assert!(cap.finish().is_some());
     }
 
     #[test]
