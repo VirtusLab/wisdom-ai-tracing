@@ -31,9 +31,65 @@ pub struct LlmCallRecord {
     pub path: String,
 }
 
+/// Scalar token/cost sums over llm_calls for the analytics filters. Filters
+/// mirror the sessions queries: repo (by repos.name), author (by users.email),
+/// and the from/to window on created_at. The repo filter excludes header-less
+/// proxy rows (NULL repo_id) because they cannot match a name.
+#[derive(Debug, Clone, Default)]
+pub struct LedgerKpis {
+    pub total_tokens: i64,
+    pub input_tokens: i64,
+    pub output_tokens: i64,
+    pub cache_read_tokens: i64,
+    pub cache_write_tokens: i64,
+    pub cost_usd: f64,
+}
+
 pub struct LlmCallRepo;
 
 impl LlmCallRepo {
+    pub async fn kpis(
+        pool: &PgPool,
+        org_id: Uuid,
+        repo: Option<&str>,
+        author: Option<&str>,
+        from: Option<chrono::DateTime<chrono::Utc>>,
+        to: Option<chrono::DateTime<chrono::Utc>>,
+    ) -> Result<LedgerKpis, AppError> {
+        let row = sqlx::query_as::<_, (i64, i64, i64, i64, i64, f64)>(
+            "SELECT
+                COALESCE(SUM(COALESCE(c.total_tokens,0)),0)::BIGINT,
+                COALESCE(SUM(COALESCE(c.input_tokens,0)),0)::BIGINT,
+                COALESCE(SUM(COALESCE(c.output_tokens,0)),0)::BIGINT,
+                COALESCE(SUM(COALESCE(c.cache_read_tokens,0)),0)::BIGINT,
+                COALESCE(SUM(COALESCE(c.cache_write_tokens,0)),0)::BIGINT,
+                COALESCE(SUM(COALESCE(c.estimated_cost_usd,0.0)),0.0)
+             FROM llm_calls c
+             LEFT JOIN repos r ON c.repo_id = r.id
+             LEFT JOIN users u ON c.user_id = u.id
+             WHERE c.org_id = $1
+               AND ($2::TEXT IS NULL OR r.name = $2)
+               AND ($3::TEXT IS NULL OR u.email = $3)
+               AND ($4::TIMESTAMPTZ IS NULL OR c.created_at >= $4)
+               AND ($5::TIMESTAMPTZ IS NULL OR c.created_at <= $5)",
+        )
+        .bind(org_id)
+        .bind(repo)
+        .bind(author)
+        .bind(from)
+        .bind(to)
+        .fetch_one(pool)
+        .await?;
+        Ok(LedgerKpis {
+            total_tokens: row.0,
+            input_tokens: row.1,
+            output_tokens: row.2,
+            cache_read_tokens: row.3,
+            cache_write_tokens: row.4,
+            cost_usd: row.5,
+        })
+    }
+
     pub async fn insert(pool: &PgPool, rec: &LlmCallRecord) -> Result<Uuid, AppError> {
         let id: Uuid = sqlx::query_scalar(
             "INSERT INTO llm_calls (

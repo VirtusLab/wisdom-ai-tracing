@@ -393,30 +393,44 @@ pub async fn get_overview(
     .fetch_all(&state.pool)
     .await?;
 
+    // Fold ledger (proxy) token/cost sums into the session-derived KPIs.
+    // Coexistence assumption: a user uses EITHER the hook OR the proxy, not both,
+    // so simple addition gives the correct org-wide totals with no double-counting.
+    let led = crate::repo::llm_calls::LlmCallRepo::kpis(
+        &state.pool,
+        org_id,
+        q.repo.as_deref(),
+        q.author.as_deref(),
+        q.from,
+        q.to,
+    )
+    .await?;
+
     // kpi tuple indices:
     // 0=sessions, 1=tokens, 2=input, 3=output, 4=authors, 5=cost,
     // 6=duration, 7=avg_dur, 8=tool_calls, 9=cache_read, 10=cache_write
+    let total_cache_read_tokens = kpi.9 + led.cache_read_tokens;
     let cache_savings = state
         .extensions
         .pricing
-        .estimate_cache_savings("sonnet", kpi.9);
+        .estimate_cache_savings("sonnet", total_cache_read_tokens);
 
     Ok(Json(OverviewResponse {
         total_commits: commit_count.0,
         total_sessions: kpi.0,
-        total_tokens: kpi.1,
-        total_input_tokens: kpi.2,
-        total_output_tokens: kpi.3,
+        total_tokens: kpi.1 + led.total_tokens,
+        total_input_tokens: kpi.2 + led.input_tokens,
+        total_output_tokens: kpi.3 + led.output_tokens,
         active_authors: kpi.4,
-        estimated_cost_usd: kpi.5,
+        estimated_cost_usd: kpi.5 + led.cost_usd,
         ai_percentage: ai_pct.0,
         total_duration_ms: kpi.6,
         avg_session_duration_ms: kpi.7,
         total_tool_calls: kpi.8,
         total_compactions: 0,
         total_compaction_tokens_saved: 0,
-        total_cache_read_tokens: kpi.9,
-        total_cache_write_tokens: kpi.10,
+        total_cache_read_tokens,
+        total_cache_write_tokens: kpi.10 + led.cache_write_tokens,
         cache_savings_usd: cache_savings,
         tokens_over_time: tokens_time
             .into_iter()
