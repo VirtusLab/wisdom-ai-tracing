@@ -34,7 +34,10 @@ use uuid::Uuid;
 
 use crate::auth::sha256_hex;
 use crate::encryption;
+use crate::pricing::{estimate_cost_with_pricing, fetch_pricing_for_model};
 use crate::repo::credentials::CredentialRepo;
+use crate::repo::llm_calls::{LlmCallRecord, LlmCallRepo};
+use crate::service::usage_capture::UsageCapture;
 use crate::AppState;
 
 /// Default Anthropic API base URL. Seeds `AppState.default_credential_base_url`
@@ -48,7 +51,6 @@ pub const DEFAULT_ANTHROPIC_UPSTREAM_BASE: &str = "https://api.anthropic.com";
 /// fails closed when new client-side headers appear.
 const FORWARDED_REQUEST_HEADERS: &[&str] = &[
     "accept",
-    "accept-encoding",
     "anthropic-beta",
     "anthropic-dangerous-direct-browser-access",
     "anthropic-version",
@@ -179,11 +181,19 @@ pub async fn anthropic_proxy(
         .ok()
         .and_then(|v| v.get("model").and_then(|m| m.as_str()).map(str::to_string));
 
-    let (user_id, upstream_key, max_concurrent, base_url, protocol, provider_model) =
-        match authenticate(&state, &headers, &path, requested_model.as_deref()).await {
-            Ok(tuple) => tuple,
-            Err(resp) => return resp,
-        };
+    let (
+        auth_session_id,
+        user_id,
+        credential_id,
+        upstream_key,
+        max_concurrent,
+        base_url,
+        protocol,
+        provider_model,
+    ) = match authenticate(&state, &headers, &path, requested_model.as_deref()).await {
+        Ok(tuple) => tuple,
+        Err(resp) => return resp,
+    };
 
     // If the matched routing rule rewrites the model, patch the body's
     // top-level `model` before forwarding. On parse failure we keep the
@@ -241,23 +251,142 @@ pub async fn anthropic_proxy(
         "proxied request"
     );
 
-    build_downstream_response(upstream_resp, permits)
+    // Best-effort ledger context. Resolving org_id, tracevault headers, and
+    // repo membership must NEVER fail the proxied request — on any error we
+    // fall back to nil/None and still forward the response.
+    let tv = extract_tv_context(&headers);
+    let repo_id = validate_repo(&state, user_id, tv.repo_header.as_deref()).await;
+    let org_id = resolve_ledger_org_id(&state, user_id, repo_id).await;
+
+    let ctx = LedgerContext {
+        pool: state.pool.clone(),
+        org_id,
+        user_id,
+        credential_id: Some(credential_id),
+        auth_session_id: Some(auth_session_id),
+        client_session_id: tv.session,
+        repo_id,
+        branch: tv.branch,
+        requested_model,
+        provider_model,
+        http_status: 0,
+        outcome: "success",
+        anthropic_request_id: None,
+        path: path.clone(),
+        start,
+    };
+
+    build_downstream_response(upstream_resp, permits, ctx)
+}
+
+/// Resolve the org the ledger row should be attributed to. Prefer the repo's
+/// org when a validated repo_id is present; otherwise the user's earliest org
+/// membership. Best-effort: any DB error (or no membership) yields
+/// `Uuid::nil()` so the proxied request is never failed by ledger bookkeeping.
+async fn resolve_ledger_org_id(state: &AppState, user_id: Uuid, repo_id: Option<Uuid>) -> Uuid {
+    if let Some(repo_id) = repo_id {
+        match sqlx::query_scalar::<_, Uuid>("SELECT org_id FROM repos WHERE id = $1")
+            .bind(repo_id)
+            .fetch_optional(&state.pool)
+            .await
+        {
+            Ok(Some(org_id)) => return org_id,
+            Ok(None) => {}
+            Err(e) => {
+                tracing::warn!(error = %e, "ledger org_id lookup by repo failed");
+                return Uuid::nil();
+            }
+        }
+    }
+
+    match sqlx::query_scalar::<_, Uuid>(
+        "SELECT org_id FROM user_org_memberships WHERE user_id = $1 ORDER BY created_at LIMIT 1",
+    )
+    .bind(user_id)
+    .fetch_optional(&state.pool)
+    .await
+    {
+        Ok(Some(org_id)) => org_id,
+        Ok(None) => Uuid::nil(),
+        Err(e) => {
+            tracing::warn!(error = %e, "ledger org_id lookup by membership failed");
+            Uuid::nil()
+        }
+    }
+}
+
+/// Optional TraceVault attribution headers pulled off the downstream request.
+/// These are NEVER added to `FORWARDED_REQUEST_HEADERS`, so they never reach
+/// upstream — they exist purely to attribute the ledger row.
+struct TvContext {
+    repo_header: Option<String>,
+    branch: Option<String>,
+    session: Option<String>,
+}
+
+/// Read the optional, non-empty `x-tracevault-{repo,branch,session}` headers.
+fn extract_tv_context(headers: &HeaderMap) -> TvContext {
+    fn non_empty(headers: &HeaderMap, name: &str) -> Option<String> {
+        headers
+            .get(name)
+            .and_then(|v| v.to_str().ok())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+    }
+    TvContext {
+        repo_header: non_empty(headers, "x-tracevault-repo"),
+        branch: non_empty(headers, "x-tracevault-branch"),
+        session: non_empty(headers, "x-tracevault-session"),
+    }
+}
+
+/// Validate the `x-tracevault-repo` header against the user's org memberships.
+/// Returns `Some(repo_id)` only when the header parses as a Uuid AND names a
+/// repo in an org the user belongs to. Returns `None` on absent, unparseable,
+/// or foreign repo — and never errors (a DB failure is treated as "no repo").
+async fn validate_repo(state: &AppState, user_id: Uuid, repo_header: Option<&str>) -> Option<Uuid> {
+    let repo_id = Uuid::parse_str(repo_header?.trim()).ok()?;
+    let exists = sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS(SELECT 1 FROM repos r \
+         JOIN user_org_memberships m ON m.org_id = r.org_id \
+         WHERE r.id = $1 AND m.user_id = $2)",
+    )
+    .bind(repo_id)
+    .bind(user_id)
+    .fetch_one(&state.pool)
+    .await
+    .ok()?;
+    exists.then_some(repo_id)
 }
 
 /// Concern 1: extract `x-api-key`, resolve it to a user, and load that
 /// user's decrypted Anthropic credential — selected by the request `model`
 /// (an exact-match routing rule wins; otherwise the user's default rule).
 /// Returns the
-/// `(user_id, upstream_plaintext_key, max_concurrent, base_url, protocol, provider_model)`
+/// `(auth_session_id, user_id, credential_id, upstream_plaintext_key, max_concurrent, base_url, protocol, provider_model)`
 /// tuple on success, or an Anthropic-shaped error envelope on any
 /// auth/credential failure. `provider_model` is Some when the matched rule
 /// rewrites the model to a provider-side name.
+#[allow(clippy::type_complexity)]
 async fn authenticate(
     state: &AppState,
     headers: &HeaderMap,
     path: &str,
     model: Option<&str>,
-) -> Result<(Uuid, String, i32, String, String, Option<String>), Response> {
+) -> Result<
+    (
+        Uuid,
+        Uuid,
+        Uuid,
+        String,
+        i32,
+        String,
+        String,
+        Option<String>,
+    ),
+    Response,
+> {
     let tv_token = match headers.get("x-api-key").and_then(|v| v.to_str().ok()) {
         Some(t) if !t.is_empty() => t,
         _ => {
@@ -276,11 +405,13 @@ async fn authenticate(
     };
 
     let token_hash = sha256_hex(tv_token);
-    let user_id = resolve_token(state, &token_hash).await?;
-    let (upstream_key, max_concurrent, base_url, protocol, provider_model) =
+    let (auth_session_id, user_id) = resolve_token(state, &token_hash).await?;
+    let (credential_id, upstream_key, max_concurrent, base_url, protocol, provider_model) =
         load_credential(state, user_id, model).await?;
     Ok((
+        auth_session_id,
         user_id,
+        credential_id,
         upstream_key,
         max_concurrent,
         base_url,
@@ -372,12 +503,36 @@ async fn forward_to_upstream(
 /// returns. Otherwise SSE streams would release capacity the moment the
 /// upstream's headers came back, allowing far more concurrent in-flight
 /// upstream connections than the cap allows.
-fn build_downstream_response(upstream_resp: reqwest::Response, permits: HeldPermits) -> Response {
+fn build_downstream_response(
+    upstream_resp: reqwest::Response,
+    permits: HeldPermits,
+    mut ctx: LedgerContext,
+) -> Response {
     let upstream_status = upstream_resp.status();
     let upstream_headers = upstream_resp.headers().clone();
-    let body_stream = PermitHoldingStream {
+
+    ctx.http_status = upstream_status.as_u16() as i32;
+    ctx.outcome = if upstream_status.is_success() {
+        "success"
+    } else {
+        "upstream_error"
+    };
+    ctx.anthropic_request_id = upstream_headers
+        .get("anthropic-request-id")
+        .or_else(|| upstream_headers.get("request-id"))
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_string);
+
+    let content_type = upstream_headers
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_string);
+
+    let body_stream = CapturingStream {
         inner: upstream_resp.bytes_stream(),
         _permits: permits,
+        capture: Some(UsageCapture::new(content_type.as_deref())),
+        ctx: Some(ctx),
     };
 
     let mut downstream = Response::builder().status(upstream_status);
@@ -406,25 +561,142 @@ struct HeldPermits {
     _global: Option<tokio::sync::OwnedSemaphorePermit>,
 }
 
-/// Stream wrapper that owns concurrency permits alongside the inner
-/// `bytes_stream()`. Dropping the stream (including via the response
-/// body completing or the client disconnecting) drops the permits.
-struct PermitHoldingStream<S> {
-    inner: S,
-    _permits: HeldPermits,
+/// Everything the spawned ledger writer needs to assemble one `llm_calls`
+/// row. Owned by the response stream and consumed exactly once when the
+/// stream finalizes (body complete or client disconnect).
+struct LedgerContext {
+    pool: sqlx::PgPool,
+    org_id: Uuid,
+    user_id: Uuid,
+    credential_id: Option<Uuid>,
+    auth_session_id: Option<Uuid>,
+    client_session_id: Option<String>,
+    repo_id: Option<Uuid>,
+    branch: Option<String>,
+    requested_model: Option<String>,
+    provider_model: Option<String>,
+    http_status: i32,
+    outcome: &'static str,
+    anthropic_request_id: Option<String>,
+    path: String,
+    start: Instant,
 }
 
-impl<S> futures_util::Stream for PermitHoldingStream<S>
+/// Stream wrapper that owns concurrency permits alongside the inner
+/// `bytes_stream()`, taps each chunk into a `UsageCapture`, and writes one
+/// `llm_calls` ledger row when the stream finalizes. Dropping the stream
+/// (body complete or client disconnect) both drops the permits and triggers
+/// the (at-most-once) ledger write.
+struct CapturingStream<S> {
+    inner: S,
+    _permits: HeldPermits,
+    capture: Option<UsageCapture>,
+    ctx: Option<LedgerContext>,
+}
+
+impl<S> CapturingStream<S> {
+    /// Run the ledger write at most once. Takes `ctx` + `capture` so a second
+    /// call (e.g. Drop after a natural `Ready(None)`) is a no-op. The actual
+    /// insert is spawned so it never blocks the response stream's task.
+    fn finalize(&mut self) {
+        let (Some(ctx), Some(capture)) = (self.ctx.take(), self.capture.take()) else {
+            return;
+        };
+        let parsed = capture.finish();
+
+        tokio::spawn(async move {
+            let (response_model, input, output, cr, cw, stop_reason, total_tokens, cost) =
+                if ctx.outcome == "success" {
+                    if let Some(parsed) = parsed {
+                        let model = parsed
+                            .model
+                            .clone()
+                            .or_else(|| ctx.provider_model.clone())
+                            .or_else(|| ctx.requested_model.clone())
+                            .unwrap_or_else(|| "unknown".into());
+                        let input = parsed.input_tokens.unwrap_or(0);
+                        let output = parsed.output_tokens.unwrap_or(0);
+                        let cr = parsed.cache_read_tokens.unwrap_or(0);
+                        let cw = parsed.cache_write_tokens.unwrap_or(0);
+                        let pricing = fetch_pricing_for_model(&ctx.pool, &model, None).await;
+                        let cost = estimate_cost_with_pricing(&pricing, input, output, cr, cw);
+                        (
+                            parsed.model,
+                            parsed.input_tokens,
+                            parsed.output_tokens,
+                            parsed.cache_read_tokens,
+                            parsed.cache_write_tokens,
+                            parsed.stop_reason,
+                            Some(input + output + cr + cw),
+                            Some(cost),
+                        )
+                    } else {
+                        (None, None, None, None, None, None, None, None)
+                    }
+                } else {
+                    (None, None, None, None, None, None, None, None)
+                };
+
+            let rec = LlmCallRecord {
+                org_id: ctx.org_id,
+                user_id: ctx.user_id,
+                credential_id: ctx.credential_id,
+                auth_session_id: ctx.auth_session_id,
+                client_session_id: ctx.client_session_id,
+                repo_id: ctx.repo_id,
+                branch: ctx.branch,
+                requested_model: ctx.requested_model,
+                provider_model: ctx.provider_model,
+                response_model,
+                input_tokens: input,
+                output_tokens: output,
+                cache_read_tokens: cr,
+                cache_write_tokens: cw,
+                total_tokens,
+                estimated_cost_usd: cost,
+                stop_reason,
+                http_status: ctx.http_status,
+                outcome: ctx.outcome.to_string(),
+                duration_ms: ctx.start.elapsed().as_millis() as i64,
+                anthropic_request_id: ctx.anthropic_request_id,
+                path: ctx.path,
+            };
+
+            if let Err(e) = LlmCallRepo::insert(&ctx.pool, &rec).await {
+                tracing::warn!(
+                    error = %e,
+                    request_id = ?rec.anthropic_request_id,
+                    "failed to write llm_calls ledger row"
+                );
+            }
+        });
+    }
+}
+
+impl<S> futures_util::Stream for CapturingStream<S>
 where
-    S: futures_util::Stream + Unpin,
+    S: futures_util::Stream<Item = reqwest::Result<Bytes>> + Unpin,
 {
-    type Item = S::Item;
+    type Item = reqwest::Result<Bytes>;
 
     fn poll_next(
         mut self: std::pin::Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Option<Self::Item>> {
-        std::pin::Pin::new(&mut self.inner).poll_next(cx)
+        match std::pin::Pin::new(&mut self.inner).poll_next(cx) {
+            std::task::Poll::Ready(Some(Ok(chunk))) => {
+                if let Some(cap) = self.capture.as_mut() {
+                    cap.feed(&chunk);
+                }
+                std::task::Poll::Ready(Some(Ok(chunk)))
+            }
+            std::task::Poll::Ready(Some(Err(e))) => std::task::Poll::Ready(Some(Err(e))),
+            std::task::Poll::Ready(None) => {
+                self.finalize();
+                std::task::Poll::Ready(None)
+            }
+            std::task::Poll::Pending => std::task::Poll::Pending,
+        }
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
@@ -432,25 +704,34 @@ where
     }
 }
 
-/// Resolve a sha256'd TV token to a user_id. Returns:
-///   - Ok(user_id) when the token is a valid, non-expired `auth_sessions` row
+impl<S> Drop for CapturingStream<S> {
+    fn drop(&mut self) {
+        // Catches client disconnect mid-stream: poll_next never reached
+        // Ready(None), so finalize here. No-op if already finalized.
+        self.finalize();
+    }
+}
+
+/// Resolve a sha256'd TV token to its session + user. Returns:
+///   - Ok((auth_session_id, user_id)) when the token is a valid, non-expired
+///     `auth_sessions` row
 ///   - Err(401 envelope) when the token is missing or matches an org
 ///     `api_keys` row (the proxy is per-user; org-scoped api_keys have no
 ///     user context)
 ///   - Err(401 envelope) when the token does not match anything
 ///   - Err(502 envelope) on database error so unmodified clients route it
 ///     through their existing "upstream error" path
-async fn resolve_token(state: &AppState, token_hash: &str) -> Result<Uuid, Response> {
+async fn resolve_token(state: &AppState, token_hash: &str) -> Result<(Uuid, Uuid), Response> {
     // Try auth_sessions first (the user-session path).
-    let session_row = sqlx::query_as::<_, (Uuid,)>(
-        "SELECT user_id FROM auth_sessions WHERE token_hash = $1 AND expires_at > NOW()",
+    let session_row = sqlx::query_as::<_, (Uuid, Uuid)>(
+        "SELECT id, user_id FROM auth_sessions WHERE token_hash = $1 AND expires_at > NOW()",
     )
     .bind(token_hash)
     .fetch_optional(&state.pool)
     .await;
 
     match session_row {
-        Ok(Some((user_id,))) => return Ok(user_id),
+        Ok(Some((id, user_id))) => return Ok((id, user_id)),
         Err(e) => {
             tracing::warn!(error_type = "api_error", err = %e, "auth_sessions lookup failed");
             return Err(anthropic_error(
@@ -510,7 +791,7 @@ async fn resolve_token(state: &AppState, token_hash: &str) -> Result<Uuid, Respo
 /// upstream) for the request `model` and decrypt the key. An exact-match
 /// routing rule selects the credential; otherwise the user's default rule
 /// applies. Returns the
-/// `(plaintext_key, max_concurrent, base_url, protocol, provider_model)`
+/// `(credential_id, plaintext_key, max_concurrent, base_url, protocol, provider_model)`
 /// tuple on success or an Anthropic-shaped error envelope on any failure (no
 /// key configured, no master key on this server, ciphertext corrupted, DB
 /// error). `provider_model` is Some when the matched rule rewrites the model.
@@ -518,7 +799,7 @@ async fn load_credential(
     state: &AppState,
     user_id: Uuid,
     model: Option<&str>,
-) -> Result<(String, i32, String, String, Option<String>), Response> {
+) -> Result<(Uuid, String, i32, String, String, Option<String>), Response> {
     let credential = match CredentialRepo::resolve_for_model(&state.pool, user_id, model).await {
         Ok(Some(c)) => c,
         Ok(None) => {
@@ -577,6 +858,7 @@ async fn load_credential(
             )
         })?;
     Ok((
+        credential.id,
         plaintext,
         credential.max_concurrent,
         credential.base_url,
@@ -727,12 +1009,31 @@ mod tests {
             "via",
             "transfer-encoding",
             "content-length",
+            // Dropped so upstream responds identity-encoded — our usage-capture
+            // parser reads the raw body and ships no decompressor.
+            "accept-encoding",
         ] {
             assert!(
                 !FORWARDED_REQUEST_HEADERS
                     .iter()
                     .any(|x| x.eq_ignore_ascii_case(h)),
                 "{h} must not be in the request allow-list"
+            );
+        }
+    }
+
+    #[test]
+    fn tracevault_headers_are_not_forwarded_upstream() {
+        for h in [
+            "x-tracevault-repo",
+            "x-tracevault-branch",
+            "x-tracevault-session",
+        ] {
+            assert!(
+                !FORWARDED_REQUEST_HEADERS
+                    .iter()
+                    .any(|x| x.eq_ignore_ascii_case(h)),
+                "{h} is an attribution header and must never reach upstream"
             );
         }
     }
