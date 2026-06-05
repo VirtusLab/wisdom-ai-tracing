@@ -690,7 +690,16 @@ where
                 }
                 std::task::Poll::Ready(Some(Ok(chunk)))
             }
-            std::task::Poll::Ready(Some(Err(e))) => std::task::Poll::Ready(Some(Err(e))),
+            std::task::Poll::Ready(Some(Err(e))) => {
+                // A 2xx upstream whose body errors mid-stream must NOT be
+                // recorded as a successful ledger row. Mark the outcome before
+                // finalizing so the spawned writer sees the failure.
+                if let Some(ctx) = self.ctx.as_mut() {
+                    ctx.outcome = "stream_error";
+                }
+                self.finalize();
+                std::task::Poll::Ready(Some(Err(e)))
+            }
             std::task::Poll::Ready(None) => {
                 self.finalize();
                 std::task::Poll::Ready(None)
