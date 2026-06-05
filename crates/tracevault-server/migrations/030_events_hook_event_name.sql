@@ -3,4 +3,4 @@
 -- calls (PostToolUse) and ignore the in-flight terminating `git push` (whose
 -- PostToolUse cannot exist while the pre-push check is running). Nullable;
 -- rows written before this migration keep NULL and are ignored by the gate.
-ALTER TABLE events ADD COLUMN hook_event_name TEXT;
+ALTER TABLE events ADD COLUMN IF NOT EXISTS hook_event_name TEXT;
