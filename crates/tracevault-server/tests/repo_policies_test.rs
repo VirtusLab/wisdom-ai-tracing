@@ -482,6 +482,8 @@ async fn window_tool_call_stats_after_timestamp(pool: sqlx::PgPool) {
             tool_response: None,
             tool_is_error: Some(false),
             timestamp: Some(chrono::Utc::now()),
+            hook_event_name: None,
+            tool_use_id: None,
         },
     )
     .await
@@ -532,6 +534,8 @@ async fn window_tool_call_stats_excludes_pre_window_events(pool: sqlx::PgPool) {
             tool_response: None,
             tool_is_error: Some(false),
             timestamp: Some(chrono::Utc::now()),
+            hook_event_name: None,
+            tool_use_id: None,
         },
     )
     .await

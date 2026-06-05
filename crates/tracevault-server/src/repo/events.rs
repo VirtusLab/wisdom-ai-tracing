@@ -12,6 +12,8 @@ pub struct InsertToolEvent {
     pub tool_response: Option<serde_json::Value>,
     pub tool_is_error: Option<bool>,
     pub timestamp: Option<DateTime<Utc>>,
+    pub hook_event_name: Option<String>,
+    pub tool_use_id: Option<String>,
 }
 
 pub struct InsertFileChange {
@@ -64,6 +66,8 @@ impl EventRepo {
             .bind(&req.tool_response)
             .bind(req.tool_is_error)
             .bind(req.timestamp)
+            .bind(&req.hook_event_name)
+            .bind(&req.tool_use_id)
             .fetch_optional(pool)
             .await?;
         Ok(id)

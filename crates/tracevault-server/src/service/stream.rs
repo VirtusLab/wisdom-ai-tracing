@@ -172,6 +172,8 @@ impl StreamService {
                         },
                         tool_is_error: req.tool_is_error,
                         timestamp: Some(req.timestamp),
+                        hook_event_name: req.hook_event_name.clone(),
+                        tool_use_id: req.tool_use_id.clone(),
                     },
                 )
                 .await?;
