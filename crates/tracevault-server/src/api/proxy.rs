@@ -32,11 +32,10 @@ use serde_json::json;
 use std::time::Instant;
 use uuid::Uuid;
 
+use crate::api::proxy_capture::{CapturingStream, HeldPermits, LedgerContext};
 use crate::auth::sha256_hex;
 use crate::encryption;
-use crate::pricing::{estimate_cost_with_pricing, fetch_pricing_for_model};
 use crate::repo::credentials::CredentialRepo;
-use crate::repo::llm_calls::{LlmCallRecord, LlmCallRepo};
 use crate::service::usage_capture::UsageCapture;
 use crate::AppState;
 
@@ -218,10 +217,7 @@ pub async fn anthropic_proxy(
             Ok(p) => p,
             Err(resp) => return resp,
         };
-    let permits = HeldPermits {
-        _credential: credential_permit,
-        _global: global_permit,
-    };
+    let permits = HeldPermits::new(credential_permit, global_permit);
 
     let upstream_resp = match forward_to_upstream(
         &state,
@@ -550,175 +546,6 @@ fn build_downstream_response(
                 "Failed to construct downstream response",
             )
         })
-}
-
-/// Bundle of concurrency permits that must be held for the lifetime of a
-/// proxy response (including its streaming body). Permits are released
-/// in field-declaration order on drop, so the per-credential permit
-/// releases before the global one — the inverse of acquisition order.
-struct HeldPermits {
-    _credential: tokio::sync::OwnedSemaphorePermit,
-    _global: Option<tokio::sync::OwnedSemaphorePermit>,
-}
-
-/// Everything the spawned ledger writer needs to assemble one `llm_calls`
-/// row. Owned by the response stream and consumed exactly once when the
-/// stream finalizes (body complete or client disconnect).
-struct LedgerContext {
-    pool: sqlx::PgPool,
-    org_id: Uuid,
-    user_id: Uuid,
-    credential_id: Option<Uuid>,
-    auth_session_id: Option<Uuid>,
-    client_session_id: Option<String>,
-    repo_id: Option<Uuid>,
-    branch: Option<String>,
-    requested_model: Option<String>,
-    provider_model: Option<String>,
-    http_status: i32,
-    outcome: &'static str,
-    anthropic_request_id: Option<String>,
-    path: String,
-    start: Instant,
-}
-
-/// Stream wrapper that owns concurrency permits alongside the inner
-/// `bytes_stream()`, taps each chunk into a `UsageCapture`, and writes one
-/// `llm_calls` ledger row when the stream finalizes. Dropping the stream
-/// (body complete or client disconnect) both drops the permits and triggers
-/// the (at-most-once) ledger write.
-struct CapturingStream<S> {
-    inner: S,
-    _permits: HeldPermits,
-    capture: Option<UsageCapture>,
-    ctx: Option<LedgerContext>,
-}
-
-impl<S> CapturingStream<S> {
-    /// Run the ledger write at most once. Takes `ctx` + `capture` so a second
-    /// call (e.g. Drop after a natural `Ready(None)`) is a no-op. The actual
-    /// insert is spawned so it never blocks the response stream's task.
-    fn finalize(&mut self) {
-        let (Some(ctx), Some(capture)) = (self.ctx.take(), self.capture.take()) else {
-            return;
-        };
-        let parsed = capture.finish();
-
-        tokio::spawn(async move {
-            let (response_model, input, output, cr, cw, stop_reason, total_tokens, cost) =
-                if ctx.outcome == "success" {
-                    if let Some(parsed) = parsed {
-                        let model = parsed
-                            .model
-                            .clone()
-                            .or_else(|| ctx.provider_model.clone())
-                            .or_else(|| ctx.requested_model.clone())
-                            .unwrap_or_else(|| "unknown".into());
-                        let input = parsed.input_tokens.unwrap_or(0);
-                        let output = parsed.output_tokens.unwrap_or(0);
-                        let cr = parsed.cache_read_tokens.unwrap_or(0);
-                        let cw = parsed.cache_write_tokens.unwrap_or(0);
-                        let pricing = fetch_pricing_for_model(&ctx.pool, &model, None).await;
-                        let cost = estimate_cost_with_pricing(&pricing, input, output, cr, cw);
-                        (
-                            parsed.model,
-                            parsed.input_tokens,
-                            parsed.output_tokens,
-                            parsed.cache_read_tokens,
-                            parsed.cache_write_tokens,
-                            parsed.stop_reason,
-                            Some(input + output + cr + cw),
-                            Some(cost),
-                        )
-                    } else {
-                        (None, None, None, None, None, None, None, None)
-                    }
-                } else {
-                    (None, None, None, None, None, None, None, None)
-                };
-
-            let rec = LlmCallRecord {
-                org_id: ctx.org_id,
-                user_id: ctx.user_id,
-                credential_id: ctx.credential_id,
-                auth_session_id: ctx.auth_session_id,
-                client_session_id: ctx.client_session_id,
-                repo_id: ctx.repo_id,
-                branch: ctx.branch,
-                requested_model: ctx.requested_model,
-                provider_model: ctx.provider_model,
-                response_model,
-                input_tokens: input,
-                output_tokens: output,
-                cache_read_tokens: cr,
-                cache_write_tokens: cw,
-                total_tokens,
-                estimated_cost_usd: cost,
-                stop_reason,
-                http_status: ctx.http_status,
-                outcome: ctx.outcome.to_string(),
-                duration_ms: ctx.start.elapsed().as_millis() as i64,
-                anthropic_request_id: ctx.anthropic_request_id,
-                path: ctx.path,
-            };
-
-            if let Err(e) = LlmCallRepo::insert(&ctx.pool, &rec).await {
-                tracing::warn!(
-                    error = %e,
-                    request_id = ?rec.anthropic_request_id,
-                    "failed to write llm_calls ledger row"
-                );
-            }
-        });
-    }
-}
-
-impl<S> futures_util::Stream for CapturingStream<S>
-where
-    S: futures_util::Stream<Item = reqwest::Result<Bytes>> + Unpin,
-{
-    type Item = reqwest::Result<Bytes>;
-
-    fn poll_next(
-        mut self: std::pin::Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Option<Self::Item>> {
-        match std::pin::Pin::new(&mut self.inner).poll_next(cx) {
-            std::task::Poll::Ready(Some(Ok(chunk))) => {
-                if let Some(cap) = self.capture.as_mut() {
-                    cap.feed(&chunk);
-                }
-                std::task::Poll::Ready(Some(Ok(chunk)))
-            }
-            std::task::Poll::Ready(Some(Err(e))) => {
-                // A 2xx upstream whose body errors mid-stream must NOT be
-                // recorded as a successful ledger row. Mark the outcome before
-                // finalizing so the spawned writer sees the failure.
-                if let Some(ctx) = self.ctx.as_mut() {
-                    ctx.outcome = "stream_error";
-                }
-                self.finalize();
-                std::task::Poll::Ready(Some(Err(e)))
-            }
-            std::task::Poll::Ready(None) => {
-                self.finalize();
-                std::task::Poll::Ready(None)
-            }
-            std::task::Poll::Pending => std::task::Poll::Pending,
-        }
-    }
-
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        self.inner.size_hint()
-    }
-}
-
-impl<S> Drop for CapturingStream<S> {
-    fn drop(&mut self) {
-        // Catches client disconnect mid-stream: poll_next never reached
-        // Ready(None), so finalize here. No-op if already finalized.
-        self.finalize();
-    }
 }
 
 /// Resolve a sha256'd TV token to its session + user. Returns:
