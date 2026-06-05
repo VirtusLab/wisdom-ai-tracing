@@ -353,7 +353,10 @@ mod tests {
         cap.feed(b"data: {\"type\":\"message_start\",\"message\":{\"model\":\"m\",\"usage\":{\"input_tokens\":10,\"output_tokens\":1}}}\n\n");
         cap.feed(b"data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":7}}\n\n");
         let (parsed, captured) = cap.into_parts();
-        assert!(captured.truncated, "body should be truncated at the tiny cap");
+        assert!(
+            captured.truncated,
+            "body should be truncated at the tiny cap"
+        );
         let parsed = parsed.expect("usage parsed incrementally despite truncation");
         assert_eq!(parsed.input_tokens, Some(10));
         assert_eq!(parsed.output_tokens, Some(7));
