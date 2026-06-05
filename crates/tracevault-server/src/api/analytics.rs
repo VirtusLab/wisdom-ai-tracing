@@ -396,7 +396,7 @@ pub async fn get_overview(
     // Fold ledger (proxy) token/cost sums into the session-derived KPIs.
     // Coexistence assumption: a user uses EITHER the hook OR the proxy, not both,
     // so simple addition gives the correct org-wide totals with no double-counting.
-    let led = crate::repo::llm_calls::LlmCallRepo::kpis(
+    let ledger_kpis = crate::repo::llm_calls::LlmCallRepo::fetch_ledger_kpis(
         &state.pool,
         org_id,
         q.repo.as_deref(),
@@ -409,7 +409,7 @@ pub async fn get_overview(
     // kpi tuple indices:
     // 0=sessions, 1=tokens, 2=input, 3=output, 4=authors, 5=cost,
     // 6=duration, 7=avg_dur, 8=tool_calls, 9=cache_read, 10=cache_write
-    let total_cache_read_tokens = kpi.9 + led.cache_read_tokens;
+    let total_cache_read_tokens = kpi.9 + ledger_kpis.cache_read_tokens;
     let cache_savings = state
         .extensions
         .pricing
@@ -418,11 +418,11 @@ pub async fn get_overview(
     Ok(Json(OverviewResponse {
         total_commits: commit_count.0,
         total_sessions: kpi.0,
-        total_tokens: kpi.1 + led.total_tokens,
-        total_input_tokens: kpi.2 + led.input_tokens,
-        total_output_tokens: kpi.3 + led.output_tokens,
+        total_tokens: kpi.1 + ledger_kpis.total_tokens,
+        total_input_tokens: kpi.2 + ledger_kpis.input_tokens,
+        total_output_tokens: kpi.3 + ledger_kpis.output_tokens,
         active_authors: kpi.4,
-        estimated_cost_usd: kpi.5 + led.cost_usd,
+        estimated_cost_usd: kpi.5 + ledger_kpis.cost_usd,
         ai_percentage: ai_pct.0,
         total_duration_ms: kpi.6,
         avg_session_duration_ms: kpi.7,
@@ -430,7 +430,7 @@ pub async fn get_overview(
         total_compactions: 0,
         total_compaction_tokens_saved: 0,
         total_cache_read_tokens,
-        total_cache_write_tokens: kpi.10 + led.cache_write_tokens,
+        total_cache_write_tokens: kpi.10 + ledger_kpis.cache_write_tokens,
         cache_savings_usd: cache_savings,
         tokens_over_time: tokens_time
             .into_iter()
@@ -620,7 +620,7 @@ pub async fn get_tokens(
     // Fold ledger (proxy) cache tokens into the session-derived KPIs.
     // Coexistence assumption: a user uses EITHER the hook OR the proxy, not both,
     // so simple addition gives the correct org-wide totals with no double-counting.
-    let led = crate::repo::llm_calls::LlmCallRepo::kpis(
+    let ledger_kpis = crate::repo::llm_calls::LlmCallRepo::fetch_ledger_kpis(
         &state.pool,
         org_id,
         q.repo.as_deref(),
@@ -630,8 +630,8 @@ pub async fn get_tokens(
     )
     .await?;
 
-    let cache_read_tokens = cache_totals.0 + led.cache_read_tokens;
-    let cache_write_tokens = cache_totals.1 + led.cache_write_tokens;
+    let cache_read_tokens = cache_totals.0 + ledger_kpis.cache_read_tokens;
+    let cache_write_tokens = cache_totals.1 + ledger_kpis.cache_write_tokens;
 
     // Recompute cache savings from the augmented cache-read total, mirroring get_cost.
     let cache_savings = state
@@ -1447,7 +1447,7 @@ pub async fn get_cost(
     // Fold ledger (proxy) cost and cache-read tokens into the session-derived
     // KPIs.  Coexistence assumption: a user uses EITHER the hook OR the proxy,
     // so simple addition gives correct org-wide totals without double-counting.
-    let led = crate::repo::llm_calls::LlmCallRepo::kpis(
+    let ledger_kpis = crate::repo::llm_calls::LlmCallRepo::fetch_ledger_kpis(
         &state.pool,
         org_id,
         q.repo.as_deref(),
@@ -1459,8 +1459,8 @@ pub async fn get_cost(
 
     // avg_cost_per_session stays session-only (it is a per-session metric;
     // proxy calls are not sessions and must not affect this denominator).
-    let total_cost = totals.0 + led.cost_usd;
-    let total_cache_read = totals.2 + led.cache_read_tokens;
+    let total_cost = totals.0 + ledger_kpis.cost_usd;
+    let total_cache_read = totals.2 + ledger_kpis.cache_read_tokens;
 
     // Approximate cache savings using Sonnet rates for aggregate
     let cache_savings = state

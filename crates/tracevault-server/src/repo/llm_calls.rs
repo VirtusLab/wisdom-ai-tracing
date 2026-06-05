@@ -48,7 +48,8 @@ pub struct LedgerKpis {
 pub struct LlmCallRepo;
 
 impl LlmCallRepo {
-    pub async fn kpis(
+    /// Aggregate ledger token/cost sums for the analytics filters (DB read).
+    pub async fn fetch_ledger_kpis(
         pool: &PgPool,
         org_id: Uuid,
         repo: Option<&str>,
