@@ -798,6 +798,9 @@ pub async fn get_models(
                AND ($3::TEXT IS NULL OR u.email = $3)
                AND ($4::TIMESTAMPTZ IS NULL OR c.created_at >= $4)
                AND ($5::TIMESTAMPTZ IS NULL OR c.created_at <= $5)
+               -- Exclude non-generation ledger calls (model listing, errors)
+               -- that carry no response_model, so they don't bucket as 'unknown'.
+               AND c.response_model IS NOT NULL
          ) md GROUP BY model ORDER BY 2 DESC"
     ))
     .bind(org_id)
@@ -835,6 +838,7 @@ pub async fn get_models(
                AND ($3::TEXT IS NULL OR u.email = $3)
                AND ($4::TIMESTAMPTZ IS NULL OR c.created_at >= $4)
                AND ($5::TIMESTAMPTZ IS NULL OR c.created_at <= $5)
+               AND c.response_model IS NOT NULL
          ) amm WHERE author IS NOT NULL GROUP BY author, model ORDER BY author, 3 DESC")
     )
     .bind(org_id).bind(&q.repo).bind(&q.author).bind(q.from).bind(q.to)
@@ -1570,11 +1574,12 @@ pub async fn get_cost(
         "SELECT model,
                 COALESCE(SUM(cost), 0.0),
                 COALESCE(CAST(SUM(tok) AS BIGINT), 0),
-                COUNT(*)
+                COUNT(session_id)
          FROM (
              SELECT COALESCE(s.model, 'unknown') AS model,
                     s.estimated_cost_usd AS cost,
-                    COALESCE(s.input_tokens, 0) + COALESCE(s.output_tokens, 0) AS tok
+                    COALESCE(s.input_tokens, 0) + COALESCE(s.output_tokens, 0) AS tok,
+                    s.id AS session_id
              FROM sessions s
              JOIN repos r ON s.repo_id = r.id
              LEFT JOIN users u ON s.user_id = u.id
@@ -1586,7 +1591,8 @@ pub async fn get_cost(
              UNION ALL
              SELECT COALESCE(c.response_model, 'unknown') AS model,
                     c.estimated_cost_usd AS cost,
-                    COALESCE(c.input_tokens, 0) + COALESCE(c.output_tokens, 0) AS tok
+                    COALESCE(c.input_tokens, 0) + COALESCE(c.output_tokens, 0) AS tok,
+                    NULL::uuid AS session_id
              FROM llm_calls c
              LEFT JOIN repos r ON c.repo_id = r.id
              LEFT JOIN users u ON c.user_id = u.id
@@ -1595,6 +1601,7 @@ pub async fn get_cost(
                AND ($3::TEXT IS NULL OR u.email = $3)
                AND ($4::TIMESTAMPTZ IS NULL OR c.created_at >= $4)
                AND ($5::TIMESTAMPTZ IS NULL OR c.created_at <= $5)
+               AND c.response_model IS NOT NULL
          ) t
          GROUP BY model
          ORDER BY 2 DESC",
