@@ -6,7 +6,7 @@ resolver = "2"
 version = "0.17.2"
 edition = "2021"
 license = "Apache-2.0"
-repository = "https://github.com/softwaremill/tracevault"
+repository = "https://github.com/VirtusLab/wisdom-ai-tracing"
 
 [workspace.dependencies]
 serde = { version = "1", features = ["derive"] }

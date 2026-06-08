@@ -1,6 +1,6 @@
 # tracevault-server
 
-Server component for [Visdom Trace](https://github.com/softwaremill/tracevault) — AI code tracing and attribution.
+Server component for [Visdom Trace](https://github.com/VirtusLab/wisdom-ai-tracing) — AI code tracing and attribution.
 
 ## License
 

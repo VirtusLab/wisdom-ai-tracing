@@ -46,28 +46,28 @@ jobs:
           cat > Formula/tracevault.rb << FORMULA
           class Tracevault < Formula
             desc "CLI tool for AI code tracing and attribution"
-            homepage "https://github.com/softwaremill/tracevault"
+            homepage "https://github.com/VirtusLab/wisdom-ai-tracing"
             version "${VERSION}"
             license "Apache-2.0"
 
             on_macos do
               on_arm do
-                url "https://github.com/softwaremill/tracevault/releases/download/${TAG}/tracevault-${TAG}-aarch64-apple-darwin.tar.gz"
+                url "https://github.com/VirtusLab/wisdom-ai-tracing/releases/download/${TAG}/tracevault-${TAG}-aarch64-apple-darwin.tar.gz"
                 sha256 "${SHA_AARCH64_DARWIN}"
               end
               on_intel do
-                url "https://github.com/softwaremill/tracevault/releases/download/${TAG}/tracevault-${TAG}-x86_64-apple-darwin.tar.gz"
+                url "https://github.com/VirtusLab/wisdom-ai-tracing/releases/download/${TAG}/tracevault-${TAG}-x86_64-apple-darwin.tar.gz"
                 sha256 "${SHA_X86_64_DARWIN}"
               end
             end
 
             on_linux do
               on_arm do
-                url "https://github.com/softwaremill/tracevault/releases/download/${TAG}/tracevault-${TAG}-aarch64-unknown-linux-gnu.tar.gz"
+                url "https://github.com/VirtusLab/wisdom-ai-tracing/releases/download/${TAG}/tracevault-${TAG}-aarch64-unknown-linux-gnu.tar.gz"
                 sha256 "${SHA_AARCH64_LINUX}"
               end
               on_intel do
-                url "https://github.com/softwaremill/tracevault/releases/download/${TAG}/tracevault-${TAG}-x86_64-unknown-linux-gnu.tar.gz"
+                url "https://github.com/VirtusLab/wisdom-ai-tracing/releases/download/${TAG}/tracevault-${TAG}-x86_64-unknown-linux-gnu.tar.gz"
                 sha256 "${SHA_X86_64_LINUX}"
               end
             end
@@ -97,7 +97,7 @@ Create a fine-grained personal access token with:
 - **Repository access**: `softwaremill/homebrew-tracevault`
 - **Permissions**: Contents (read/write)
 
-Add it as a secret named `HOMEBREW_TAP_TOKEN` in the `softwaremill/tracevault` repository.
+Add it as a secret named `HOMEBREW_TAP_TOKEN` in the `VirtusLab/wisdom-ai-tracing` repository.
 
 ### 4. Usage
 
