@@ -17,6 +17,7 @@ pub mod orgs;
 pub mod policies;
 pub mod pricing;
 pub mod proxy;
+pub mod proxy_capture;
 pub mod repos;
 pub mod session_detail;
 pub mod sso;

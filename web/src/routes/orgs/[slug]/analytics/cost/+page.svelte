@@ -152,6 +152,7 @@
 			<StatCard label="Cache Savings" value={fmtCost(data.cache_savings_usd)} icon={PiggyBank} color="#10b981" tooltip="Net savings from prompt caching — tokens served from cache at reduced rates." />
 			<StatCard label="Avg Cost/Session" value={fmtCost(data.avg_cost_per_session)} icon={Calculator} color="#3b82f6" tooltip="Average estimated cost per session." />
 		</div>
+		<p class="text-muted-foreground mt-2 text-[11px]">Totals include proxy API usage where available. Per-repo and per-session breakdowns reflect hook-tracked sessions only.</p>
 
 		<div class="border-border rounded-lg border p-3">
 			<h4 class="mb-2 text-sm font-semibold">Cost Over Time<HelpTip text="Daily cost trend over the selected period." /></h4>

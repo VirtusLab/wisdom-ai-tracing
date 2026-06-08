@@ -114,6 +114,7 @@
 
 <div class="space-y-6">
 	<h1 class="text-xl font-semibold">Author Analytics</h1>
+	<p class="text-muted-foreground text-[11px]">Totals include proxy API usage where available. Per-repo and per-session breakdowns reflect hook-tracked sessions only.</p>
 
 	{#if authorsQuery.loading}
 		<LoadingState />
