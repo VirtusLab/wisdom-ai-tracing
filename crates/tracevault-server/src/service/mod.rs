@@ -7,3 +7,4 @@ pub mod chat_summarization;
 pub mod clone_recovery;
 pub mod sealing;
 pub mod stream;
+pub mod usage_capture;

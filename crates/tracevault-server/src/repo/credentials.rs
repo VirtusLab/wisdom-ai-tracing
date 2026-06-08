@@ -34,6 +34,7 @@ pub struct CredentialStatus {
 /// A credential resolved for a specific request model: where/how/key/cap,
 /// plus the provider-side model to rewrite to (None = forward as-is).
 pub struct RoutedCredential {
+    pub id: Uuid,
     pub protocol: String,
     pub base_url: String,
     pub encrypted: String,
@@ -63,8 +64,8 @@ impl CredentialRepo {
         // A single query: pick the rule that matches the model, else the
         // default (match_model IS NULL), preferring the model match. ORDER BY
         // puts the exact match first; LIMIT 1 takes it.
-        let row = sqlx::query_as::<_, (String, String, String, String, i32, Option<String>)>(
-            "SELECT c.protocol, c.base_url, c.key_encrypted, c.key_nonce, c.max_concurrent, r.provider_model
+        let row = sqlx::query_as::<_, (Uuid, String, String, String, String, i32, Option<String>)>(
+            "SELECT c.id, c.protocol, c.base_url, c.key_encrypted, c.key_nonce, c.max_concurrent, r.provider_model
              FROM proxy_routing_rules r
              JOIN credentials c ON c.user_id = r.user_id AND c.name = r.credential_name
              WHERE r.user_id = $1 AND (r.match_model = $2 OR r.match_model IS NULL)
@@ -77,8 +78,9 @@ impl CredentialRepo {
         .await?;
 
         Ok(row.map(
-            |(protocol, base_url, encrypted, nonce, max_concurrent, provider_model)| {
+            |(id, protocol, base_url, encrypted, nonce, max_concurrent, provider_model)| {
                 RoutedCredential {
+                    id,
                     protocol,
                     base_url,
                     encrypted,

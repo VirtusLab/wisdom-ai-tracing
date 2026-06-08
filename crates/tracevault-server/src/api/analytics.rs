@@ -393,30 +393,44 @@ pub async fn get_overview(
     .fetch_all(&state.pool)
     .await?;
 
+    // Fold ledger (proxy) token/cost sums into the session-derived KPIs.
+    // Coexistence assumption: a user uses EITHER the hook OR the proxy, not both,
+    // so simple addition gives the correct org-wide totals with no double-counting.
+    let ledger_kpis = crate::repo::llm_calls::LlmCallRepo::fetch_ledger_kpis(
+        &state.pool,
+        org_id,
+        q.repo.as_deref(),
+        q.author.as_deref(),
+        q.from,
+        q.to,
+    )
+    .await?;
+
     // kpi tuple indices:
     // 0=sessions, 1=tokens, 2=input, 3=output, 4=authors, 5=cost,
     // 6=duration, 7=avg_dur, 8=tool_calls, 9=cache_read, 10=cache_write
+    let total_cache_read_tokens = kpi.9 + ledger_kpis.cache_read_tokens;
     let cache_savings = state
         .extensions
         .pricing
-        .estimate_cache_savings("sonnet", kpi.9);
+        .estimate_cache_savings("sonnet", total_cache_read_tokens);
 
     Ok(Json(OverviewResponse {
         total_commits: commit_count.0,
         total_sessions: kpi.0,
-        total_tokens: kpi.1,
-        total_input_tokens: kpi.2,
-        total_output_tokens: kpi.3,
+        total_tokens: kpi.1 + ledger_kpis.total_tokens,
+        total_input_tokens: kpi.2 + ledger_kpis.input_tokens,
+        total_output_tokens: kpi.3 + ledger_kpis.output_tokens,
         active_authors: kpi.4,
-        estimated_cost_usd: kpi.5,
+        estimated_cost_usd: kpi.5 + ledger_kpis.cost_usd,
         ai_percentage: ai_pct.0,
         total_duration_ms: kpi.6,
         avg_session_duration_ms: kpi.7,
         total_tool_calls: kpi.8,
         total_compactions: 0,
         total_compaction_tokens_saved: 0,
-        total_cache_read_tokens: kpi.9,
-        total_cache_write_tokens: kpi.10,
+        total_cache_read_tokens,
+        total_cache_write_tokens: kpi.10 + ledger_kpis.cache_write_tokens,
         cache_savings_usd: cache_savings,
         tokens_over_time: tokens_time
             .into_iter()
@@ -496,20 +510,40 @@ pub async fn get_tokens(
 ) -> Result<Json<TokensResponse>, AppError> {
     let org_id = q.effective_org_id(&auth);
 
+    // Token time series. Session rows UNION ALL'd with ledger (proxy) rows;
+    // outer aggregate sums input/output per day. Bind order preserved across
+    // both arms: $1=org, $2=repo, $3=author, $4=from, $5=to.
     let time_series = sqlx::query_as::<_, (String, i64, i64)>(
-        "SELECT TO_CHAR(s.created_at::date, 'YYYY-MM-DD'),
-                COALESCE(CAST(SUM(s.input_tokens) AS BIGINT), 0),
-                COALESCE(CAST(SUM(s.output_tokens) AS BIGINT), 0)
-         FROM sessions s
-         JOIN repos r ON s.repo_id = r.id
-         LEFT JOIN users u ON s.user_id = u.id
-         WHERE r.org_id = $1
-           AND ($2::TEXT IS NULL OR r.name = $2)
-           AND ($3::TEXT IS NULL OR u.email = $3)
-           AND ($4::TIMESTAMPTZ IS NULL OR s.created_at >= $4)
-           AND ($5::TIMESTAMPTZ IS NULL OR s.created_at <= $5)
-         GROUP BY s.created_at::date
-         ORDER BY s.created_at::date",
+        "SELECT TO_CHAR(day, 'YYYY-MM-DD'),
+                COALESCE(CAST(SUM(inp) AS BIGINT), 0),
+                COALESCE(CAST(SUM(out) AS BIGINT), 0)
+         FROM (
+             SELECT s.created_at::date AS day,
+                    s.input_tokens AS inp,
+                    s.output_tokens AS out
+             FROM sessions s
+             JOIN repos r ON s.repo_id = r.id
+             LEFT JOIN users u ON s.user_id = u.id
+             WHERE r.org_id = $1
+               AND ($2::TEXT IS NULL OR r.name = $2)
+               AND ($3::TEXT IS NULL OR u.email = $3)
+               AND ($4::TIMESTAMPTZ IS NULL OR s.created_at >= $4)
+               AND ($5::TIMESTAMPTZ IS NULL OR s.created_at <= $5)
+             UNION ALL
+             SELECT c.created_at::date AS day,
+                    c.input_tokens AS inp,
+                    c.output_tokens AS out
+             FROM llm_calls c
+             LEFT JOIN repos r ON c.repo_id = r.id
+             LEFT JOIN users u ON c.user_id = u.id
+             WHERE c.org_id = $1
+               AND ($2::TEXT IS NULL OR r.name = $2)
+               AND ($3::TEXT IS NULL OR u.email = $3)
+               AND ($4::TIMESTAMPTZ IS NULL OR c.created_at >= $4)
+               AND ($5::TIMESTAMPTZ IS NULL OR c.created_at <= $5)
+         ) t
+         GROUP BY day
+         ORDER BY day",
     )
     .bind(org_id)
     .bind(&q.repo)
@@ -519,6 +553,7 @@ pub async fn get_tokens(
     .fetch_all(&state.pool)
     .await?;
 
+    // Session-only: header-less proxy rows have no repo; per-repo proxy is a documented gap.
     let by_repo = sqlx::query_as::<_, (String, i64, i64, i64, i64)>(
         "SELECT r.name,
                 COALESCE(CAST(SUM(s.total_tokens) AS BIGINT), 0),
@@ -561,7 +596,7 @@ pub async fn get_tokens(
     .fetch_all(&state.pool)
     .await?;
 
-    // Cache token totals
+    // Cache token totals (session-only query; ledger rows are folded in below)
     let cache_totals = sqlx::query_as::<_, (i64, i64)>(
         "SELECT COALESCE(CAST(SUM(s.cache_read_tokens) AS BIGINT), 0),
                 COALESCE(CAST(SUM(s.cache_write_tokens) AS BIGINT), 0)
@@ -582,10 +617,27 @@ pub async fn get_tokens(
     .fetch_one(&state.pool)
     .await?;
 
+    // Fold ledger (proxy) cache tokens into the session-derived KPIs.
+    // Coexistence assumption: a user uses EITHER the hook OR the proxy, not both,
+    // so simple addition gives the correct org-wide totals with no double-counting.
+    let ledger_kpis = crate::repo::llm_calls::LlmCallRepo::fetch_ledger_kpis(
+        &state.pool,
+        org_id,
+        q.repo.as_deref(),
+        q.author.as_deref(),
+        q.from,
+        q.to,
+    )
+    .await?;
+
+    let cache_read_tokens = cache_totals.0 + ledger_kpis.cache_read_tokens;
+    let cache_write_tokens = cache_totals.1 + ledger_kpis.cache_write_tokens;
+
+    // Recompute cache savings from the augmented cache-read total, mirroring get_cost.
     let cache_savings = state
         .extensions
         .pricing
-        .estimate_cache_savings("sonnet", cache_totals.0);
+        .estimate_cache_savings("sonnet", cache_read_tokens);
 
     Ok(Json(TokensResponse {
         time_series: time_series
@@ -613,8 +665,8 @@ pub async fn get_tokens(
                 total: t,
             })
             .collect(),
-        cache_read_tokens: cache_totals.0,
-        cache_write_tokens: cache_totals.1,
+        cache_read_tokens,
+        cache_write_tokens,
         cache_savings_usd: cache_savings,
     }))
 }
@@ -671,6 +723,7 @@ pub async fn get_models(
     // Common CTE using s.model directly
     let model_cte = "WITH model_data AS (
            SELECT u.email as author, s.created_at, r.name as repo_name,
+                  s.id as session_id,
                   COALESCE(s.model, 'unknown') as model,
                   COALESCE(s.input_tokens, 0) + COALESCE(s.output_tokens, 0) as tokens,
                   s.input_tokens,
@@ -689,12 +742,36 @@ pub async fn get_models(
              AND ($5::TIMESTAMPTZ IS NULL OR s.created_at <= $5)
          )";
 
-    let distribution = sqlx::query_as::<_, (String, i64, i64)>(
-        &format!("{model_cte} SELECT model, COUNT(*), COALESCE(CAST(SUM(tokens) AS BIGINT), 0) FROM model_data GROUP BY model ORDER BY 2 DESC")
-    )
-    .bind(org_id).bind(&q.repo).bind(&q.author).bind(q.from).bind(q.to)
-    .fetch_all(&state.pool).await
-    ?;
+    // Model distribution: `session_count` stays session-only (COUNT of the
+    // session arm's non-NULL session_id) so the field and its "number of
+    // sessions" UI label stay accurate, while `total_tokens` sums across both
+    // sessions and ledger (proxy) rows. The ledger arm contributes NULL
+    // session_id so it is excluded from the count but included in the token sum.
+    // Bind order preserved across both arms: $1=org, $2=repo, $3=author, $4=from, $5=to.
+    let distribution = sqlx::query_as::<_, (String, i64, i64)>(&format!(
+        "{model_cte} SELECT model, COUNT(session_id), COALESCE(CAST(SUM(tokens) AS BIGINT), 0) FROM (
+             SELECT model, tokens, session_id FROM model_data
+             UNION ALL
+             SELECT COALESCE(c.response_model, 'unknown') AS model,
+                    COALESCE(c.input_tokens, 0) + COALESCE(c.output_tokens, 0) AS tokens,
+                    NULL::uuid AS session_id
+             FROM llm_calls c
+             LEFT JOIN repos r ON c.repo_id = r.id
+             LEFT JOIN users u ON c.user_id = u.id
+             WHERE c.org_id = $1
+               AND ($2::TEXT IS NULL OR r.name = $2)
+               AND ($3::TEXT IS NULL OR u.email = $3)
+               AND ($4::TIMESTAMPTZ IS NULL OR c.created_at >= $4)
+               AND ($5::TIMESTAMPTZ IS NULL OR c.created_at <= $5)
+         ) md GROUP BY model ORDER BY 2 DESC"
+    ))
+    .bind(org_id)
+    .bind(&q.repo)
+    .bind(&q.author)
+    .bind(q.from)
+    .bind(q.to)
+    .fetch_all(&state.pool)
+    .await?;
 
     let trends = sqlx::query_as::<_, (String, String, i64)>(
         &format!("{model_cte} SELECT TO_CHAR(created_at::date, 'YYYY-MM-DD'), model, COUNT(*) FROM model_data GROUP BY created_at::date, model ORDER BY 1, 2")
@@ -815,23 +892,56 @@ pub async fn get_authors(
             i64,
         ),
     >(
-        "SELECT u.id,
-                u.email,
-                COUNT(s.id),
-                COALESCE(CAST(SUM(s.total_tokens) AS BIGINT), 0),
-                COALESCE(SUM(s.estimated_cost_usd), 0.0),
+        // Token + cost columns fold in ledger (proxy) rows via UNION ALL inside
+        // the aggregate so sorting stays in SQL. Session-shaped columns
+        // (session count, last_active, avg_duration, tool_calls) come from the
+        // session arm ONLY: the ledger arm contributes NULL session_id (so it is
+        // excluded from COUNT(session_id), MAX, AVG, and the tool-call SUM).
+        // Both arms inner-JOIN users (NULL-user ledger rows are dropped, matching
+        // the session side). Bind order preserved: $1=org, $2=repo, $3=from, $4=to.
+        "SELECT id,
+                email,
+                COUNT(session_id),
+                COALESCE(CAST(SUM(tokens) AS BIGINT), 0),
+                COALESCE(SUM(cost), 0.0),
                 NULL::float8,
-                MAX(s.created_at),
-                CAST(AVG(COALESCE(NULLIF(s.duration_ms, 0), CASE WHEN s.ended_at IS NOT NULL AND s.started_at IS NOT NULL THEN EXTRACT(EPOCH FROM (s.ended_at - s.started_at))::BIGINT * 1000 ELSE NULL END)) AS BIGINT),
-                COALESCE(CAST(SUM(s.total_tool_calls) AS BIGINT), 0)
-         FROM sessions s
-         JOIN repos r ON s.repo_id = r.id
-         JOIN users u ON s.user_id = u.id
-         WHERE r.org_id = $1
-           AND ($2::TEXT IS NULL OR r.name = $2)
-           AND ($3::TIMESTAMPTZ IS NULL OR s.created_at >= $3)
-           AND ($4::TIMESTAMPTZ IS NULL OR s.created_at <= $4)
-         GROUP BY u.id, u.email
+                COALESCE(MAX(created_at) FILTER (WHERE session_id IS NOT NULL), MAX(created_at)),
+                CAST(AVG(duration_ms) AS BIGINT),
+                COALESCE(CAST(SUM(tool_calls) AS BIGINT), 0)
+         FROM (
+             SELECT u.id AS id,
+                    u.email AS email,
+                    s.id AS session_id,
+                    s.total_tokens AS tokens,
+                    s.estimated_cost_usd AS cost,
+                    s.created_at AS created_at,
+                    COALESCE(NULLIF(s.duration_ms, 0), CASE WHEN s.ended_at IS NOT NULL AND s.started_at IS NOT NULL THEN EXTRACT(EPOCH FROM (s.ended_at - s.started_at))::BIGINT * 1000 ELSE NULL END) AS duration_ms,
+                    s.total_tool_calls AS tool_calls
+             FROM sessions s
+             JOIN repos r ON s.repo_id = r.id
+             JOIN users u ON s.user_id = u.id
+             WHERE r.org_id = $1
+               AND ($2::TEXT IS NULL OR r.name = $2)
+               AND ($3::TIMESTAMPTZ IS NULL OR s.created_at >= $3)
+               AND ($4::TIMESTAMPTZ IS NULL OR s.created_at <= $4)
+             UNION ALL
+             SELECT u.id AS id,
+                    u.email AS email,
+                    NULL::uuid AS session_id,
+                    c.total_tokens AS tokens,
+                    c.estimated_cost_usd AS cost,
+                    c.created_at AS created_at,
+                    NULL::bigint AS duration_ms,
+                    NULL::int AS tool_calls
+             FROM llm_calls c
+             LEFT JOIN repos r ON c.repo_id = r.id
+             JOIN users u ON c.user_id = u.id
+             WHERE c.org_id = $1
+               AND ($2::TEXT IS NULL OR r.name = $2)
+               AND ($3::TIMESTAMPTZ IS NULL OR c.created_at >= $3)
+               AND ($4::TIMESTAMPTZ IS NULL OR c.created_at <= $4)
+         ) t
+         GROUP BY id, email
          ORDER BY 3 DESC",
     )
     .bind(org_id)
@@ -1338,26 +1448,58 @@ pub async fn get_cost(
     .fetch_one(&state.pool)
     .await?;
 
+    // Fold ledger (proxy) cost and cache-read tokens into the session-derived
+    // KPIs.  Coexistence assumption: a user uses EITHER the hook OR the proxy,
+    // so simple addition gives correct org-wide totals without double-counting.
+    let ledger_kpis = crate::repo::llm_calls::LlmCallRepo::fetch_ledger_kpis(
+        &state.pool,
+        org_id,
+        q.repo.as_deref(),
+        q.author.as_deref(),
+        q.from,
+        q.to,
+    )
+    .await?;
+
+    // avg_cost_per_session stays session-only (it is a per-session metric;
+    // proxy calls are not sessions and must not affect this denominator).
+    let total_cost = totals.0 + ledger_kpis.cost_usd;
+    let total_cache_read = totals.2 + ledger_kpis.cache_read_tokens;
+
     // Approximate cache savings using Sonnet rates for aggregate
     let cache_savings = state
         .extensions
         .pricing
-        .estimate_cache_savings("sonnet", totals.2);
+        .estimate_cache_savings("sonnet", total_cache_read);
 
-    // Cost over time (daily)
+    // Cost over time (daily). Session rows are UNION ALL'd with ledger
+    // (proxy) rows; the outer aggregate sums both per day. Bind order is
+    // preserved across both arms: $1=org, $2=repo, $3=author, $4=from, $5=to.
     let cost_time = sqlx::query_as::<_, (String, f64)>(
-        "SELECT TO_CHAR(s.created_at::date, 'YYYY-MM-DD'),
-                COALESCE(SUM(s.estimated_cost_usd), 0.0)
-         FROM sessions s
-         JOIN repos r ON s.repo_id = r.id
-         LEFT JOIN users u ON s.user_id = u.id
-         WHERE r.org_id = $1
-           AND ($2::TEXT IS NULL OR r.name = $2)
-           AND ($3::TEXT IS NULL OR u.email = $3)
-           AND ($4::TIMESTAMPTZ IS NULL OR s.created_at >= $4)
-           AND ($5::TIMESTAMPTZ IS NULL OR s.created_at <= $5)
-         GROUP BY s.created_at::date
-         ORDER BY 1",
+        "SELECT TO_CHAR(day, 'YYYY-MM-DD'), COALESCE(SUM(cost), 0.0)
+         FROM (
+             SELECT s.created_at::date AS day, s.estimated_cost_usd AS cost
+             FROM sessions s
+             JOIN repos r ON s.repo_id = r.id
+             LEFT JOIN users u ON s.user_id = u.id
+             WHERE r.org_id = $1
+               AND ($2::TEXT IS NULL OR r.name = $2)
+               AND ($3::TEXT IS NULL OR u.email = $3)
+               AND ($4::TIMESTAMPTZ IS NULL OR s.created_at >= $4)
+               AND ($5::TIMESTAMPTZ IS NULL OR s.created_at <= $5)
+             UNION ALL
+             SELECT c.created_at::date AS day, c.estimated_cost_usd AS cost
+             FROM llm_calls c
+             LEFT JOIN repos r ON c.repo_id = r.id
+             LEFT JOIN users u ON c.user_id = u.id
+             WHERE c.org_id = $1
+               AND ($2::TEXT IS NULL OR r.name = $2)
+               AND ($3::TEXT IS NULL OR u.email = $3)
+               AND ($4::TIMESTAMPTZ IS NULL OR c.created_at >= $4)
+               AND ($5::TIMESTAMPTZ IS NULL OR c.created_at <= $5)
+         ) t
+         GROUP BY day
+         ORDER BY day",
     )
     .bind(org_id)
     .bind(&q.repo)
@@ -1367,21 +1509,40 @@ pub async fn get_cost(
     .fetch_all(&state.pool)
     .await?;
 
-    // Cost by model
+    // Cost by model. Session rows UNION ALL'd with ledger rows; outer
+    // aggregate groups by model. Bind order preserved across both arms:
+    // $1=org, $2=repo, $3=author, $4=from, $5=to.
     let cost_model = sqlx::query_as::<_, (String, f64, i64, i64)>(
-        "SELECT COALESCE(s.model, 'unknown'),
-                COALESCE(SUM(s.estimated_cost_usd), 0.0),
-                COALESCE(CAST(SUM(COALESCE(s.input_tokens, 0) + COALESCE(s.output_tokens, 0)) AS BIGINT), 0),
+        "SELECT model,
+                COALESCE(SUM(cost), 0.0),
+                COALESCE(CAST(SUM(tok) AS BIGINT), 0),
                 COUNT(*)
-         FROM sessions s
-         JOIN repos r ON s.repo_id = r.id
-         LEFT JOIN users u ON s.user_id = u.id
-         WHERE r.org_id = $1
-           AND ($2::TEXT IS NULL OR r.name = $2)
-           AND ($3::TEXT IS NULL OR u.email = $3)
-           AND ($4::TIMESTAMPTZ IS NULL OR s.created_at >= $4)
-           AND ($5::TIMESTAMPTZ IS NULL OR s.created_at <= $5)
-         GROUP BY s.model
+         FROM (
+             SELECT COALESCE(s.model, 'unknown') AS model,
+                    s.estimated_cost_usd AS cost,
+                    COALESCE(s.input_tokens, 0) + COALESCE(s.output_tokens, 0) AS tok
+             FROM sessions s
+             JOIN repos r ON s.repo_id = r.id
+             LEFT JOIN users u ON s.user_id = u.id
+             WHERE r.org_id = $1
+               AND ($2::TEXT IS NULL OR r.name = $2)
+               AND ($3::TEXT IS NULL OR u.email = $3)
+               AND ($4::TIMESTAMPTZ IS NULL OR s.created_at >= $4)
+               AND ($5::TIMESTAMPTZ IS NULL OR s.created_at <= $5)
+             UNION ALL
+             SELECT COALESCE(c.response_model, 'unknown') AS model,
+                    c.estimated_cost_usd AS cost,
+                    COALESCE(c.input_tokens, 0) + COALESCE(c.output_tokens, 0) AS tok
+             FROM llm_calls c
+             LEFT JOIN repos r ON c.repo_id = r.id
+             LEFT JOIN users u ON c.user_id = u.id
+             WHERE c.org_id = $1
+               AND ($2::TEXT IS NULL OR r.name = $2)
+               AND ($3::TEXT IS NULL OR u.email = $3)
+               AND ($4::TIMESTAMPTZ IS NULL OR c.created_at >= $4)
+               AND ($5::TIMESTAMPTZ IS NULL OR c.created_at <= $5)
+         ) t
+         GROUP BY model
          ORDER BY 2 DESC",
     )
     .bind(org_id)
@@ -1412,17 +1573,33 @@ pub async fn get_cost(
     .fetch_all(&state.pool)
     .await?;
 
-    // Cost by author
+    // Cost by author. Session rows UNION ALL'd with ledger rows; outer
+    // aggregate groups by email. This query has NO author filter; its bind
+    // order is preserved across both arms: $1=org, $2=repo, $3=from, $4=to.
+    // Both arms inner-JOIN users (ledger rows with NULL user_id are dropped,
+    // matching the session side's inner join).
     let cost_author = sqlx::query_as::<_, (String, f64)>(
-        "SELECT u.email, COALESCE(SUM(s.estimated_cost_usd), 0.0)
-         FROM sessions s
-         JOIN repos r ON s.repo_id = r.id
-         JOIN users u ON s.user_id = u.id
-         WHERE r.org_id = $1
-           AND ($2::TEXT IS NULL OR r.name = $2)
-           AND ($3::TIMESTAMPTZ IS NULL OR s.created_at >= $3)
-           AND ($4::TIMESTAMPTZ IS NULL OR s.created_at <= $4)
-         GROUP BY u.email
+        "SELECT email, COALESCE(SUM(cost), 0.0)
+         FROM (
+             SELECT u.email AS email, s.estimated_cost_usd AS cost
+             FROM sessions s
+             JOIN repos r ON s.repo_id = r.id
+             JOIN users u ON s.user_id = u.id
+             WHERE r.org_id = $1
+               AND ($2::TEXT IS NULL OR r.name = $2)
+               AND ($3::TIMESTAMPTZ IS NULL OR s.created_at >= $3)
+               AND ($4::TIMESTAMPTZ IS NULL OR s.created_at <= $4)
+             UNION ALL
+             SELECT u.email AS email, c.estimated_cost_usd AS cost
+             FROM llm_calls c
+             LEFT JOIN repos r ON c.repo_id = r.id
+             JOIN users u ON c.user_id = u.id
+             WHERE c.org_id = $1
+               AND ($2::TEXT IS NULL OR r.name = $2)
+               AND ($3::TIMESTAMPTZ IS NULL OR c.created_at >= $3)
+               AND ($4::TIMESTAMPTZ IS NULL OR c.created_at <= $4)
+         ) t
+         GROUP BY email
          ORDER BY 2 DESC",
     )
     .bind(org_id)
@@ -1433,7 +1610,7 @@ pub async fn get_cost(
     .await?;
 
     Ok(Json(CostResponse {
-        total_cost: totals.0,
+        total_cost,
         avg_cost_per_session: totals.1,
         cache_savings_usd: cache_savings,
         cost_over_time: cost_time
