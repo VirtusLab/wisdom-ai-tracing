@@ -12,6 +12,8 @@ pub struct InsertToolEvent {
     pub tool_response: Option<serde_json::Value>,
     pub tool_is_error: Option<bool>,
     pub timestamp: Option<DateTime<Utc>>,
+    pub hook_event_name: Option<String>,
+    pub tool_use_id: Option<String>,
 }
 
 pub struct InsertFileChange {
@@ -64,6 +66,8 @@ impl EventRepo {
             .bind(&req.tool_response)
             .bind(req.tool_is_error)
             .bind(req.timestamp)
+            .bind(&req.hook_event_name)
+            .bind(&req.tool_use_id)
             .fetch_optional(pool)
             .await?;
         Ok(id)
@@ -130,8 +134,13 @@ impl EventRepo {
     }
 
     /// Aggregate tool call stats for a session that occurred *after* a given
-    /// timestamp (i.e. inside the validation window).
-    /// Returns a map of tool_name → (total, successful).
+    /// timestamp (i.e. inside the verification window).
+    ///
+    /// Only `PostToolUse` rows are counted (completed calls). The phase-opening
+    /// `tracevault verify-start` Bash call is excluded even though its Post
+    /// fires inside the window — it is infrastructure, not work.
+    ///
+    /// Returns a map of tool_name → ToolCallStats.
     pub async fn get_verification_phase_tool_call_stats(
         pool: &PgPool,
         session_db_id: Uuid,
@@ -140,7 +149,7 @@ impl EventRepo {
         std::collections::HashMap<String, tracevault_core::policy_eval::ToolCallStats>,
         AppError,
     > {
-        let rows: Vec<(String, i64, i64)> = sqlx::query_as(include_str!(
+        let rows: Vec<(String, Option<String>, Option<bool>)> = sqlx::query_as(include_str!(
             "sql/get_verification_phase_tool_call_stats.sql"
         ))
         .bind(session_db_id)
@@ -148,15 +157,31 @@ impl EventRepo {
         .fetch_all(pool)
         .await?;
 
-        let map = rows
-            .into_iter()
-            .map(|(name, total, successful)| {
-                (
-                    name,
-                    tracevault_core::policy_eval::ToolCallStats { total, successful },
-                )
-            })
-            .collect();
+        let mut map: std::collections::HashMap<
+            String,
+            tracevault_core::policy_eval::ToolCallStats,
+        > = std::collections::HashMap::new();
+
+        for (tool_name, command, is_error) in rows {
+            // Exclude the phase-opening command itself: a standalone
+            // `tracevault verify-start` Bash call legitimately lands in-window
+            // (its Post fires after the marker) but is infrastructure, not work.
+            if tool_name == "Bash" {
+                if let Some(cmd) = command.as_deref() {
+                    if tracevault_core::bash_command::is_standalone_tracevault_subcommand(
+                        cmd,
+                        "verify-start",
+                    ) {
+                        continue;
+                    }
+                }
+            }
+            let entry = map.entry(tool_name).or_default();
+            entry.total += 1;
+            if is_error == Some(false) {
+                entry.successful += 1;
+            }
+        }
         Ok(map)
     }
 

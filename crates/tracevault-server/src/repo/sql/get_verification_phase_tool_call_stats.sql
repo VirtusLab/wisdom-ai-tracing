@@ -1,10 +1,10 @@
 SELECT
     tool_name,
-    COUNT(*)::bigint                                  AS total,
-    COUNT(*) FILTER (WHERE is_error = false)::bigint  AS successful
+    tool_input ->> 'command' AS command,
+    is_error
 FROM events
 WHERE session_id = $1
   AND event_type = 'tool_use'
   AND tool_name IS NOT NULL
+  AND hook_event_name = 'PostToolUse'
   AND timestamp > $2
-GROUP BY tool_name

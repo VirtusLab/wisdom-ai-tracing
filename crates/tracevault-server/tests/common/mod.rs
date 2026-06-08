@@ -105,6 +105,8 @@ pub async fn seed_event(pool: &PgPool, session_id: Uuid, event_index: i32) -> Uu
             tool_response: None,
             tool_is_error: None,
             timestamp: Some(chrono::Utc::now()),
+            hook_event_name: None,
+            tool_use_id: None,
         },
     )
     .await

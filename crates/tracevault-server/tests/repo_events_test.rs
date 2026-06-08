@@ -44,6 +44,8 @@ async fn insert_tool_event_returns_id(pool: sqlx::PgPool) {
             tool_response: Some(serde_json::json!({"content": "fn main() {}"})),
             tool_is_error: None,
             timestamp: Some(Utc::now()),
+            hook_event_name: None,
+            tool_use_id: None,
         },
     )
     .await
@@ -64,6 +66,8 @@ async fn insert_tool_event_conflict_returns_none(pool: sqlx::PgPool) {
         tool_response: None,
         tool_is_error: None,
         timestamp: Some(Utc::now()),
+        hook_event_name: None,
+        tool_use_id: None,
     };
 
     let first = EventRepo::insert_tool_event(&pool, &req).await.unwrap();
@@ -88,6 +92,8 @@ async fn insert_file_change_succeeds(pool: sqlx::PgPool) {
             tool_response: None,
             tool_is_error: None,
             timestamp: Some(Utc::now()),
+            hook_event_name: None,
+            tool_use_id: None,
         },
     )
     .await

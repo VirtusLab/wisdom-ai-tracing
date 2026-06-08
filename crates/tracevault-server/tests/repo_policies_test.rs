@@ -471,7 +471,7 @@ async fn window_tool_call_stats_after_timestamp(pool: sqlx::PgPool) {
     let before_window = chrono::Utc::now();
     tokio::time::sleep(std::time::Duration::from_millis(5)).await;
 
-    // Event inside the window
+    // Event inside the window — must be PostToolUse to be counted.
     EventRepo::insert_tool_event(
         &pool,
         &InsertToolEvent {
@@ -482,6 +482,8 @@ async fn window_tool_call_stats_after_timestamp(pool: sqlx::PgPool) {
             tool_response: None,
             tool_is_error: Some(false),
             timestamp: Some(chrono::Utc::now()),
+            hook_event_name: Some("PostToolUse".into()),
+            tool_use_id: None,
         },
     )
     .await
@@ -532,6 +534,8 @@ async fn window_tool_call_stats_excludes_pre_window_events(pool: sqlx::PgPool) {
             tool_response: None,
             tool_is_error: Some(false),
             timestamp: Some(chrono::Utc::now()),
+            hook_event_name: None,
+            tool_use_id: None,
         },
     )
     .await
