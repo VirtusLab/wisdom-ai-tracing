@@ -162,6 +162,7 @@
 				tooltip="Net money saved through prompt caching."
 			/>
 		</div>
+		<p class="text-muted-foreground mt-2 text-[11px]">Totals include proxy API usage where available. Per-repo and per-session breakdowns reflect hook-tracked sessions only.</p>
 
 		<div class="border-border rounded-lg border p-3">
 			<h4 class="mb-2 text-sm font-semibold">Tokens Over Time<HelpTip text="Daily input and output token usage." /></h4>

@@ -1453,3 +1453,83 @@ async fn me_anthropic_key_put_rejects_base_url_without_key(pool: sqlx::PgPool) {
         "rejected PUT must not partially apply the cap"
     );
 }
+
+// --- Proxy: llm_calls ledger capture --------------------------------------
+
+/// A streaming proxied call must produce exactly one `llm_calls` row whose
+/// token counts are taken verbatim from the upstream SSE usage (input from
+/// message_start, final output from message_delta), with the stop_reason
+/// captured. The harness user gets an org membership so `org_id` resolves to
+/// a real org (non-nil).
+#[sqlx::test(migrations = "./migrations")]
+async fn proxy_records_ledger_row_for_streaming_call(pool: sqlx::PgPool) {
+    let h = build_harness(pool).await;
+
+    // The harness seeds the credential user but no org membership. Give the
+    // session user one so resolve_ledger_org_id finds a real org.
+    let user_id = user_id_for_token(&h.pool, &h.user_session_token).await;
+    let org_id = common::seed_org(&h.pool).await;
+    common::seed_membership(&h.pool, user_id, org_id, "admin").await;
+
+    let sse_payload = concat!(
+        "event: message_start\n",
+        "data: {\"type\":\"message_start\",\"message\":{\"model\":\"claude-sonnet-4-6\",\"usage\":{\"input_tokens\":42,\"cache_read_input_tokens\":900,\"cache_creation_input_tokens\":100,\"output_tokens\":1}}}\n\n",
+        "event: message_delta\n",
+        "data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":7}}\n\n",
+        "event: message_stop\n",
+        "data: {\"type\":\"message_stop\"}\n\n",
+    );
+
+    Mock::given(method("POST"))
+        .and(wm_path("/v1/messages"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_raw(sse_payload.as_bytes().to_vec(), "text/event-stream"),
+        )
+        .expect(1)
+        .mount(&h.upstream)
+        .await;
+
+    let req = Request::builder()
+        .method("POST")
+        .uri("/proxy/anthropic/v1/messages")
+        .header("x-api-key", &h.user_session_token)
+        .header("content-type", "application/json")
+        .body(Body::from(r#"{"model":"claude-sonnet-4-6","stream":true}"#))
+        .unwrap();
+
+    let resp = h.app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    // Fully drain so the stream reaches None and finalize() runs.
+    let _ = read_body_to_bytes(resp.into_body()).await;
+
+    // The ledger write is spawned, so poll until the row appears. Generous
+    // ceiling (100 × 50ms = 5s) so the spawned insert isn't raced under CI
+    // load; the loop breaks as soon as the row lands, so the happy path stays
+    // fast.
+    let mut found: Option<(Option<i64>, Option<i64>, Option<String>)> = None;
+    for _ in 0..100 {
+        let row = sqlx::query_as::<_, (Option<i64>, Option<i64>, Option<String>)>(
+            "SELECT input_tokens, output_tokens, stop_reason \
+             FROM llm_calls ORDER BY created_at DESC LIMIT 1",
+        )
+        .fetch_optional(&h.pool)
+        .await
+        .unwrap();
+        if let Some(r) = row {
+            found = Some(r);
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+
+    let (input_tokens, output_tokens, stop_reason) =
+        found.expect("expected an llm_calls row to be written for the proxied call");
+    assert_eq!(input_tokens, Some(42), "input_tokens must be verbatim");
+    assert_eq!(
+        output_tokens,
+        Some(7),
+        "output_tokens must be the final message_delta value"
+    );
+    assert_eq!(stop_reason.as_deref(), Some("end_turn"));
+}

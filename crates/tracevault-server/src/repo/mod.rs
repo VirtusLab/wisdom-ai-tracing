@@ -8,6 +8,7 @@ pub mod commits;
 pub mod compliance;
 pub mod credentials;
 pub mod events;
+pub mod llm_calls;
 pub mod orgs;
 pub mod pagination;
 pub mod policies;
