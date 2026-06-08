@@ -46,6 +46,12 @@ enum BodyKind {
 pub struct UsageCapture {
     kind: BodyKind,
     cap: usize,
+    // Whether to retain the response body. JSON always retains it (the buffer
+    // IS the usage-parse source); SSE only retains it when `capture_body` is
+    // set, since SSE usage parsing is incremental and needs no buffer. The
+    // proxy ledger path discards the captured body, so it runs usage-only
+    // (`capture_body = false`) to avoid buffering large SSE streams.
+    capture_body: bool,
     // Bounded capture buffer. For JSON this is also the usage-parse source.
     capture_buf: Vec<u8>,
     truncated: bool,
@@ -56,11 +62,21 @@ pub struct UsageCapture {
 }
 
 impl UsageCapture {
+    /// Usage-only capture: parses token usage but does NOT retain SSE response
+    /// bodies (no consumer reads them today). JSON bodies are still retained
+    /// because they are the usage-parse source.
     pub fn new(content_type: Option<&str>) -> Self {
-        Self::with_cap(content_type, CAPTURE_CAP_BYTES)
+        Self::build(content_type, CAPTURE_CAP_BYTES, false)
     }
 
+    /// Test helper: capture with an explicit cap and full body retention (so
+    /// body-truncation behaviour can be exercised on both kinds).
+    #[cfg(test)]
     fn with_cap(content_type: Option<&str>, cap: usize) -> Self {
+        Self::build(content_type, cap, true)
+    }
+
+    fn build(content_type: Option<&str>, cap: usize, capture_body: bool) -> Self {
         let kind = if content_type.unwrap_or("").contains("text/event-stream") {
             BodyKind::Sse
         } else {
@@ -69,6 +85,7 @@ impl UsageCapture {
         UsageCapture {
             kind,
             cap,
+            capture_body,
             capture_buf: Vec::new(),
             truncated: false,
             line_buf: Vec::new(),
@@ -78,17 +95,23 @@ impl UsageCapture {
     }
 
     pub fn feed(&mut self, chunk: &[u8]) {
-        // 1. Bounded capture: append up to the cap, then mark truncated.
-        if self.capture_buf.len() < self.cap {
-            let remaining = self.cap - self.capture_buf.len();
-            if chunk.len() <= remaining {
-                self.capture_buf.extend_from_slice(chunk);
-            } else {
-                self.capture_buf.extend_from_slice(&chunk[..remaining]);
+        // 1. Bounded capture: append up to the cap, then mark truncated. Only
+        //    when the body is actually consumed — JSON needs it as the parse
+        //    source, and explicit body capture keeps it for later projection.
+        //    Usage-only SSE skips this entirely (parsing is incremental), so a
+        //    large SSE stream costs no per-request buffer.
+        if self.capture_body || self.kind == BodyKind::Json {
+            if self.capture_buf.len() < self.cap {
+                let remaining = self.cap - self.capture_buf.len();
+                if chunk.len() <= remaining {
+                    self.capture_buf.extend_from_slice(chunk);
+                } else {
+                    self.capture_buf.extend_from_slice(&chunk[..remaining]);
+                    self.truncated = true;
+                }
+            } else if !chunk.is_empty() {
                 self.truncated = true;
             }
-        } else if !chunk.is_empty() {
-            self.truncated = true;
         }
 
         // 2. Incremental SSE usage parsing — independent of the capture cap.
@@ -361,5 +384,35 @@ mod tests {
         assert_eq!(parsed.input_tokens, Some(10));
         assert_eq!(parsed.output_tokens, Some(7));
         assert_eq!(parsed.stop_reason.as_deref(), Some("end_turn"));
+    }
+
+    #[test]
+    fn usage_only_mode_does_not_retain_sse_body() {
+        // `new` is usage-only: an SSE stream must parse usage incrementally
+        // while retaining NO captured body (the proxy ledger discards it).
+        let mut cap = UsageCapture::new(Some("text/event-stream"));
+        cap.feed(b"data: {\"type\":\"message_start\",\"message\":{\"model\":\"m\",\"usage\":{\"input_tokens\":5,\"output_tokens\":1}}}\n\n");
+        cap.feed(b"data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":9}}\n\n");
+        let (parsed, captured) = cap.into_parts();
+        assert!(
+            captured.bytes.is_empty(),
+            "usage-only SSE must not buffer the body"
+        );
+        assert!(!captured.truncated);
+        let parsed = parsed.expect("usage still parsed incrementally");
+        assert_eq!(parsed.input_tokens, Some(5));
+        assert_eq!(parsed.output_tokens, Some(9));
+    }
+
+    #[test]
+    fn usage_only_mode_still_retains_json_body_for_parsing() {
+        // JSON has no incremental path — the body must still be retained as the
+        // parse source even in usage-only mode.
+        let body = br#"{"model":"m","usage":{"input_tokens":3,"output_tokens":4}}"#;
+        let mut cap = UsageCapture::new(Some("application/json"));
+        cap.feed(body);
+        let (parsed, captured) = cap.into_parts();
+        assert_eq!(captured.bytes, body.to_vec());
+        assert_eq!(parsed.unwrap().input_tokens, Some(3));
     }
 }

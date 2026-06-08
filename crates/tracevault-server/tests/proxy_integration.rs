@@ -1463,9 +1463,12 @@ async fn proxy_records_ledger_row_for_streaming_call(pool: sqlx::PgPool) {
     // Fully drain so the stream reaches None and finalize() runs.
     let _ = read_body_to_bytes(resp.into_body()).await;
 
-    // The ledger write is spawned, so poll until the row appears.
+    // The ledger write is spawned, so poll until the row appears. Generous
+    // ceiling (100 × 50ms = 5s) so the spawned insert isn't raced under CI
+    // load; the loop breaks as soon as the row lands, so the happy path stays
+    // fast.
     let mut found: Option<(Option<i64>, Option<i64>, Option<String>)> = None;
-    for _ in 0..50 {
+    for _ in 0..100 {
         let row = sqlx::query_as::<_, (Option<i64>, Option<i64>, Option<String>)>(
             "SELECT input_tokens, output_tokens, stop_reason \
              FROM llm_calls ORDER BY created_at DESC LIMIT 1",
@@ -1477,7 +1480,7 @@ async fn proxy_records_ledger_row_for_streaming_call(pool: sqlx::PgPool) {
             found = Some(r);
             break;
         }
-        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     }
 
     let (input_tokens, output_tokens, stop_reason) =

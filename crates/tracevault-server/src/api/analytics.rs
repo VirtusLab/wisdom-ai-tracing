@@ -723,6 +723,7 @@ pub async fn get_models(
     // Common CTE using s.model directly
     let model_cte = "WITH model_data AS (
            SELECT u.email as author, s.created_at, r.name as repo_name,
+                  s.id as session_id,
                   COALESCE(s.model, 'unknown') as model,
                   COALESCE(s.input_tokens, 0) + COALESCE(s.output_tokens, 0) as tokens,
                   s.input_tokens,
@@ -741,16 +742,19 @@ pub async fn get_models(
              AND ($5::TIMESTAMPTZ IS NULL OR s.created_at <= $5)
          )";
 
-    // Model distribution folds ledger (proxy) rows into the per-model counts
-    // and token sums. Session rows (from the shared CTE) are UNION ALL'd with
-    // a ledger arm; the outer aggregate groups by model. Bind order preserved
-    // across both arms: $1=org, $2=repo, $3=author, $4=from, $5=to.
+    // Model distribution: `session_count` stays session-only (COUNT of the
+    // session arm's non-NULL session_id) so the field and its "number of
+    // sessions" UI label stay accurate, while `total_tokens` sums across both
+    // sessions and ledger (proxy) rows. The ledger arm contributes NULL
+    // session_id so it is excluded from the count but included in the token sum.
+    // Bind order preserved across both arms: $1=org, $2=repo, $3=author, $4=from, $5=to.
     let distribution = sqlx::query_as::<_, (String, i64, i64)>(&format!(
-        "{model_cte} SELECT model, COUNT(*), COALESCE(CAST(SUM(tokens) AS BIGINT), 0) FROM (
-             SELECT model, tokens FROM model_data
+        "{model_cte} SELECT model, COUNT(session_id), COALESCE(CAST(SUM(tokens) AS BIGINT), 0) FROM (
+             SELECT model, tokens, session_id FROM model_data
              UNION ALL
              SELECT COALESCE(c.response_model, 'unknown') AS model,
-                    COALESCE(c.input_tokens, 0) + COALESCE(c.output_tokens, 0) AS tokens
+                    COALESCE(c.input_tokens, 0) + COALESCE(c.output_tokens, 0) AS tokens,
+                    NULL::uuid AS session_id
              FROM llm_calls c
              LEFT JOIN repos r ON c.repo_id = r.id
              LEFT JOIN users u ON c.user_id = u.id
