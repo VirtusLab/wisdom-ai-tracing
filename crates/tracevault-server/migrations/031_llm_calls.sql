@@ -21,7 +21,7 @@ CREATE TABLE llm_calls (
     estimated_cost_usd DOUBLE PRECISION,
     stop_reason TEXT,
     http_status INT NOT NULL,
-    outcome TEXT NOT NULL, -- 'success' | 'upstream_error'
+    outcome TEXT NOT NULL, -- 'success' | 'upstream_error' | 'stream_error'
     duration_ms BIGINT NOT NULL,
     anthropic_request_id TEXT,
     path TEXT NOT NULL,

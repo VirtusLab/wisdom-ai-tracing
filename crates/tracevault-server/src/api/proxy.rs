@@ -249,49 +249,58 @@ pub async fn anthropic_proxy(
 
     // Best-effort ledger context. Resolving org_id, tracevault headers, and
     // repo membership must NEVER fail the proxied request — on any error we
-    // fall back to nil/None and still forward the response.
+    // fall back to None (skipping the ledger row) and still forward the response.
     let tv = extract_tv_context(&headers);
     let repo_id = validate_repo(&state, user_id, tv.repo_header.as_deref()).await;
-    let org_id = resolve_ledger_org_id(&state, user_id, repo_id).await;
-
-    let ctx = LedgerContext {
-        pool: state.pool.clone(),
-        org_id,
-        user_id,
-        credential_id: Some(credential_id),
-        auth_session_id: Some(auth_session_id),
-        client_session_id: tv.session,
-        repo_id,
-        branch: tv.branch,
-        requested_model,
-        provider_model,
-        http_status: 0,
-        outcome: "success",
-        anthropic_request_id: None,
-        path: path.clone(),
-        start,
-    };
+    // No resolvable org → no ledger attribution; stream the response without a
+    // ledger write (see `resolve_ledger_org_id`).
+    let ctx = resolve_ledger_org_id(&state, user_id, repo_id)
+        .await
+        .map(|org_id| LedgerContext {
+            pool: state.pool.clone(),
+            org_id,
+            user_id,
+            credential_id: Some(credential_id),
+            auth_session_id: Some(auth_session_id),
+            client_session_id: tv.session,
+            repo_id,
+            branch: tv.branch,
+            requested_model,
+            provider_model,
+            http_status: 0,
+            outcome: "success",
+            anthropic_request_id: None,
+            path: path.clone(),
+            start,
+        });
 
     build_downstream_response(upstream_resp, permits, ctx)
 }
 
 /// Resolve the org the ledger row should be attributed to. Prefer the repo's
 /// org when a validated repo_id is present; otherwise the user's earliest org
-/// membership. Best-effort: any DB error (or no membership) yields
-/// `Uuid::nil()` so the proxied request is never failed by ledger bookkeeping.
-async fn resolve_ledger_org_id(state: &AppState, user_id: Uuid, repo_id: Option<Uuid>) -> Uuid {
+/// membership. Best-effort: any DB error (or no resolvable org) yields `None`,
+/// in which case the caller skips the ledger write entirely — `llm_calls.org_id`
+/// is `NOT NULL REFERENCES orgs(id)`, so attributing to a placeholder like
+/// `Uuid::nil()` would only fail the insert on the FK and silently drop the row.
+/// Skipping keeps the proxied request unaffected without manufacturing a doomed
+/// write.
+async fn resolve_ledger_org_id(
+    state: &AppState,
+    user_id: Uuid,
+    repo_id: Option<Uuid>,
+) -> Option<Uuid> {
     if let Some(repo_id) = repo_id {
         match sqlx::query_scalar::<_, Uuid>("SELECT org_id FROM repos WHERE id = $1")
             .bind(repo_id)
             .fetch_optional(&state.pool)
             .await
         {
-            Ok(Some(org_id)) => return org_id,
+            Ok(Some(org_id)) => return Some(org_id),
+            // Repo not found or a transient lookup error — fall through to the
+            // user's membership rather than giving up on attribution.
             Ok(None) => {}
-            Err(e) => {
-                tracing::warn!(error = %e, "ledger org_id lookup by repo failed");
-                return Uuid::nil();
-            }
+            Err(e) => tracing::warn!(error = %e, "ledger org_id lookup by repo failed"),
         }
     }
 
@@ -302,11 +311,10 @@ async fn resolve_ledger_org_id(state: &AppState, user_id: Uuid, repo_id: Option<
     .fetch_optional(&state.pool)
     .await
     {
-        Ok(Some(org_id)) => org_id,
-        Ok(None) => Uuid::nil(),
+        Ok(org_id) => org_id,
         Err(e) => {
             tracing::warn!(error = %e, "ledger org_id lookup by membership failed");
-            Uuid::nil()
+            None
         }
     }
 }
@@ -502,33 +510,40 @@ async fn forward_to_upstream(
 fn build_downstream_response(
     upstream_resp: reqwest::Response,
     permits: HeldPermits,
-    mut ctx: LedgerContext,
+    mut ctx: Option<LedgerContext>,
 ) -> Response {
     let upstream_status = upstream_resp.status();
     let upstream_headers = upstream_resp.headers().clone();
 
-    ctx.http_status = upstream_status.as_u16() as i32;
-    ctx.outcome = if upstream_status.is_success() {
-        "success"
-    } else {
-        "upstream_error"
-    };
-    ctx.anthropic_request_id = upstream_headers
-        .get("anthropic-request-id")
-        .or_else(|| upstream_headers.get("request-id"))
-        .and_then(|v| v.to_str().ok())
-        .map(str::to_string);
+    if let Some(ctx) = ctx.as_mut() {
+        ctx.http_status = upstream_status.as_u16() as i32;
+        ctx.outcome = if upstream_status.is_success() {
+            "success"
+        } else {
+            "upstream_error"
+        };
+        ctx.anthropic_request_id = upstream_headers
+            .get("anthropic-request-id")
+            .or_else(|| upstream_headers.get("request-id"))
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_string);
+    }
 
     let content_type = upstream_headers
         .get("content-type")
         .and_then(|v| v.to_str().ok())
         .map(str::to_string);
 
+    // Usage capture is pointless without a ledger context to write it to; tie
+    // the two together so `finalize`'s (ctx, capture) pairing stays consistent.
+    let capture = ctx
+        .as_ref()
+        .map(|_| UsageCapture::new(content_type.as_deref()));
     let body_stream = CapturingStream {
         inner: upstream_resp.bytes_stream(),
         _permits: permits,
-        capture: Some(UsageCapture::new(content_type.as_deref())),
-        ctx: Some(ctx),
+        capture,
+        ctx,
     };
 
     let mut downstream = Response::builder().status(upstream_status);
