@@ -54,7 +54,6 @@ impl UsageSource {
 }
 
 /// Read an org's usage source; defaults to `Both` if the settings row is absent.
-#[allow(dead_code)]
 async fn fetch_usage_source(pool: &sqlx::PgPool, org_id: uuid::Uuid) -> UsageSource {
     let row: Option<(String,)> =
         sqlx::query_as("SELECT usage_source FROM org_compliance_settings WHERE org_id = $1")
@@ -70,6 +69,47 @@ async fn fetch_usage_source(pool: &sqlx::PgPool, org_id: uuid::Uuid) -> UsageSou
 #[doc(hidden)]
 pub async fn fetch_usage_source_for_test(pool: &sqlx::PgPool, org_id: uuid::Uuid) -> UsageSource {
     fetch_usage_source(pool, org_id).await
+}
+
+/// Compute the gated total_tokens for an org: session arm (hook) + ledger arm (proxy),
+/// filtered by the org's usage source.
+async fn overview_total_tokens(
+    pool: &sqlx::PgPool,
+    org_id: uuid::Uuid,
+    source: UsageSource,
+) -> Result<i64, AppError> {
+    let session_total: i64 = if source == UsageSource::Proxy {
+        0
+    } else {
+        let row = sqlx::query_as::<_, (i64,)>(
+            "SELECT COALESCE(CAST(SUM(s.total_tokens) AS BIGINT), 0)
+             FROM sessions s
+             JOIN repos r ON s.repo_id = r.id
+             WHERE r.org_id = $1",
+        )
+        .bind(org_id)
+        .fetch_one(pool)
+        .await?;
+        row.0
+    };
+
+    let ledger_total: i64 = if source == UsageSource::Hook {
+        0
+    } else {
+        let kpis = crate::repo::llm_calls::LlmCallRepo::fetch_ledger_kpis(
+            pool, org_id, None, None, None, None,
+        )
+        .await?;
+        kpis.total_tokens
+    };
+
+    Ok(session_total + ledger_total)
+}
+
+#[doc(hidden)]
+pub async fn overview_total_tokens_for_test(pool: &sqlx::PgPool, org_id: uuid::Uuid) -> i64 {
+    let source = fetch_usage_source(pool, org_id).await;
+    overview_total_tokens(pool, org_id, source).await.unwrap()
 }
 
 // --- Filters endpoint ---
@@ -211,6 +251,7 @@ pub async fn get_overview(
     Query(q): Query<AnalyticsQuery>,
 ) -> Result<Json<OverviewResponse>, AppError> {
     let org_id = q.effective_org_id(&auth);
+    let source = fetch_usage_source(&state.pool, org_id).await;
 
     // KPI: total sessions, tokens, authors, cost, duration, tool_calls, cache tokens
     let kpi = sqlx::query_as::<
@@ -303,7 +344,7 @@ pub async fn get_overview(
 
     // Tokens over time (daily buckets). Session rows UNION ALL'd with ledger
     // (proxy) rows so the chart matches the ledger-inclusive headline totals.
-    // Bind order preserved across both arms: $1=org, $2=repo, $3=author, $4=from, $5=to.
+    // Bind order preserved across both arms: $1=org, $2=repo, $3=author, $4=from, $5=to, $6=source.
     let tokens_time = sqlx::query_as::<_, (String, i64, i64)>(
         "SELECT TO_CHAR(day, 'YYYY-MM-DD'),
                 COALESCE(CAST(SUM(inp) AS BIGINT), 0),
@@ -320,6 +361,7 @@ pub async fn get_overview(
                AND ($3::TEXT IS NULL OR u.email = $3)
                AND ($4::TIMESTAMPTZ IS NULL OR s.created_at >= $4)
                AND ($5::TIMESTAMPTZ IS NULL OR s.created_at <= $5)
+               AND $6 IN ('both','hook')
              UNION ALL
              SELECT c.created_at::date AS day,
                     c.input_tokens AS inp,
@@ -332,6 +374,7 @@ pub async fn get_overview(
                AND ($3::TEXT IS NULL OR u.email = $3)
                AND ($4::TIMESTAMPTZ IS NULL OR c.created_at >= $4)
                AND ($5::TIMESTAMPTZ IS NULL OR c.created_at <= $5)
+               AND $6 IN ('both','proxy')
          ) t
          GROUP BY day
          ORDER BY day",
@@ -341,6 +384,7 @@ pub async fn get_overview(
     .bind(&q.author)
     .bind(q.from)
     .bind(q.to)
+    .bind(source.as_str())
     .fetch_all(&state.pool)
     .await?;
 
@@ -459,23 +503,34 @@ pub async fn get_overview(
     .fetch_all(&state.pool)
     .await?;
 
-    // Fold ledger (proxy) token/cost sums into the session-derived KPIs.
-    // Coexistence assumption: a user uses EITHER the hook OR the proxy, not both,
-    // so simple addition gives the correct org-wide totals with no double-counting.
-    let ledger_kpis = crate::repo::llm_calls::LlmCallRepo::fetch_ledger_kpis(
-        &state.pool,
-        org_id,
-        q.repo.as_deref(),
-        q.author.as_deref(),
-        q.from,
-        q.to,
-    )
-    .await?;
+    // Gate ledger (proxy) KPIs by usage source (Step D).
+    let ledger_kpis = if source == UsageSource::Hook {
+        crate::repo::llm_calls::LedgerKpis::default()
+    } else {
+        crate::repo::llm_calls::LlmCallRepo::fetch_ledger_kpis(
+            &state.pool,
+            org_id,
+            q.repo.as_deref(),
+            q.author.as_deref(),
+            q.from,
+            q.to,
+        )
+        .await?
+    };
 
     // kpi tuple indices:
     // 0=sessions, 1=tokens, 2=input, 3=output, 4=authors, 5=cost,
     // 6=duration, 7=avg_dur, 8=tool_calls, 9=cache_read, 10=cache_write
-    let total_cache_read_tokens = kpi.9 + ledger_kpis.cache_read_tokens;
+    //
+    // Session token/cost contribution: dropped only when the org's source is proxy-only.
+    let (s_total, s_input, s_output, s_cost, s_cache_r, s_cache_w) = if source == UsageSource::Proxy
+    {
+        (0i64, 0i64, 0i64, 0.0f64, 0i64, 0i64)
+    } else {
+        (kpi.1, kpi.2, kpi.3, kpi.5, kpi.9, kpi.10)
+    };
+
+    let total_cache_read_tokens = s_cache_r + ledger_kpis.cache_read_tokens;
     let cache_savings = state
         .extensions
         .pricing
@@ -484,11 +539,11 @@ pub async fn get_overview(
     Ok(Json(OverviewResponse {
         total_commits: commit_count.0,
         total_sessions: kpi.0,
-        total_tokens: kpi.1 + ledger_kpis.total_tokens,
-        total_input_tokens: kpi.2 + ledger_kpis.input_tokens,
-        total_output_tokens: kpi.3 + ledger_kpis.output_tokens,
+        total_tokens: s_total + ledger_kpis.total_tokens,
+        total_input_tokens: s_input + ledger_kpis.input_tokens,
+        total_output_tokens: s_output + ledger_kpis.output_tokens,
         active_authors: kpi.4,
-        estimated_cost_usd: kpi.5 + ledger_kpis.cost_usd,
+        estimated_cost_usd: s_cost + ledger_kpis.cost_usd,
         ai_percentage: ai_pct.0,
         total_duration_ms: kpi.6,
         avg_session_duration_ms: kpi.7,
@@ -496,7 +551,7 @@ pub async fn get_overview(
         total_compactions: 0,
         total_compaction_tokens_saved: 0,
         total_cache_read_tokens,
-        total_cache_write_tokens: kpi.10 + ledger_kpis.cache_write_tokens,
+        total_cache_write_tokens: s_cache_w + ledger_kpis.cache_write_tokens,
         cache_savings_usd: cache_savings,
         tokens_over_time: tokens_time
             .into_iter()
