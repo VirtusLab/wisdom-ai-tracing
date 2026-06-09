@@ -7,11 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.17.2](https://github.com/VirtusLab/wisdom-ai-tracing/compare/v0.17.1...v0.17.2) - 2026-06-08
+## [0.17.2](https://github.com/VirtusLab/visdom-ai-tracing/compare/v0.17.1...v0.17.2) - 2026-06-08
 
 ### Fixed
 
-- *(policies)* stop verification-phase gate false-flagging Bash on every push ([#224](https://github.com/VirtusLab/wisdom-ai-tracing/pull/224))
+- *(policies)* stop verification-phase gate false-flagging Bash on every push ([#224](https://github.com/VirtusLab/visdom-ai-tracing/pull/224))
 
 ## [0.17.0](https://github.com/softwaremill/tracevault/compare/v0.16.1...v0.17.0) - 2026-06-01
 
