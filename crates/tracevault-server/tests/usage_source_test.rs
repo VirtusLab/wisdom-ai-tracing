@@ -168,6 +168,35 @@ async fn models_distribution_respects_source(pool: sqlx::PgPool) {
 }
 
 #[sqlx::test(migrations = "./migrations")]
+async fn put_compliance_updates_usage_source(pool: sqlx::PgPool) {
+    let user_id = common::seed_user(&pool).await;
+    let org_id = common::seed_org_with_member(&pool, user_id).await;
+    sqlx::query("INSERT INTO org_compliance_settings (org_id) VALUES ($1) ON CONFLICT DO NOTHING")
+        .bind(org_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    tracevault_server::repo::compliance::ComplianceRepo::upsert_settings(
+        &pool,
+        org_id,
+        365,
+        false,
+        Some(24),
+        "standard",
+        Some("proxy"),
+    )
+    .await
+    .unwrap();
+
+    let row = tracevault_server::repo::compliance::ComplianceRepo::get_settings(&pool, org_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(row.usage_source, "proxy");
+}
+
+#[sqlx::test(migrations = "./migrations")]
 async fn authors_leaderboard_respects_source(pool: sqlx::PgPool) {
     let (org_id, email) = seed_one_session_and_one_ledger(&pool).await;
     set_source(&pool, org_id, "both").await;

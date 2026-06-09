@@ -10,6 +10,7 @@ pub struct ComplianceSettingsRow {
     pub signing_enabled: bool,
     pub chain_verification_interval_hours: Option<i32>,
     pub compliance_mode: Option<String>,
+    pub usage_source: String,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -31,12 +32,13 @@ impl ComplianceRepo {
                 bool,
                 Option<i32>,
                 Option<String>,
+                String,
                 DateTime<Utc>,
                 DateTime<Utc>,
             ),
         >(
             "SELECT org_id, retention_days, signing_enabled,
-                    chain_verification_interval_hours, compliance_mode, created_at, updated_at
+                    chain_verification_interval_hours, compliance_mode, usage_source, created_at, updated_at
              FROM org_compliance_settings WHERE org_id = $1",
         )
         .bind(org_id)
@@ -49,8 +51,9 @@ impl ComplianceRepo {
             signing_enabled: r.2,
             chain_verification_interval_hours: r.3,
             compliance_mode: r.4,
-            created_at: r.5,
-            updated_at: r.6,
+            usage_source: r.5,
+            created_at: r.6,
+            updated_at: r.7,
         }))
     }
 
@@ -61,6 +64,7 @@ impl ComplianceRepo {
         signing_enabled: bool,
         chain_verification_interval_hours: Option<i32>,
         compliance_mode: &str,
+        usage_source: Option<&str>,
     ) -> Result<ComplianceSettingsRow, AppError> {
         let row = sqlx::query_as::<
             _,
@@ -70,25 +74,28 @@ impl ComplianceRepo {
                 bool,
                 Option<i32>,
                 Option<String>,
+                String,
                 DateTime<Utc>,
                 DateTime<Utc>,
             ),
         >(
-            "INSERT INTO org_compliance_settings (org_id, retention_days, signing_enabled, chain_verification_interval_hours, compliance_mode)
-             VALUES ($1, $2, $3, $4, $5)
+            "INSERT INTO org_compliance_settings (org_id, retention_days, signing_enabled, chain_verification_interval_hours, compliance_mode, usage_source)
+             VALUES ($1, $2, $3, $4, $5, COALESCE($6, 'both'))
              ON CONFLICT (org_id) DO UPDATE SET
                retention_days = COALESCE($2, org_compliance_settings.retention_days),
                signing_enabled = COALESCE($3, org_compliance_settings.signing_enabled),
                chain_verification_interval_hours = COALESCE($4, org_compliance_settings.chain_verification_interval_hours),
                compliance_mode = COALESCE($5, org_compliance_settings.compliance_mode),
+               usage_source = COALESCE($6, org_compliance_settings.usage_source),
                updated_at = NOW()
-             RETURNING org_id, retention_days, signing_enabled, chain_verification_interval_hours, compliance_mode, created_at, updated_at",
+             RETURNING org_id, retention_days, signing_enabled, chain_verification_interval_hours, compliance_mode, usage_source, created_at, updated_at",
         )
         .bind(org_id)
         .bind(retention_days)
         .bind(signing_enabled)
         .bind(chain_verification_interval_hours)
         .bind(compliance_mode)
+        .bind(usage_source)
         .fetch_one(pool)
         .await?;
 
@@ -98,8 +105,9 @@ impl ComplianceRepo {
             signing_enabled: row.2,
             chain_verification_interval_hours: row.3,
             compliance_mode: row.4,
-            created_at: row.5,
-            updated_at: row.6,
+            usage_source: row.5,
+            created_at: row.6,
+            updated_at: row.7,
         })
     }
 

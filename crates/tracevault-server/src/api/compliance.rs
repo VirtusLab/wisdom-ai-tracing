@@ -21,6 +21,7 @@ pub struct ComplianceSettingsResponse {
     pub signing_enabled: bool,
     pub chain_verification_interval_hours: Option<i32>,
     pub compliance_mode: Option<String>,
+    pub usage_source: String,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }
@@ -42,6 +43,7 @@ pub async fn get_compliance_settings(
             signing_enabled: r.signing_enabled,
             chain_verification_interval_hours: r.chain_verification_interval_hours,
             compliance_mode: r.compliance_mode,
+            usage_source: r.usage_source,
             created_at: r.created_at,
             updated_at: r.updated_at,
         }))
@@ -52,6 +54,7 @@ pub async fn get_compliance_settings(
             signing_enabled: false,
             chain_verification_interval_hours: Some(24),
             compliance_mode: None,
+            usage_source: "both".into(),
             created_at: chrono::Utc::now(),
             updated_at: chrono::Utc::now(),
         }))
@@ -64,6 +67,7 @@ pub struct UpdateComplianceSettingsRequest {
     pub signing_enabled: Option<bool>,
     pub chain_verification_interval_hours: Option<i32>,
     pub compliance_mode: Option<String>,
+    pub usage_source: Option<String>,
 }
 
 pub async fn update_compliance_settings(
@@ -82,6 +86,14 @@ pub async fn update_compliance_settings(
                 "Invalid compliance mode. Must be one of: {}",
                 valid_modes.join(", ")
             )));
+        }
+    }
+
+    if let Some(ref s) = req.usage_source {
+        if !matches!(s.as_str(), "hook" | "proxy" | "both") {
+            return Err(AppError::BadRequest(
+                "usage_source must be hook, proxy, or both".into(),
+            ));
         }
     }
 
@@ -108,6 +120,7 @@ pub async fn update_compliance_settings(
         req.signing_enabled.unwrap_or(false),
         req.chain_verification_interval_hours,
         mode,
+        req.usage_source.as_deref(),
     )
     .await?;
 
@@ -132,6 +145,7 @@ pub async fn update_compliance_settings(
         signing_enabled: r.signing_enabled,
         chain_verification_interval_hours: r.chain_verification_interval_hours,
         compliance_mode: r.compliance_mode,
+        usage_source: r.usage_source,
         created_at: r.created_at,
         updated_at: r.updated_at,
     }))
