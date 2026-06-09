@@ -254,21 +254,40 @@ pub async fn get_overview(
     .fetch_one(&state.pool)
     .await?;
 
-    // Tokens over time (daily buckets)
+    // Tokens over time (daily buckets). Session rows UNION ALL'd with ledger
+    // (proxy) rows so the chart matches the ledger-inclusive headline totals.
+    // Bind order preserved across both arms: $1=org, $2=repo, $3=author, $4=from, $5=to.
     let tokens_time = sqlx::query_as::<_, (String, i64, i64)>(
-        "SELECT TO_CHAR(s.created_at::date, 'YYYY-MM-DD'),
-                COALESCE(CAST(SUM(s.input_tokens) AS BIGINT), 0),
-                COALESCE(CAST(SUM(s.output_tokens) AS BIGINT), 0)
-         FROM sessions s
-         JOIN repos r ON s.repo_id = r.id
-         LEFT JOIN users u ON s.user_id = u.id
-         WHERE r.org_id = $1
-           AND ($2::TEXT IS NULL OR r.name = $2)
-           AND ($3::TEXT IS NULL OR u.email = $3)
-           AND ($4::TIMESTAMPTZ IS NULL OR s.created_at >= $4)
-           AND ($5::TIMESTAMPTZ IS NULL OR s.created_at <= $5)
-         GROUP BY s.created_at::date
-         ORDER BY s.created_at::date",
+        "SELECT TO_CHAR(day, 'YYYY-MM-DD'),
+                COALESCE(CAST(SUM(inp) AS BIGINT), 0),
+                COALESCE(CAST(SUM(out) AS BIGINT), 0)
+         FROM (
+             SELECT s.created_at::date AS day,
+                    s.input_tokens AS inp,
+                    s.output_tokens AS out
+             FROM sessions s
+             JOIN repos r ON s.repo_id = r.id
+             LEFT JOIN users u ON s.user_id = u.id
+             WHERE r.org_id = $1
+               AND ($2::TEXT IS NULL OR r.name = $2)
+               AND ($3::TEXT IS NULL OR u.email = $3)
+               AND ($4::TIMESTAMPTZ IS NULL OR s.created_at >= $4)
+               AND ($5::TIMESTAMPTZ IS NULL OR s.created_at <= $5)
+             UNION ALL
+             SELECT c.created_at::date AS day,
+                    c.input_tokens AS inp,
+                    c.output_tokens AS out
+             FROM llm_calls c
+             LEFT JOIN repos r ON c.repo_id = r.id
+             LEFT JOIN users u ON c.user_id = u.id
+             WHERE c.org_id = $1
+               AND ($2::TEXT IS NULL OR r.name = $2)
+               AND ($3::TEXT IS NULL OR u.email = $3)
+               AND ($4::TIMESTAMPTZ IS NULL OR c.created_at >= $4)
+               AND ($5::TIMESTAMPTZ IS NULL OR c.created_at <= $5)
+         ) t
+         GROUP BY day
+         ORDER BY day",
     )
     .bind(org_id)
     .bind(&q.repo)
@@ -577,16 +596,32 @@ pub async fn get_tokens(
     .fetch_all(&state.pool)
     .await?;
 
+    // Tokens by author: session rows UNION ALL'd with ledger (proxy) rows so
+    // per-author totals match the ledger-inclusive grand total. Both arms
+    // inner-JOIN users (NULL-user ledger rows dropped, matching the session
+    // side). Bind order: $1=org, $2=repo, $3=from, $4=to.
     let by_author = sqlx::query_as::<_, (String, i64)>(
-        "SELECT u.email, COALESCE(CAST(SUM(s.total_tokens) AS BIGINT), 0)
-         FROM sessions s
-         JOIN repos r ON s.repo_id = r.id
-         JOIN users u ON s.user_id = u.id
-         WHERE r.org_id = $1
-           AND ($2::TEXT IS NULL OR r.name = $2)
-           AND ($3::TIMESTAMPTZ IS NULL OR s.created_at >= $3)
-           AND ($4::TIMESTAMPTZ IS NULL OR s.created_at <= $4)
-         GROUP BY u.email
+        "SELECT email, COALESCE(CAST(SUM(tokens) AS BIGINT), 0)
+         FROM (
+             SELECT u.email AS email, s.total_tokens AS tokens
+             FROM sessions s
+             JOIN repos r ON s.repo_id = r.id
+             JOIN users u ON s.user_id = u.id
+             WHERE r.org_id = $1
+               AND ($2::TEXT IS NULL OR r.name = $2)
+               AND ($3::TIMESTAMPTZ IS NULL OR s.created_at >= $3)
+               AND ($4::TIMESTAMPTZ IS NULL OR s.created_at <= $4)
+             UNION ALL
+             SELECT u.email AS email, c.total_tokens AS tokens
+             FROM llm_calls c
+             LEFT JOIN repos r ON c.repo_id = r.id
+             JOIN users u ON c.user_id = u.id
+             WHERE c.org_id = $1
+               AND ($2::TEXT IS NULL OR r.name = $2)
+               AND ($3::TIMESTAMPTZ IS NULL OR c.created_at >= $3)
+               AND ($4::TIMESTAMPTZ IS NULL OR c.created_at <= $4)
+         ) t
+         GROUP BY email
          ORDER BY 2 DESC",
     )
     .bind(org_id)
@@ -763,6 +798,9 @@ pub async fn get_models(
                AND ($3::TEXT IS NULL OR u.email = $3)
                AND ($4::TIMESTAMPTZ IS NULL OR c.created_at >= $4)
                AND ($5::TIMESTAMPTZ IS NULL OR c.created_at <= $5)
+               -- Exclude non-generation ledger calls (model listing, errors)
+               -- that carry no response_model, so they don't bucket as 'unknown'.
+               AND c.response_model IS NOT NULL
          ) md GROUP BY model ORDER BY 2 DESC"
     ))
     .bind(org_id)
@@ -780,8 +818,28 @@ pub async fn get_models(
     .fetch_all(&state.pool).await
     ?;
 
+    // Per-author/model matrix: `sessions` stays session-only (COUNT of the
+    // session arm's non-NULL session_id) while token sums fold in ledger
+    // (proxy) rows. Ledger arm contributes NULL session_id. Bind order:
+    // $1=org, $2=repo, $3=author, $4=from, $5=to.
     let author_model_matrix = sqlx::query_as::<_, (String, String, i64, i64)>(
-        &format!("{model_cte} SELECT author, model, COUNT(*), COALESCE(CAST(SUM(tokens) AS BIGINT), 0) FROM model_data WHERE author IS NOT NULL GROUP BY author, model ORDER BY author, 3 DESC")
+        &format!("{model_cte} SELECT author, model, COUNT(session_id), COALESCE(CAST(SUM(tokens) AS BIGINT), 0) FROM (
+             SELECT author, model, tokens, session_id FROM model_data
+             UNION ALL
+             SELECT u.email AS author,
+                    COALESCE(c.response_model, 'unknown') AS model,
+                    COALESCE(c.input_tokens, 0) + COALESCE(c.output_tokens, 0) AS tokens,
+                    NULL::uuid AS session_id
+             FROM llm_calls c
+             LEFT JOIN repos r ON c.repo_id = r.id
+             JOIN users u ON c.user_id = u.id
+             WHERE c.org_id = $1
+               AND ($2::TEXT IS NULL OR r.name = $2)
+               AND ($3::TEXT IS NULL OR u.email = $3)
+               AND ($4::TIMESTAMPTZ IS NULL OR c.created_at >= $4)
+               AND ($5::TIMESTAMPTZ IS NULL OR c.created_at <= $5)
+               AND c.response_model IS NOT NULL
+         ) amm WHERE author IS NOT NULL GROUP BY author, model ORDER BY author, 3 DESC")
     )
     .bind(org_id).bind(&q.repo).bind(&q.author).bind(q.from).bind(q.to)
     .fetch_all(&state.pool).await
@@ -1516,11 +1574,12 @@ pub async fn get_cost(
         "SELECT model,
                 COALESCE(SUM(cost), 0.0),
                 COALESCE(CAST(SUM(tok) AS BIGINT), 0),
-                COUNT(*)
+                COUNT(session_id)
          FROM (
              SELECT COALESCE(s.model, 'unknown') AS model,
                     s.estimated_cost_usd AS cost,
-                    COALESCE(s.input_tokens, 0) + COALESCE(s.output_tokens, 0) AS tok
+                    COALESCE(s.input_tokens, 0) + COALESCE(s.output_tokens, 0) AS tok,
+                    s.id AS session_id
              FROM sessions s
              JOIN repos r ON s.repo_id = r.id
              LEFT JOIN users u ON s.user_id = u.id
@@ -1532,7 +1591,8 @@ pub async fn get_cost(
              UNION ALL
              SELECT COALESCE(c.response_model, 'unknown') AS model,
                     c.estimated_cost_usd AS cost,
-                    COALESCE(c.input_tokens, 0) + COALESCE(c.output_tokens, 0) AS tok
+                    COALESCE(c.input_tokens, 0) + COALESCE(c.output_tokens, 0) AS tok,
+                    NULL::uuid AS session_id
              FROM llm_calls c
              LEFT JOIN repos r ON c.repo_id = r.id
              LEFT JOIN users u ON c.user_id = u.id
@@ -1541,6 +1601,7 @@ pub async fn get_cost(
                AND ($3::TEXT IS NULL OR u.email = $3)
                AND ($4::TIMESTAMPTZ IS NULL OR c.created_at >= $4)
                AND ($5::TIMESTAMPTZ IS NULL OR c.created_at <= $5)
+               AND c.response_model IS NOT NULL
          ) t
          GROUP BY model
          ORDER BY 2 DESC",
