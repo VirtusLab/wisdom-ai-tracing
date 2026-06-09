@@ -918,14 +918,24 @@ pub struct ModelComparison {
     pub avg_duration_ms: Option<i64>,
 }
 
-pub async fn get_models(
-    State(state): State<AppState>,
-    auth: OrgAuth,
-    Query(q): Query<AnalyticsQuery>,
-) -> Result<Json<ModelsResponse>, AppError> {
-    let org_id = q.effective_org_id(&auth);
-
-    // Common CTE using s.model directly
+/// Compute the gated model distribution for an org: session arm (hook) + ledger arm (proxy),
+/// filtered by the org's usage source and the supplied query filters.
+/// Returns `(model, session_count, total_tokens)`.
+pub(crate) async fn models_distribution(
+    pool: &sqlx::PgPool,
+    org_id: uuid::Uuid,
+    source: UsageSource,
+    repo: Option<&str>,
+    author: Option<&str>,
+    from: Option<chrono::DateTime<chrono::Utc>>,
+    to: Option<chrono::DateTime<chrono::Utc>>,
+) -> Result<Vec<(String, i64, i64)>, AppError> {
+    // `session_count` stays session-only (COUNT of the session arm's non-NULL
+    // session_id) so the field and its "number of sessions" UI label stay
+    // accurate, while `total_tokens` sums across both sessions and ledger
+    // (proxy) rows. The ledger arm contributes NULL session_id so it is
+    // excluded from the count but included in the token sum.
+    // Bind order: $1=org, $2=repo, $3=author, $4=from, $5=to, $6=source.
     let model_cte = "WITH model_data AS (
            SELECT u.email as author, s.created_at, r.name as repo_name,
                   s.id as session_id,
@@ -945,15 +955,9 @@ pub async fn get_models(
              AND ($3::TEXT IS NULL OR u.email = $3)
              AND ($4::TIMESTAMPTZ IS NULL OR s.created_at >= $4)
              AND ($5::TIMESTAMPTZ IS NULL OR s.created_at <= $5)
+             AND $6 IN ('both','hook')
          )";
-
-    // Model distribution: `session_count` stays session-only (COUNT of the
-    // session arm's non-NULL session_id) so the field and its "number of
-    // sessions" UI label stay accurate, while `total_tokens` sums across both
-    // sessions and ledger (proxy) rows. The ledger arm contributes NULL
-    // session_id so it is excluded from the count but included in the token sum.
-    // Bind order preserved across both arms: $1=org, $2=repo, $3=author, $4=from, $5=to.
-    let distribution = sqlx::query_as::<_, (String, i64, i64)>(&format!(
+    sqlx::query_as::<_, (String, i64, i64)>(&format!(
         "{model_cte} SELECT model, COUNT(session_id), COALESCE(CAST(SUM(tokens) AS BIGINT), 0) FROM (
              SELECT model, tokens, session_id FROM model_data
              UNION ALL
@@ -971,27 +975,86 @@ pub async fn get_models(
                -- Exclude non-generation ledger calls (model listing, errors)
                -- that carry no response_model, so they don't bucket as 'unknown'.
                AND c.response_model IS NOT NULL
+               AND $6 IN ('both','proxy')
          ) md GROUP BY model ORDER BY 2 DESC"
     ))
     .bind(org_id)
-    .bind(&q.repo)
-    .bind(&q.author)
-    .bind(q.from)
-    .bind(q.to)
-    .fetch_all(&state.pool)
+    .bind(repo)
+    .bind(author)
+    .bind(from)
+    .bind(to)
+    .bind(source.as_str())
+    .fetch_all(pool)
+    .await
+    .map_err(AppError::from)
+}
+
+#[doc(hidden)]
+pub async fn model_m_for_test(pool: &sqlx::PgPool, org_id: uuid::Uuid) -> (i64, i64) {
+    let source = fetch_usage_source(pool, org_id).await;
+    let rows = models_distribution(pool, org_id, source, None, None, None, None)
+        .await
+        .unwrap();
+    rows.into_iter()
+        .find(|(m, _, _)| m == "m")
+        .map(|(_, sc, tok)| (tok, sc))
+        .unwrap_or((0, 0))
+}
+
+pub async fn get_models(
+    State(state): State<AppState>,
+    auth: OrgAuth,
+    Query(q): Query<AnalyticsQuery>,
+) -> Result<Json<ModelsResponse>, AppError> {
+    let org_id = q.effective_org_id(&auth);
+    let source = fetch_usage_source(&state.pool, org_id).await;
+
+    // Common CTE using s.model directly; $6 gates the session arm by usage source.
+    let model_cte = "WITH model_data AS (
+           SELECT u.email as author, s.created_at, r.name as repo_name,
+                  s.id as session_id,
+                  COALESCE(s.model, 'unknown') as model,
+                  COALESCE(s.input_tokens, 0) + COALESCE(s.output_tokens, 0) as tokens,
+                  s.input_tokens,
+                  s.output_tokens,
+                  s.estimated_cost_usd,
+                  COALESCE(s.cache_read_tokens, 0) as cache_read_tokens,
+                  COALESCE(s.cache_write_tokens, 0) as cache_write_tokens,
+                  COALESCE(NULLIF(s.duration_ms, 0), CASE WHEN s.ended_at IS NOT NULL AND s.started_at IS NOT NULL THEN EXTRACT(EPOCH FROM (s.ended_at - s.started_at))::BIGINT * 1000 ELSE NULL END) as duration_ms
+           FROM sessions s
+           JOIN repos r ON s.repo_id = r.id
+           LEFT JOIN users u ON s.user_id = u.id
+           WHERE r.org_id = $1
+             AND ($2::TEXT IS NULL OR r.name = $2)
+             AND ($3::TEXT IS NULL OR u.email = $3)
+             AND ($4::TIMESTAMPTZ IS NULL OR s.created_at >= $4)
+             AND ($5::TIMESTAMPTZ IS NULL OR s.created_at <= $5)
+             AND $6 IN ('both','hook')
+         )";
+
+    // Model distribution: delegated to the shared `models_distribution` function.
+    let distribution = models_distribution(
+        &state.pool,
+        org_id,
+        source,
+        q.repo.as_deref(),
+        q.author.as_deref(),
+        q.from,
+        q.to,
+    )
     .await?;
 
     let trends = sqlx::query_as::<_, (String, String, i64)>(
         &format!("{model_cte} SELECT TO_CHAR(created_at::date, 'YYYY-MM-DD'), model, COUNT(*) FROM model_data GROUP BY created_at::date, model ORDER BY 1, 2")
     )
-    .bind(org_id).bind(&q.repo).bind(&q.author).bind(q.from).bind(q.to)
+    .bind(org_id).bind(&q.repo).bind(&q.author).bind(q.from).bind(q.to).bind(source.as_str())
     .fetch_all(&state.pool).await
     ?;
 
     // Per-author/model matrix: `sessions` stays session-only (COUNT of the
     // session arm's non-NULL session_id) while token sums fold in ledger
     // (proxy) rows. Ledger arm contributes NULL session_id. Bind order:
-    // $1=org, $2=repo, $3=author, $4=from, $5=to.
+    // $1=org, $2=repo, $3=author, $4=from, $5=to, $6=source.
     let author_model_matrix = sqlx::query_as::<_, (String, String, i64, i64)>(
         &format!("{model_cte} SELECT author, model, COUNT(session_id), COALESCE(CAST(SUM(tokens) AS BIGINT), 0) FROM (
              SELECT author, model, tokens, session_id FROM model_data
@@ -1009,16 +1072,17 @@ pub async fn get_models(
                AND ($4::TIMESTAMPTZ IS NULL OR c.created_at >= $4)
                AND ($5::TIMESTAMPTZ IS NULL OR c.created_at <= $5)
                AND c.response_model IS NOT NULL
+               AND $6 IN ('both','proxy')
          ) amm WHERE author IS NOT NULL GROUP BY author, model ORDER BY author, 3 DESC")
     )
-    .bind(org_id).bind(&q.repo).bind(&q.author).bind(q.from).bind(q.to)
+    .bind(org_id).bind(&q.repo).bind(&q.author).bind(q.from).bind(q.to).bind(source.as_str())
     .fetch_all(&state.pool).await
     ?;
 
     let comparison = sqlx::query_as::<_, (String, i64, f64, i64, i64, Option<i64>)>(
         &format!("{model_cte} SELECT model, COALESCE(CAST(AVG(tokens) AS BIGINT), 0), COALESCE(AVG(estimated_cost_usd), 0.0), COALESCE(CAST(SUM(cache_read_tokens) AS BIGINT), 0), COALESCE(CAST(SUM(cache_write_tokens) AS BIGINT), 0), CAST(AVG(duration_ms) AS BIGINT) FROM model_data GROUP BY model ORDER BY 2 DESC")
     )
-    .bind(org_id).bind(&q.repo).bind(&q.author).bind(q.from).bind(q.to)
+    .bind(org_id).bind(&q.repo).bind(&q.author).bind(q.from).bind(q.to).bind(source.as_str())
     .fetch_all(&state.pool).await
     ?;
 

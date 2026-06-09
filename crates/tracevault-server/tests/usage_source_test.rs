@@ -146,3 +146,23 @@ async fn tokens_by_author_respects_source(pool: sqlx::PgPool) {
         220
     );
 }
+
+#[sqlx::test(migrations = "./migrations")]
+async fn models_distribution_respects_source(pool: sqlx::PgPool) {
+    let (org_id, _e) = seed_one_session_and_one_ledger(&pool).await;
+    set_source(&pool, org_id, "both").await;
+    assert_eq!(
+        tracevault_server::api::analytics::model_m_for_test(&pool, org_id).await,
+        (330, 1)
+    );
+    set_source(&pool, org_id, "hook").await;
+    assert_eq!(
+        tracevault_server::api::analytics::model_m_for_test(&pool, org_id).await,
+        (110, 1)
+    );
+    set_source(&pool, org_id, "proxy").await;
+    assert_eq!(
+        tracevault_server::api::analytics::model_m_for_test(&pool, org_id).await,
+        (220, 0)
+    );
+}
