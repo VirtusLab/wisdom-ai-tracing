@@ -414,6 +414,7 @@ pub async fn get_overview(
            AND ($2::TEXT IS NULL OR u.email = $2)
            AND ($3::TIMESTAMPTZ IS NULL OR s.created_at >= $3)
            AND ($4::TIMESTAMPTZ IS NULL OR s.created_at <= $4)
+           AND $5 IN ('both','hook')
          GROUP BY r.name
          ORDER BY 2 DESC
          LIMIT 5",
@@ -422,6 +423,7 @@ pub async fn get_overview(
     .bind(&q.author)
     .bind(q.from)
     .bind(q.to)
+    .bind(source.as_str())
     .fetch_all(&state.pool)
     .await?;
 
