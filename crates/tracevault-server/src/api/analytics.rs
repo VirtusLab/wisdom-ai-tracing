@@ -25,6 +25,53 @@ impl AnalyticsQuery {
     }
 }
 
+/// Which usage source(s) feed analytics token/cost metrics for an org.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UsageSource {
+    Hook,
+    Proxy,
+    Both,
+}
+
+impl UsageSource {
+    /// Bound into queries; the `IN ('both', ...)` predicates gate each arm.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            UsageSource::Hook => "hook",
+            UsageSource::Proxy => "proxy",
+            UsageSource::Both => "both",
+        }
+    }
+
+    fn from_db(s: &str) -> Self {
+        match s {
+            "hook" => UsageSource::Hook,
+            "proxy" => UsageSource::Proxy,
+            _ => UsageSource::Both,
+        }
+    }
+}
+
+/// Read an org's usage source; defaults to `Both` if the settings row is absent.
+#[allow(dead_code)]
+async fn fetch_usage_source(pool: &sqlx::PgPool, org_id: uuid::Uuid) -> UsageSource {
+    let row: Option<(String,)> =
+        sqlx::query_as("SELECT usage_source FROM org_compliance_settings WHERE org_id = $1")
+            .bind(org_id)
+            .fetch_optional(pool)
+            .await
+            .ok()
+            .flatten();
+    row.map(|(s,)| UsageSource::from_db(&s))
+        .unwrap_or(UsageSource::Both)
+}
+
+#[doc(hidden)]
+pub async fn fetch_usage_source_for_test(pool: &sqlx::PgPool, org_id: uuid::Uuid) -> UsageSource {
+    fetch_usage_source(pool, org_id).await
+}
+
 // --- Filters endpoint ---
 
 #[derive(Debug, Serialize)]
