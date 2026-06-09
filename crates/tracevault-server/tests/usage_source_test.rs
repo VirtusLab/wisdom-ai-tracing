@@ -183,7 +183,7 @@ async fn put_compliance_updates_usage_source(pool: sqlx::PgPool) {
         365,
         false,
         Some(24),
-        "standard",
+        "none",
         Some("proxy"),
     )
     .await

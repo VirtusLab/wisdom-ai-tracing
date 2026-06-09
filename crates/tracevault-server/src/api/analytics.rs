@@ -53,22 +53,26 @@ impl UsageSource {
     }
 }
 
-/// Read an org's usage source; defaults to `Both` if the settings row is absent.
-async fn fetch_usage_source(pool: &sqlx::PgPool, org_id: uuid::Uuid) -> UsageSource {
+/// Read an org's usage source. Defaults to `Both` only when the settings row is
+/// absent; a DB error is propagated so analytics endpoints fail loudly rather
+/// than silently returning source-mismatched totals.
+async fn fetch_usage_source(
+    pool: &sqlx::PgPool,
+    org_id: uuid::Uuid,
+) -> Result<UsageSource, AppError> {
     let row: Option<(String,)> =
         sqlx::query_as("SELECT usage_source FROM org_compliance_settings WHERE org_id = $1")
             .bind(org_id)
             .fetch_optional(pool)
-            .await
-            .ok()
-            .flatten();
-    row.map(|(s,)| UsageSource::from_db(&s))
-        .unwrap_or(UsageSource::Both)
+            .await?;
+    Ok(row
+        .map(|(s,)| UsageSource::from_db(&s))
+        .unwrap_or(UsageSource::Both))
 }
 
 #[doc(hidden)]
 pub async fn fetch_usage_source_for_test(pool: &sqlx::PgPool, org_id: uuid::Uuid) -> UsageSource {
-    fetch_usage_source(pool, org_id).await
+    fetch_usage_source(pool, org_id).await.unwrap()
 }
 
 /// Compute the gated total_tokens for an org: session arm (hook) + ledger arm (proxy),
@@ -118,7 +122,7 @@ async fn overview_total_tokens(
 
 #[doc(hidden)]
 pub async fn overview_total_tokens_for_test(pool: &sqlx::PgPool, org_id: uuid::Uuid) -> i64 {
-    let source = fetch_usage_source(pool, org_id).await;
+    let source = fetch_usage_source(pool, org_id).await.unwrap();
     overview_total_tokens(pool, org_id, source, None, None, None, None)
         .await
         .unwrap()
@@ -263,7 +267,7 @@ pub async fn get_overview(
     Query(q): Query<AnalyticsQuery>,
 ) -> Result<Json<OverviewResponse>, AppError> {
     let org_id = q.effective_org_id(&auth);
-    let source = fetch_usage_source(&state.pool, org_id).await;
+    let source = fetch_usage_source(&state.pool, org_id).await?;
 
     // KPI: total sessions, tokens, authors, cost, duration, tool_calls, cache tokens
     let kpi = sqlx::query_as::<
@@ -699,7 +703,7 @@ pub async fn tokens_by_author_total_for_test(
     org_id: uuid::Uuid,
     email: &str,
 ) -> i64 {
-    let source = fetch_usage_source(pool, org_id).await;
+    let source = fetch_usage_source(pool, org_id).await.unwrap();
     tokens_by_author(pool, org_id, source, None, None, None)
         .await
         .unwrap()
@@ -715,7 +719,7 @@ pub async fn get_tokens(
     Query(q): Query<AnalyticsQuery>,
 ) -> Result<Json<TokensResponse>, AppError> {
     let org_id = q.effective_org_id(&auth);
-    let source = fetch_usage_source(&state.pool, org_id).await;
+    let source = fetch_usage_source(&state.pool, org_id).await?;
 
     // Token time series. Session rows UNION ALL'd with ledger (proxy) rows;
     // outer aggregate sums input/output per day. Bind order preserved across
@@ -991,7 +995,7 @@ pub(crate) async fn models_distribution(
 
 #[doc(hidden)]
 pub async fn model_m_for_test(pool: &sqlx::PgPool, org_id: uuid::Uuid) -> (i64, i64) {
-    let source = fetch_usage_source(pool, org_id).await;
+    let source = fetch_usage_source(pool, org_id).await.unwrap();
     let rows = models_distribution(pool, org_id, source, None, None, None, None)
         .await
         .unwrap();
@@ -1007,7 +1011,7 @@ pub async fn get_models(
     Query(q): Query<AnalyticsQuery>,
 ) -> Result<Json<ModelsResponse>, AppError> {
     let org_id = q.effective_org_id(&auth);
-    let source = fetch_usage_source(&state.pool, org_id).await;
+    let source = fetch_usage_source(&state.pool, org_id).await?;
 
     // Common CTE using s.model directly; $6 gates the session arm by usage source.
     let model_cte = "WITH model_data AS (
@@ -1261,7 +1265,7 @@ pub(crate) async fn authors_leaderboard(
 
 #[doc(hidden)]
 pub async fn author_tokens_for_test(pool: &sqlx::PgPool, org_id: uuid::Uuid, email: &str) -> i64 {
-    let source = fetch_usage_source(pool, org_id).await;
+    let source = fetch_usage_source(pool, org_id).await.unwrap();
     let rows = authors_leaderboard(pool, org_id, source, None, None, None)
         .await
         .unwrap();
@@ -1278,7 +1282,7 @@ pub async fn get_authors(
     Query(q): Query<AnalyticsQuery>,
 ) -> Result<Json<AuthorsResponse>, AppError> {
     let org_id = q.effective_org_id(&auth);
-    let source = fetch_usage_source(&state.pool, org_id).await;
+    let source = fetch_usage_source(&state.pool, org_id).await?;
 
     // Author leaderboard: delegated to the shared `authors_leaderboard` function.
     let leaderboard =
@@ -1756,7 +1760,7 @@ async fn cost_total(
 
 #[doc(hidden)]
 pub async fn cost_total_for_test(pool: &sqlx::PgPool, org_id: uuid::Uuid) -> f64 {
-    let source = fetch_usage_source(pool, org_id).await;
+    let source = fetch_usage_source(pool, org_id).await.unwrap();
     cost_total(pool, org_id, source, None, None, None, None)
         .await
         .unwrap()
@@ -1807,7 +1811,7 @@ pub async fn get_cost(
     Query(q): Query<AnalyticsQuery>,
 ) -> Result<Json<CostResponse>, AppError> {
     let org_id = q.effective_org_id(&auth);
-    let source = fetch_usage_source(&state.pool, org_id).await;
+    let source = fetch_usage_source(&state.pool, org_id).await?;
 
     // avg_cost_per_session and cache_read_tokens stay session-only; the totals
     // query is kept ungated so avg_cost_per_session denominator is not disturbed.
@@ -1860,7 +1864,15 @@ pub async fn get_cost(
         q.to,
     )
     .await?;
-    let total_cache_read = totals.2 + ledger_kpis.cache_read_tokens;
+    // Session cache_read is dropped under proxy-only so cache savings stay
+    // consistent with the source-gated token/cost totals (ledger cache is
+    // already gated via `ledger_kpis`).
+    let session_cache_read = if source == UsageSource::Proxy {
+        0
+    } else {
+        totals.2
+    };
+    let total_cache_read = session_cache_read + ledger_kpis.cache_read_tokens;
 
     // Approximate cache savings using Sonnet rates for aggregate
     let cache_savings = state
