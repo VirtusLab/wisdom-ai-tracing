@@ -1608,6 +1608,55 @@ pub async fn get_sessions(
     }))
 }
 
+/// Compute the gated total_cost for an org: session arm (hook) + ledger arm (proxy),
+/// filtered by the org's usage source and the supplied query filters.
+async fn cost_total(
+    pool: &sqlx::PgPool,
+    org_id: uuid::Uuid,
+    source: UsageSource,
+    repo: Option<&str>,
+    author: Option<&str>,
+    from: Option<chrono::DateTime<chrono::Utc>>,
+    to: Option<chrono::DateTime<chrono::Utc>>,
+) -> Result<f64, AppError> {
+    let session_cost: f64 = if source == UsageSource::Proxy {
+        0.0
+    } else {
+        sqlx::query_scalar::<_, f64>(
+            "SELECT COALESCE(SUM(s.estimated_cost_usd), 0.0)
+             FROM sessions s JOIN repos r ON s.repo_id = r.id LEFT JOIN users u ON s.user_id = u.id
+             WHERE r.org_id = $1
+               AND ($2::TEXT IS NULL OR r.name = $2)
+               AND ($3::TEXT IS NULL OR u.email = $3)
+               AND ($4::TIMESTAMPTZ IS NULL OR s.created_at >= $4)
+               AND ($5::TIMESTAMPTZ IS NULL OR s.created_at <= $5)",
+        )
+        .bind(org_id)
+        .bind(repo)
+        .bind(author)
+        .bind(from)
+        .bind(to)
+        .fetch_one(pool)
+        .await?
+    };
+    let ledger_cost: f64 = if source == UsageSource::Hook {
+        0.0
+    } else {
+        crate::repo::llm_calls::LlmCallRepo::fetch_ledger_kpis(pool, org_id, repo, author, from, to)
+            .await?
+            .cost_usd
+    };
+    Ok(session_cost + ledger_cost)
+}
+
+#[doc(hidden)]
+pub async fn cost_total_for_test(pool: &sqlx::PgPool, org_id: uuid::Uuid) -> f64 {
+    let source = fetch_usage_source(pool, org_id).await;
+    cost_total(pool, org_id, source, None, None, None, None)
+        .await
+        .unwrap()
+}
+
 // --- Cost endpoint ---
 
 #[derive(Debug, Serialize)]
@@ -1653,8 +1702,11 @@ pub async fn get_cost(
     Query(q): Query<AnalyticsQuery>,
 ) -> Result<Json<CostResponse>, AppError> {
     let org_id = q.effective_org_id(&auth);
+    let source = fetch_usage_source(&state.pool, org_id).await;
 
-    // Total cost and avg cost per session
+    // avg_cost_per_session and cache_read_tokens stay session-only; the totals
+    // query is kept ungated so avg_cost_per_session denominator is not disturbed.
+    // total_cost is computed via the shared filter-aware gated helper instead.
     let totals = sqlx::query_as::<_, (f64, f64, i64)>(
         "SELECT COALESCE(SUM(s.estimated_cost_usd), 0.0),
                 COALESCE(AVG(s.estimated_cost_usd), 0.0),
@@ -1676,22 +1728,33 @@ pub async fn get_cost(
     .fetch_one(&state.pool)
     .await?;
 
-    // Fold ledger (proxy) cost and cache-read tokens into the session-derived
-    // KPIs.  Coexistence assumption: a user uses EITHER the hook OR the proxy,
-    // so simple addition gives correct org-wide totals without double-counting.
-    let ledger_kpis = crate::repo::llm_calls::LlmCallRepo::fetch_ledger_kpis(
+    // Gate ledger (proxy) KPIs by usage source.
+    let ledger_kpis = if source == UsageSource::Hook {
+        crate::repo::llm_calls::LedgerKpis::default()
+    } else {
+        crate::repo::llm_calls::LlmCallRepo::fetch_ledger_kpis(
+            &state.pool,
+            org_id,
+            q.repo.as_deref(),
+            q.author.as_deref(),
+            q.from,
+            q.to,
+        )
+        .await?
+    };
+
+    // total_cost uses the shared gated helper (session + ledger, source-aware).
+    // avg_cost_per_session stays session-only (per-session metric).
+    let total_cost = cost_total(
         &state.pool,
         org_id,
+        source,
         q.repo.as_deref(),
         q.author.as_deref(),
         q.from,
         q.to,
     )
     .await?;
-
-    // avg_cost_per_session stays session-only (it is a per-session metric;
-    // proxy calls are not sessions and must not affect this denominator).
-    let total_cost = totals.0 + ledger_kpis.cost_usd;
     let total_cache_read = totals.2 + ledger_kpis.cache_read_tokens;
 
     // Approximate cache savings using Sonnet rates for aggregate
@@ -1702,7 +1765,7 @@ pub async fn get_cost(
 
     // Cost over time (daily). Session rows are UNION ALL'd with ledger
     // (proxy) rows; the outer aggregate sums both per day. Bind order is
-    // preserved across both arms: $1=org, $2=repo, $3=author, $4=from, $5=to.
+    // preserved across both arms: $1=org, $2=repo, $3=author, $4=from, $5=to, $6=source.
     let cost_time = sqlx::query_as::<_, (String, f64)>(
         "SELECT TO_CHAR(day, 'YYYY-MM-DD'), COALESCE(SUM(cost), 0.0)
          FROM (
@@ -1715,6 +1778,7 @@ pub async fn get_cost(
                AND ($3::TEXT IS NULL OR u.email = $3)
                AND ($4::TIMESTAMPTZ IS NULL OR s.created_at >= $4)
                AND ($5::TIMESTAMPTZ IS NULL OR s.created_at <= $5)
+               AND $6 IN ('both','hook')
              UNION ALL
              SELECT c.created_at::date AS day, c.estimated_cost_usd AS cost
              FROM llm_calls c
@@ -1725,6 +1789,7 @@ pub async fn get_cost(
                AND ($3::TEXT IS NULL OR u.email = $3)
                AND ($4::TIMESTAMPTZ IS NULL OR c.created_at >= $4)
                AND ($5::TIMESTAMPTZ IS NULL OR c.created_at <= $5)
+               AND $6 IN ('both','proxy')
          ) t
          GROUP BY day
          ORDER BY day",
@@ -1734,12 +1799,13 @@ pub async fn get_cost(
     .bind(&q.author)
     .bind(q.from)
     .bind(q.to)
+    .bind(source.as_str())
     .fetch_all(&state.pool)
     .await?;
 
     // Cost by model. Session rows UNION ALL'd with ledger rows; outer
     // aggregate groups by model. Bind order preserved across both arms:
-    // $1=org, $2=repo, $3=author, $4=from, $5=to.
+    // $1=org, $2=repo, $3=author, $4=from, $5=to, $6=source.
     let cost_model = sqlx::query_as::<_, (String, f64, i64, i64)>(
         "SELECT model,
                 COALESCE(SUM(cost), 0.0),
@@ -1758,6 +1824,7 @@ pub async fn get_cost(
                AND ($3::TEXT IS NULL OR u.email = $3)
                AND ($4::TIMESTAMPTZ IS NULL OR s.created_at >= $4)
                AND ($5::TIMESTAMPTZ IS NULL OR s.created_at <= $5)
+               AND $6 IN ('both','hook')
              UNION ALL
              SELECT COALESCE(c.response_model, 'unknown') AS model,
                     c.estimated_cost_usd AS cost,
@@ -1772,6 +1839,7 @@ pub async fn get_cost(
                AND ($4::TIMESTAMPTZ IS NULL OR c.created_at >= $4)
                AND ($5::TIMESTAMPTZ IS NULL OR c.created_at <= $5)
                AND c.response_model IS NOT NULL
+               AND $6 IN ('both','proxy')
          ) t
          GROUP BY model
          ORDER BY 2 DESC",
@@ -1781,10 +1849,11 @@ pub async fn get_cost(
     .bind(&q.author)
     .bind(q.from)
     .bind(q.to)
+    .bind(source.as_str())
     .fetch_all(&state.pool)
     .await?;
 
-    // Cost by repo
+    // Cost by repo (session-only). Bind order: $1=org, $2=author, $3=from, $4=to, $5=source.
     let cost_repo = sqlx::query_as::<_, (String, f64)>(
         "SELECT r.name, COALESCE(SUM(s.estimated_cost_usd), 0.0)
          FROM sessions s
@@ -1794,6 +1863,7 @@ pub async fn get_cost(
            AND ($2::TEXT IS NULL OR u.email = $2)
            AND ($3::TIMESTAMPTZ IS NULL OR s.created_at >= $3)
            AND ($4::TIMESTAMPTZ IS NULL OR s.created_at <= $4)
+           AND $5 IN ('both','hook')
          GROUP BY r.name
          ORDER BY 2 DESC",
     )
@@ -1801,12 +1871,13 @@ pub async fn get_cost(
     .bind(&q.author)
     .bind(q.from)
     .bind(q.to)
+    .bind(source.as_str())
     .fetch_all(&state.pool)
     .await?;
 
     // Cost by author. Session rows UNION ALL'd with ledger rows; outer
     // aggregate groups by email. This query has NO author filter; its bind
-    // order is preserved across both arms: $1=org, $2=repo, $3=from, $4=to.
+    // order is preserved across both arms: $1=org, $2=repo, $3=from, $4=to, $5=source.
     // Both arms inner-JOIN users (ledger rows with NULL user_id are dropped,
     // matching the session side's inner join).
     let cost_author = sqlx::query_as::<_, (String, f64)>(
@@ -1820,6 +1891,7 @@ pub async fn get_cost(
                AND ($2::TEXT IS NULL OR r.name = $2)
                AND ($3::TIMESTAMPTZ IS NULL OR s.created_at >= $3)
                AND ($4::TIMESTAMPTZ IS NULL OR s.created_at <= $4)
+               AND $5 IN ('both','hook')
              UNION ALL
              SELECT u.email AS email, c.estimated_cost_usd AS cost
              FROM llm_calls c
@@ -1829,6 +1901,7 @@ pub async fn get_cost(
                AND ($2::TEXT IS NULL OR r.name = $2)
                AND ($3::TIMESTAMPTZ IS NULL OR c.created_at >= $3)
                AND ($4::TIMESTAMPTZ IS NULL OR c.created_at <= $4)
+               AND $5 IN ('both','proxy')
          ) t
          GROUP BY email
          ORDER BY 2 DESC",
@@ -1837,6 +1910,7 @@ pub async fn get_cost(
     .bind(&q.repo)
     .bind(q.from)
     .bind(q.to)
+    .bind(source.as_str())
     .fetch_all(&state.pool)
     .await?;
 

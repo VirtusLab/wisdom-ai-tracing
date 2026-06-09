@@ -105,6 +105,26 @@ async fn usage_source_absent_row_defaults_to_both(pool: sqlx::PgPool) {
 }
 
 #[sqlx::test(migrations = "./migrations")]
+async fn cost_total_respects_source(pool: sqlx::PgPool) {
+    let (org_id, _e) = seed_one_session_and_one_ledger(&pool).await;
+    set_source(&pool, org_id, "both").await;
+    assert!(
+        (tracevault_server::api::analytics::cost_total_for_test(&pool, org_id).await - 0.30).abs()
+            < 1e-9
+    );
+    set_source(&pool, org_id, "hook").await;
+    assert!(
+        (tracevault_server::api::analytics::cost_total_for_test(&pool, org_id).await - 0.10).abs()
+            < 1e-9
+    );
+    set_source(&pool, org_id, "proxy").await;
+    assert!(
+        (tracevault_server::api::analytics::cost_total_for_test(&pool, org_id).await - 0.20).abs()
+            < 1e-9
+    );
+}
+
+#[sqlx::test(migrations = "./migrations")]
 async fn tokens_by_author_respects_source(pool: sqlx::PgPool) {
     let (org_id, email) = seed_one_session_and_one_ledger(&pool).await;
     set_source(&pool, org_id, "both").await;
