@@ -102,7 +102,7 @@
 		recent_commits: RecentCommit[];
 	}
 
-	interface ComplianceSettings {
+	interface OrgInfo {
 		usage_source: 'hook' | 'proxy' | 'both';
 	}
 
@@ -113,10 +113,13 @@
 		() => `/api/v1/orgs/${slug}/analytics/overview` + (search ? '?' + search : '')
 	);
 
-	const compliance = useFetch<ComplianceSettings>(() => `/api/v1/orgs/${slug}/compliance`);
+	// usage_source lives on the org endpoint (core, owner/admin readable) — not
+	// the compliance endpoint, which is enterprise-gated. Non-admins fall back
+	// to the 'both' note; the analytics numbers are gated server-side regardless.
+	const orgInfo = useFetch<OrgInfo>(() => `/api/v1/orgs/${slug}`);
 
 	const usageSourceNote = $derived.by(() => {
-		const src = compliance.data?.usage_source ?? 'both';
+		const src = orgInfo.data?.usage_source ?? 'both';
 		if (src === 'hook') return 'Showing hook usage only.';
 		if (src === 'proxy') return 'Showing proxy usage only.';
 		return 'Totals combine hook + proxy usage.';

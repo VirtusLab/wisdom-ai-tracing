@@ -17,7 +17,6 @@
 		signing_enabled: boolean;
 		compliance_mode: string;
 		chain_verification_interval_hours: number | null;
-		usage_source: 'hook' | 'proxy' | 'both';
 	}
 
 	const slug = $derived($page.params.slug);
@@ -36,7 +35,6 @@
 	let retentionDays = $state('365');
 	let signingEnabled = $state(false);
 	let verificationHours = $state('24');
-	let usageSource = $state<'hook' | 'proxy' | 'both'>('both');
 
 	const canEdit = $derived(
 		orgState.current?.role === 'owner' || orgState.current?.role === 'admin'
@@ -54,7 +52,6 @@
 			retentionDays = String(settings.retention_days);
 			signingEnabled = settings.signing_enabled;
 			verificationHours = String(settings.chain_verification_interval_hours ?? 24);
-			usageSource = settings.usage_source ?? 'both';
 		} catch (err) {
 			error = err instanceof Error ? err.message : 'Failed to load settings';
 		} finally {
@@ -72,8 +69,7 @@
 				compliance_mode: complianceMode,
 				retention_days: parseInt(retentionDays) || 365,
 				signing_enabled: signingEnabled,
-				chain_verification_interval_hours: parseInt(verificationHours) || 24,
-				usage_source: usageSource
+				chain_verification_interval_hours: parseInt(verificationHours) || 24
 			});
 			success = 'Settings saved successfully.';
 		} catch (err) {
@@ -208,36 +204,6 @@
 							bind:value={verificationHours}
 							disabled={!canEdit}
 						/>
-					</div>
-
-					<div class="grid gap-2">
-						<Label>Usage Source</Label>
-						<Select.Root
-							type="single"
-							value={usageSource}
-							onValueChange={(v) => {
-								if (v === 'hook' || v === 'proxy' || v === 'both') usageSource = v;
-							}}
-							disabled={!canEdit}
-						>
-							<Select.Trigger>
-								{usageSource === 'both'
-									? 'Both (hook + proxy)'
-									: usageSource === 'hook'
-										? 'Hook only'
-										: 'Proxy only'}
-							</Select.Trigger>
-							<Select.Content>
-								<Select.Item value="both">Both (hook + proxy)</Select.Item>
-								<Select.Item value="hook">Hook only</Select.Item>
-								<Select.Item value="proxy">Proxy only</Select.Item>
-							</Select.Content>
-						</Select.Root>
-						<p class="text-xs text-muted-foreground">
-							Controls which usage source feeds analytics token/cost totals. Use a single source if
-							you run Claude Code through the proxy with the hook installed, to avoid
-							double-counting.
-						</p>
 					</div>
 
 					{#if canEdit}
