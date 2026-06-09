@@ -1162,15 +1162,33 @@ pub struct AuthorModelPreference {
     pub sessions: i64,
 }
 
-pub async fn get_authors(
-    State(state): State<AppState>,
-    auth: OrgAuth,
-    Query(q): Query<AnalyticsQuery>,
-) -> Result<Json<AuthorsResponse>, AppError> {
-    let org_id = q.effective_org_id(&auth);
-
-    // Author leaderboard via users
-    let leaderboard = sqlx::query_as::<
+/// Authors leaderboard: token/cost sums fold in ledger (proxy) rows via UNION ALL;
+/// session-shaped columns (session count, last_active, avg_duration, tool_calls) come
+/// from the session arm only (ledger arm contributes NULL session_id). Both arms
+/// inner-JOIN users (NULL-user ledger rows are dropped). Gated by the org's usage source.
+/// Bind order: $1=org, $2=repo, $3=from, $4=to, $5=source.
+pub(crate) async fn authors_leaderboard(
+    pool: &sqlx::PgPool,
+    org_id: uuid::Uuid,
+    source: UsageSource,
+    repo: Option<&str>,
+    from: Option<chrono::DateTime<chrono::Utc>>,
+    to: Option<chrono::DateTime<chrono::Utc>>,
+) -> Result<
+    Vec<(
+        Uuid,
+        String,
+        i64,
+        i64,
+        f64,
+        Option<f64>,
+        chrono::DateTime<chrono::Utc>,
+        Option<i64>,
+        i64,
+    )>,
+    AppError,
+> {
+    sqlx::query_as::<
         _,
         (
             Uuid,
@@ -1184,13 +1202,6 @@ pub async fn get_authors(
             i64,
         ),
     >(
-        // Token + cost columns fold in ledger (proxy) rows via UNION ALL inside
-        // the aggregate so sorting stays in SQL. Session-shaped columns
-        // (session count, last_active, avg_duration, tool_calls) come from the
-        // session arm ONLY: the ledger arm contributes NULL session_id (so it is
-        // excluded from COUNT(session_id), MAX, AVG, and the tool-call SUM).
-        // Both arms inner-JOIN users (NULL-user ledger rows are dropped, matching
-        // the session side). Bind order preserved: $1=org, $2=repo, $3=from, $4=to.
         "SELECT id,
                 email,
                 COUNT(session_id),
@@ -1216,6 +1227,7 @@ pub async fn get_authors(
                AND ($2::TEXT IS NULL OR r.name = $2)
                AND ($3::TIMESTAMPTZ IS NULL OR s.created_at >= $3)
                AND ($4::TIMESTAMPTZ IS NULL OR s.created_at <= $4)
+               AND $5 IN ('both','hook')
              UNION ALL
              SELECT u.id AS id,
                     u.email AS email,
@@ -1232,16 +1244,45 @@ pub async fn get_authors(
                AND ($2::TEXT IS NULL OR r.name = $2)
                AND ($3::TIMESTAMPTZ IS NULL OR c.created_at >= $3)
                AND ($4::TIMESTAMPTZ IS NULL OR c.created_at <= $4)
+               AND $5 IN ('both','proxy')
          ) t
          GROUP BY id, email
          ORDER BY 3 DESC",
     )
     .bind(org_id)
-    .bind(&q.repo)
-    .bind(q.from)
-    .bind(q.to)
-    .fetch_all(&state.pool)
-    .await?;
+    .bind(repo)
+    .bind(from)
+    .bind(to)
+    .bind(source.as_str())
+    .fetch_all(pool)
+    .await
+    .map_err(AppError::from)
+}
+
+#[doc(hidden)]
+pub async fn author_tokens_for_test(pool: &sqlx::PgPool, org_id: uuid::Uuid, email: &str) -> i64 {
+    let source = fetch_usage_source(pool, org_id).await;
+    let rows = authors_leaderboard(pool, org_id, source, None, None, None)
+        .await
+        .unwrap();
+    // r.1 = email, r.3 = total_tokens (from SELECT: id, email, COUNT(session_id), SUM(tokens), ...)
+    rows.into_iter()
+        .find(|r| r.1 == email)
+        .map(|r| r.3)
+        .unwrap_or(0)
+}
+
+pub async fn get_authors(
+    State(state): State<AppState>,
+    auth: OrgAuth,
+    Query(q): Query<AnalyticsQuery>,
+) -> Result<Json<AuthorsResponse>, AppError> {
+    let org_id = q.effective_org_id(&auth);
+    let source = fetch_usage_source(&state.pool, org_id).await;
+
+    // Author leaderboard: delegated to the shared `authors_leaderboard` function.
+    let leaderboard =
+        authors_leaderboard(&state.pool, org_id, source, q.repo.as_deref(), q.from, q.to).await?;
 
     // Author timeline stays on commits table (counting commits per author per day)
     let timeline = sqlx::query_as::<_, (String, String, i64)>(

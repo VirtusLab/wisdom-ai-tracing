@@ -166,3 +166,23 @@ async fn models_distribution_respects_source(pool: sqlx::PgPool) {
         (220, 0)
     );
 }
+
+#[sqlx::test(migrations = "./migrations")]
+async fn authors_leaderboard_respects_source(pool: sqlx::PgPool) {
+    let (org_id, email) = seed_one_session_and_one_ledger(&pool).await;
+    set_source(&pool, org_id, "both").await;
+    assert_eq!(
+        tracevault_server::api::analytics::author_tokens_for_test(&pool, org_id, &email).await,
+        330
+    );
+    set_source(&pool, org_id, "hook").await;
+    assert_eq!(
+        tracevault_server::api::analytics::author_tokens_for_test(&pool, org_id, &email).await,
+        110
+    );
+    set_source(&pool, org_id, "proxy").await;
+    assert_eq!(
+        tracevault_server::api::analytics::author_tokens_for_test(&pool, org_id, &email).await,
+        220
+    );
+}
