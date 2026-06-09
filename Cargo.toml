@@ -8,7 +8,7 @@ edition = "2021"
 license = "Apache-2.0"
 authors = ["VirtusLab"]
 homepage = "https://tracevault.softwaremill.com"
-repository = "https://github.com/VirtusLab/wisdom-ai-tracing"
+repository = "https://github.com/VirtusLab/visdom-ai-tracing"
 
 [workspace.dependencies]
 serde = { version = "1", features = ["derive"] }

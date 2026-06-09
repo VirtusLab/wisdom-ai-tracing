@@ -493,7 +493,7 @@ Query via API with filters (action type, actor, resource, date range) or browse 
 Add to your workflow to verify that commits in a PR or push have corresponding traces sealed on the server:
 
 ```yaml
-- uses: VirtusLab/wisdom-ai-tracing@main
+- uses: VirtusLab/visdom-ai-tracing@main
   with:
     server-url: https://your-tracevault-server.example.com
     api-key: ${{ secrets.TRACEVAULT_API_KEY }}

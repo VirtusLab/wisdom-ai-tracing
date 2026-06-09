@@ -7,13 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.17.2](https://github.com/VirtusLab/wisdom-ai-tracing/compare/v0.17.1...v0.17.2) - 2026-06-08
+## [0.17.2](https://github.com/VirtusLab/visdom-ai-tracing/compare/v0.17.1...v0.17.2) - 2026-06-08
 
 ### Added
 
-- *(proxy)* named credentials + default routing rule (routing step 1) ([#218](https://github.com/VirtusLab/wisdom-ai-tracing/pull/218))
-- *(proxy)* per-credential and global concurrency caps ([#210](https://github.com/VirtusLab/wisdom-ai-tracing/pull/210)) ([#211](https://github.com/VirtusLab/wisdom-ai-tracing/pull/211))
-- [**breaking**] rename validation window to verification phase ([#213](https://github.com/VirtusLab/wisdom-ai-tracing/pull/213))
+- *(proxy)* named credentials + default routing rule (routing step 1) ([#218](https://github.com/VirtusLab/visdom-ai-tracing/pull/218))
+- *(proxy)* per-credential and global concurrency caps ([#210](https://github.com/VirtusLab/visdom-ai-tracing/pull/210)) ([#211](https://github.com/VirtusLab/visdom-ai-tracing/pull/211))
+- [**breaking**] rename validation window to verification phase ([#213](https://github.com/VirtusLab/visdom-ai-tracing/pull/213))
 - agent-policies — server-rendered policy instructions for agents
 - *(branches)* add Repo column to branches view
 - *(sessions)* add tool, user, and file changes filters
@@ -145,9 +145,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- *(policies)* stop verification-phase gate false-flagging Bash on every push ([#224](https://github.com/VirtusLab/wisdom-ai-tracing/pull/224))
-- *(server)* recover orphaned clones and auto-retry failed ones ([#222](https://github.com/VirtusLab/wisdom-ai-tracing/pull/222))
-- *(auth, cli)* sliding session window + actionable check errors ([#212](https://github.com/VirtusLab/wisdom-ai-tracing/pull/212))
+- *(policies)* stop verification-phase gate false-flagging Bash on every push ([#224](https://github.com/VirtusLab/visdom-ai-tracing/pull/224))
+- *(server)* recover orphaned clones and auto-retry failed ones ([#222](https://github.com/VirtusLab/visdom-ai-tracing/pull/222))
+- *(auth, cli)* sliding session window + actionable check errors ([#212](https://github.com/VirtusLab/visdom-ai-tracing/pull/212))
 - *(server,cli)* default session tool to 'claude-code' to fix validation-start 500
 - update stale comment about 'both' scope after removal
 - *(policies)* remove 'both' scope, rename 'Window' to 'Validation'

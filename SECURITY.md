@@ -8,7 +8,7 @@ If you discover a security vulnerability in Visdom Trace, please report it throu
 
 ### How to Report
 
-1. Go to the [Security tab](https://github.com/VirtusLab/wisdom-ai-tracing/security) of this repository
+1. Go to the [Security tab](https://github.com/VirtusLab/visdom-ai-tracing/security) of this repository
 2. Click **"Report a vulnerability"**
 3. Fill in the details of the vulnerability
 
