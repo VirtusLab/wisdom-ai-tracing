@@ -4,9 +4,11 @@
  *
  * Exposes one tool:
  *
- *   agent_review — assembles the git diff for a range plus the full content
- *                  of every file touched by that range, and returns them as
- *                  a review prompt for the calling agent to evaluate.
+ *   agent_review — assembles the git diff for a range (with extra context)
+ *                  plus the full content of the small touched files, and
+ *                  returns them as a review prompt for the calling agent to
+ *                  evaluate. Large files are left to their diff hunks so the
+ *                  prompt stays within the agent's token budget.
  *
  *                  The agent reads the prompt, performs the review in its own
  *                  context, and responds with its findings. That response is
@@ -26,10 +28,19 @@ import { z } from "zod";
 import { spawn } from "child_process";
 import { readFileSync, existsSync } from "fs";
 import { resolve, relative, dirname, isAbsolute } from "path";
-import { fileURLToPath } from "url";
+import { fileURLToPath, pathToFileURL } from "url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(__dirname, "../..");
+
+// Context limits — keep the assembled prompt within the agent's tool-result
+// token cap. The diff (with extra surrounding context) is the primary review
+// material; full file bodies are included only for small files and bounded by
+// a total budget, so a change touching a large file (e.g. analytics.rs) no
+// longer blows past the limit.
+const DIFF_CONTEXT_LINES = 30;
+const MAX_FILE_LINES = 400;
+const MAX_TOTAL_CONTEXT = 64 * 1024;
 
 /** Run a command synchronously, return stdout or throw on non-zero exit. */
 function git(...args) {
@@ -65,9 +76,9 @@ async function touchedFiles(range) {
     .filter(Boolean);
 }
 
-/** Return the unified diff for the given range. */
+/** Return the unified diff for the given range, with extra surrounding context. */
 async function getDiff(range) {
-  return git("diff", range, "--");
+  return git("diff", `-U${DIFF_CONTEXT_LINES}`, range, "--");
 }
 
 /** Read a file relative to repo root, return content or an error note. */
@@ -95,6 +106,41 @@ function readFile(relPath) {
   }
 }
 
+/**
+ * Build the "full content" section: include each touched file's full content
+ * only when it is small (≤ MAX_FILE_LINES) and the running total stays under
+ * MAX_TOTAL_CONTEXT. Larger / overflow files are noted by name and left to the
+ * diff hunks (which carry DIFF_CONTEXT_LINES of surrounding context). This
+ * keeps the prompt bounded regardless of how large the touched files are.
+ */
+function buildFileContext(files) {
+  const sections = [];
+  let used = 0;
+  for (const f of files) {
+    if (isAbsolute(f) || f.includes("..")) {
+      sections.push(`### ${f}\n(file path rejected)`);
+      continue;
+    }
+    const content = readFile(f);
+    const lineCount = content.split("\n").length;
+    if (lineCount > MAX_FILE_LINES) {
+      sections.push(
+        `### ${f}\n(large file — ${lineCount} lines; review via the diff hunks above)`
+      );
+      continue;
+    }
+    if (used + content.length > MAX_TOTAL_CONTEXT) {
+      sections.push(
+        `### ${f}\n(omitted — file-context budget reached; review via the diff hunks above)`
+      );
+      continue;
+    }
+    used += content.length;
+    sections.push(`### ${f}\n\`\`\`\n${content}\n\`\`\``);
+  }
+  return sections.join("\n\n");
+}
+
 // ── MCP server ────────────────────────────────────────────────────────────────
 
 const server = new McpServer({
@@ -106,10 +152,11 @@ server.tool(
   "agent_review",
   `Prepare a code review prompt for the calling agent to evaluate.
 
-This tool assembles the git diff for a commit range together with the full
-content of every file touched by that range, then returns a structured review
-prompt. The calling agent should read the prompt, perform the review in its
-own context, and respond with its findings.
+This tool assembles the git diff for a commit range (with extra surrounding
+context) plus the full content of the SMALL touched files, then returns a
+structured review prompt. Large files are reviewed via their diff hunks so the
+prompt stays within the agent's token budget. The calling agent should read the
+prompt, perform the review in its own context, and respond with its findings.
 
 The tool result (the agent's review response) is recorded by TraceVault as
 a tool call event. The TraceVault policy for this repo requires this tool to
@@ -171,19 +218,11 @@ Parameters:
       };
     }
 
-    // Build the file context section
-    // Filter out any paths that would escape the repo root before reading
-    const fileContext = files
-      .map((f) => {
-        if (isAbsolute(f) || f.includes("..")) {
-          return `### ${f}\n\`\`\`\n(file path rejected)\n\`\`\``;
-        }
-        const content = readFile(f);
-        return `### ${f}\n\`\`\`\n${content}\n\`\`\``;
-      })
-      .join("\n\n");
+    // Full content for small files only, within a total budget; large files
+    // are reviewed via the diff hunks (carrying extra surrounding context).
+    const fileContext = buildFileContext(files);
 
-    const prompt = `Please review the following changes critically. Make sure the code is idiomatic, and doesn't introduce bugs and vulnerabilities. Report any places the change can be improved. Please focus on the code that changed — the full file content is provided only for context.
+    const prompt = `Please review the following changes critically. Make sure the code is idiomatic, and doesn't introduce bugs and vulnerabilities. Report any places the change can be improved. Focus on the code that changed; the diff below carries surrounding context, and full bodies of small touched files are appended for reference.
 
 ---
 
@@ -195,7 +234,7 @@ ${diff}
 
 ---
 
-## Full content of touched files (for context only)
+## Full content of small touched files (large files shown as diff only)
 
 ${fileContext || "(no files to show)"}
 
@@ -211,5 +250,11 @@ Provide your review findings. If everything looks good, say so clearly. If there
 
 // ── Start ─────────────────────────────────────────────────────────────────────
 
-const transport = new StdioServerTransport();
-await server.connect(transport);
+// Start the stdio server only when run directly, so tests can import the
+// helpers without spawning the server.
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  const transport = new StdioServerTransport();
+  await server.connect(transport);
+}
+
+export { buildFileContext, getDiff, touchedFiles };
