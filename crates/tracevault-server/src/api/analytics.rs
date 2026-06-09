@@ -1768,6 +1768,56 @@ pub async fn cost_total_for_test(pool: &sqlx::PgPool, org_id: uuid::Uuid) -> f64
         .unwrap()
 }
 
+/// Gated cache_read total (session arm under hook, ledger arm under proxy),
+/// feeding the cost endpoint's `cache_savings_usd` so it tracks the same
+/// source semantics as the token/cost totals.
+async fn cost_cache_read_total(
+    pool: &sqlx::PgPool,
+    org_id: uuid::Uuid,
+    source: UsageSource,
+    repo: Option<&str>,
+    author: Option<&str>,
+    from: Option<chrono::DateTime<chrono::Utc>>,
+    to: Option<chrono::DateTime<chrono::Utc>>,
+) -> Result<i64, AppError> {
+    let session_cache: i64 = if source == UsageSource::Proxy {
+        0
+    } else {
+        sqlx::query_scalar::<_, i64>(
+            "SELECT COALESCE(CAST(SUM(s.cache_read_tokens) AS BIGINT), 0)
+             FROM sessions s JOIN repos r ON s.repo_id = r.id LEFT JOIN users u ON s.user_id = u.id
+             WHERE r.org_id = $1
+               AND ($2::TEXT IS NULL OR r.name = $2)
+               AND ($3::TEXT IS NULL OR u.email = $3)
+               AND ($4::TIMESTAMPTZ IS NULL OR s.created_at >= $4)
+               AND ($5::TIMESTAMPTZ IS NULL OR s.created_at <= $5)",
+        )
+        .bind(org_id)
+        .bind(repo)
+        .bind(author)
+        .bind(from)
+        .bind(to)
+        .fetch_one(pool)
+        .await?
+    };
+    let ledger_cache: i64 = if source == UsageSource::Hook {
+        0
+    } else {
+        crate::repo::llm_calls::LlmCallRepo::fetch_ledger_kpis(pool, org_id, repo, author, from, to)
+            .await?
+            .cache_read_tokens
+    };
+    Ok(session_cache + ledger_cache)
+}
+
+#[doc(hidden)]
+pub async fn cost_cache_read_total_for_test(pool: &sqlx::PgPool, org_id: uuid::Uuid) -> i64 {
+    let source = fetch_usage_source(pool, org_id).await.unwrap();
+    cost_cache_read_total(pool, org_id, source, None, None, None, None)
+        .await
+        .unwrap()
+}
+
 // --- Cost endpoint ---
 
 #[derive(Debug, Serialize)]
@@ -1818,10 +1868,9 @@ pub async fn get_cost(
     // avg_cost_per_session and cache_read_tokens stay session-only; the totals
     // query is kept ungated so avg_cost_per_session denominator is not disturbed.
     // total_cost is computed via the shared filter-aware gated helper instead.
-    let totals = sqlx::query_as::<_, (f64, f64, i64)>(
+    let totals = sqlx::query_as::<_, (f64, f64)>(
         "SELECT COALESCE(SUM(s.estimated_cost_usd), 0.0),
-                COALESCE(AVG(s.estimated_cost_usd), 0.0),
-                COALESCE(CAST(SUM(s.cache_read_tokens) AS BIGINT), 0)
+                COALESCE(AVG(s.estimated_cost_usd), 0.0)
          FROM sessions s
          JOIN repos r ON s.repo_id = r.id
          LEFT JOIN users u ON s.user_id = u.id
@@ -1839,21 +1888,6 @@ pub async fn get_cost(
     .fetch_one(&state.pool)
     .await?;
 
-    // Gate ledger (proxy) KPIs by usage source.
-    let ledger_kpis = if source == UsageSource::Hook {
-        crate::repo::llm_calls::LedgerKpis::default()
-    } else {
-        crate::repo::llm_calls::LlmCallRepo::fetch_ledger_kpis(
-            &state.pool,
-            org_id,
-            q.repo.as_deref(),
-            q.author.as_deref(),
-            q.from,
-            q.to,
-        )
-        .await?
-    };
-
     // total_cost uses the shared gated helper (session + ledger, source-aware).
     // avg_cost_per_session stays session-only (per-session metric).
     let total_cost = cost_total(
@@ -1866,15 +1900,18 @@ pub async fn get_cost(
         q.to,
     )
     .await?;
-    // Session cache_read is dropped under proxy-only so cache savings stay
-    // consistent with the source-gated token/cost totals (ledger cache is
-    // already gated via `ledger_kpis`).
-    let session_cache_read = if source == UsageSource::Proxy {
-        0
-    } else {
-        totals.2
-    };
-    let total_cache_read = session_cache_read + ledger_kpis.cache_read_tokens;
+    // cache_read follows the same source gating (session under hook, ledger
+    // under proxy) so cache_savings stays consistent with the totals.
+    let total_cache_read = cost_cache_read_total(
+        &state.pool,
+        org_id,
+        source,
+        q.repo.as_deref(),
+        q.author.as_deref(),
+        q.from,
+        q.to,
+    )
+    .await?;
 
     // Approximate cache savings using Sonnet rates for aggregate
     let cache_savings = state
@@ -2609,6 +2646,7 @@ pub async fn get_author_detail(
     Query(q): Query<AnalyticsQuery>,
 ) -> Result<Json<AuthorDetailResponse>, AppError> {
     let org_id = q.effective_org_id(&auth);
+    let source = fetch_usage_source(&state.pool, org_id).await?;
 
     let user = sqlx::query_as::<_, (Uuid, String, Option<String>)>(
         "SELECT id, email, name FROM users WHERE id = $1",
@@ -2713,6 +2751,29 @@ pub async fn get_author_detail(
     .fetch_all(&state.pool)
     .await?;
 
+    // Gate token/cost/cache by the org's usage source: session contribution
+    // (dropped under proxy) + this author's ledger contribution (dropped under
+    // hook), matching the authors leaderboard. Counts/duration stay session-only.
+    let (s_tokens, s_cost, s_input, s_output, s_cache_r, s_cache_w) =
+        if source == UsageSource::Proxy {
+            (0i64, 0.0f64, 0i64, 0i64, 0i64, 0i64)
+        } else {
+            (stats.1, stats.2, stats.5, stats.6, stats.7, stats.8)
+        };
+    let ledger = if source == UsageSource::Hook {
+        crate::repo::llm_calls::LedgerKpis::default()
+    } else {
+        crate::repo::llm_calls::LlmCallRepo::fetch_ledger_kpis(
+            &state.pool,
+            org_id,
+            q.repo.as_deref(),
+            Some(user.1.as_str()),
+            q.from,
+            q.to,
+        )
+        .await?
+    };
+
     Ok(Json(AuthorDetailResponse {
         user: AuthorUserInfo {
             user_id: user.0,
@@ -2720,14 +2781,14 @@ pub async fn get_author_detail(
             name: user.2,
         },
         sessions: stats.0,
-        tokens: stats.1,
-        cost_usd: stats.2,
+        tokens: s_tokens + ledger.total_tokens,
+        cost_usd: s_cost + ledger.cost_usd,
         avg_duration_ms: stats.3,
         total_tool_calls: stats.4,
-        input_tokens: stats.5,
-        output_tokens: stats.6,
-        cache_read_tokens: stats.7,
-        cache_write_tokens: stats.8,
+        input_tokens: s_input + ledger.input_tokens,
+        output_tokens: s_output + ledger.output_tokens,
+        cache_read_tokens: s_cache_r + ledger.cache_read_tokens,
+        cache_write_tokens: s_cache_w + ledger.cache_write_tokens,
         model_preferences: models
             .into_iter()
             .map(|(model, sessions)| AuthorModelPref { model, sessions })

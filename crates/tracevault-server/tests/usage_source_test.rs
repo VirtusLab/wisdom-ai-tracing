@@ -27,7 +27,7 @@ async fn seed_one_session_and_one_ledger(pool: &sqlx::PgPool) -> (uuid::Uuid, St
         .unwrap();
     let repo_id = common::seed_repo(pool, org_id).await;
     let sess = common::seed_session(pool, org_id, repo_id, user_id).await;
-    sqlx::query("UPDATE sessions SET input_tokens=100, output_tokens=10, total_tokens=110, estimated_cost_usd=0.10, model='m' WHERE id=$1")
+    sqlx::query("UPDATE sessions SET input_tokens=100, output_tokens=10, total_tokens=110, estimated_cost_usd=0.10, cache_read_tokens=50, cache_write_tokens=5, model='m' WHERE id=$1")
         .bind(sess)
         .execute(pool)
         .await
@@ -45,8 +45,8 @@ async fn seed_one_session_and_one_ledger(pool: &sqlx::PgPool) -> (uuid::Uuid, St
         response_model: Some("m".into()),
         input_tokens: Some(200),
         output_tokens: Some(20),
-        cache_read_tokens: Some(0),
-        cache_write_tokens: Some(0),
+        cache_read_tokens: Some(70),
+        cache_write_tokens: Some(7),
         total_tokens: Some(220),
         estimated_cost_usd: Some(0.20),
         stop_reason: Some("end_turn".into()),
@@ -121,6 +121,27 @@ async fn cost_total_respects_source(pool: sqlx::PgPool) {
     assert!(
         (tracevault_server::api::analytics::cost_total_for_test(&pool, org_id).await - 0.20).abs()
             < 1e-9
+    );
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn cost_cache_read_respects_source(pool: sqlx::PgPool) {
+    // session cache_read = 50, ledger cache_read = 70.
+    let (org_id, _e) = seed_one_session_and_one_ledger(&pool).await;
+    set_source(&pool, org_id, "both").await;
+    assert_eq!(
+        tracevault_server::api::analytics::cost_cache_read_total_for_test(&pool, org_id).await,
+        120
+    );
+    set_source(&pool, org_id, "hook").await;
+    assert_eq!(
+        tracevault_server::api::analytics::cost_cache_read_total_for_test(&pool, org_id).await,
+        50
+    );
+    set_source(&pool, org_id, "proxy").await;
+    assert_eq!(
+        tracevault_server::api::analytics::cost_cache_read_total_for_test(&pool, org_id).await,
+        70
     );
 }
 
