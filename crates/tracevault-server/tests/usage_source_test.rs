@@ -103,3 +103,26 @@ async fn usage_source_absent_row_defaults_to_both(pool: sqlx::PgPool) {
     let src = tracevault_server::api::analytics::fetch_usage_source_for_test(&pool, org_id).await;
     assert_eq!(src, tracevault_server::api::analytics::UsageSource::Both);
 }
+
+#[sqlx::test(migrations = "./migrations")]
+async fn tokens_by_author_respects_source(pool: sqlx::PgPool) {
+    let (org_id, email) = seed_one_session_and_one_ledger(&pool).await;
+    set_source(&pool, org_id, "both").await;
+    assert_eq!(
+        tracevault_server::api::analytics::tokens_by_author_total_for_test(&pool, org_id, &email)
+            .await,
+        330
+    );
+    set_source(&pool, org_id, "hook").await;
+    assert_eq!(
+        tracevault_server::api::analytics::tokens_by_author_total_for_test(&pool, org_id, &email)
+            .await,
+        110
+    );
+    set_source(&pool, org_id, "proxy").await;
+    assert_eq!(
+        tracevault_server::api::analytics::tokens_by_author_total_for_test(&pool, org_id, &email)
+            .await,
+        220
+    );
+}
