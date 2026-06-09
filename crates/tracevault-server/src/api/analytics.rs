@@ -72,35 +72,45 @@ pub async fn fetch_usage_source_for_test(pool: &sqlx::PgPool, org_id: uuid::Uuid
 }
 
 /// Compute the gated total_tokens for an org: session arm (hook) + ledger arm (proxy),
-/// filtered by the org's usage source.
+/// filtered by the org's usage source and the supplied query filters.
 async fn overview_total_tokens(
     pool: &sqlx::PgPool,
     org_id: uuid::Uuid,
     source: UsageSource,
+    repo: Option<&str>,
+    author: Option<&str>,
+    from: Option<chrono::DateTime<chrono::Utc>>,
+    to: Option<chrono::DateTime<chrono::Utc>>,
 ) -> Result<i64, AppError> {
     let session_total: i64 = if source == UsageSource::Proxy {
         0
     } else {
-        let row = sqlx::query_as::<_, (i64,)>(
+        sqlx::query_scalar::<_, i64>(
             "SELECT COALESCE(CAST(SUM(s.total_tokens) AS BIGINT), 0)
              FROM sessions s
              JOIN repos r ON s.repo_id = r.id
-             WHERE r.org_id = $1",
+             LEFT JOIN users u ON s.user_id = u.id
+             WHERE r.org_id = $1
+               AND ($2::TEXT IS NULL OR r.name = $2)
+               AND ($3::TEXT IS NULL OR u.email = $3)
+               AND ($4::TIMESTAMPTZ IS NULL OR s.created_at >= $4)
+               AND ($5::TIMESTAMPTZ IS NULL OR s.created_at <= $5)",
         )
         .bind(org_id)
+        .bind(repo)
+        .bind(author)
+        .bind(from)
+        .bind(to)
         .fetch_one(pool)
-        .await?;
-        row.0
+        .await?
     };
 
     let ledger_total: i64 = if source == UsageSource::Hook {
         0
     } else {
-        let kpis = crate::repo::llm_calls::LlmCallRepo::fetch_ledger_kpis(
-            pool, org_id, None, None, None, None,
-        )
-        .await?;
-        kpis.total_tokens
+        crate::repo::llm_calls::LlmCallRepo::fetch_ledger_kpis(pool, org_id, repo, author, from, to)
+            .await?
+            .total_tokens
     };
 
     Ok(session_total + ledger_total)
@@ -109,7 +119,9 @@ async fn overview_total_tokens(
 #[doc(hidden)]
 pub async fn overview_total_tokens_for_test(pool: &sqlx::PgPool, org_id: uuid::Uuid) -> i64 {
     let source = fetch_usage_source(pool, org_id).await;
-    overview_total_tokens(pool, org_id, source).await.unwrap()
+    overview_total_tokens(pool, org_id, source, None, None, None, None)
+        .await
+        .unwrap()
 }
 
 // --- Filters endpoint ---
@@ -523,11 +535,10 @@ pub async fn get_overview(
     // 6=duration, 7=avg_dur, 8=tool_calls, 9=cache_read, 10=cache_write
     //
     // Session token/cost contribution: dropped only when the org's source is proxy-only.
-    let (s_total, s_input, s_output, s_cost, s_cache_r, s_cache_w) = if source == UsageSource::Proxy
-    {
-        (0i64, 0i64, 0i64, 0.0f64, 0i64, 0i64)
+    let (s_input, s_output, s_cost, s_cache_r, s_cache_w) = if source == UsageSource::Proxy {
+        (0i64, 0i64, 0.0f64, 0i64, 0i64)
     } else {
-        (kpi.1, kpi.2, kpi.3, kpi.5, kpi.9, kpi.10)
+        (kpi.2, kpi.3, kpi.5, kpi.9, kpi.10)
     };
 
     let total_cache_read_tokens = s_cache_r + ledger_kpis.cache_read_tokens;
@@ -539,7 +550,16 @@ pub async fn get_overview(
     Ok(Json(OverviewResponse {
         total_commits: commit_count.0,
         total_sessions: kpi.0,
-        total_tokens: s_total + ledger_kpis.total_tokens,
+        total_tokens: overview_total_tokens(
+            &state.pool,
+            org_id,
+            source,
+            q.repo.as_deref(),
+            q.author.as_deref(),
+            q.from,
+            q.to,
+        )
+        .await?,
         total_input_tokens: s_input + ledger_kpis.input_tokens,
         total_output_tokens: s_output + ledger_kpis.output_tokens,
         active_authors: kpi.4,
