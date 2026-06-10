@@ -41,6 +41,27 @@ use crate::AppState;
 /// (the base applied to newly-stored credentials that don't specify one).
 pub const DEFAULT_ANTHROPIC_UPSTREAM_BASE: &str = "https://api.anthropic.com";
 
+/// Build the dedicated HTTP client used to forward proxied requests upstream.
+///
+/// Centralised so production (`main`) and tests share the exact same policy.
+/// Key properties:
+/// - **No redirects.** The proxy injects the user's decrypted upstream API key
+///   into the request; following a 3xx would re-attach that key to whatever
+///   host the `Location` points at. Since the upstream `base_url` is
+///   user-supplied (BYO credential) and validated only at write time, a
+///   redirect to an internal/metadata address would leak the key and enable
+///   SSRF. 3xx responses are passed through to the client verbatim instead.
+/// - **`connect_timeout`** bounds a stalled TCP/TLS handshake; there is
+///   deliberately no overall `timeout()` because SSE streams are long-lived.
+pub fn build_proxy_http_client() -> reqwest::Client {
+    reqwest::Client::builder()
+        .connect_timeout(std::time::Duration::from_secs(10))
+        .pool_idle_timeout(Some(std::time::Duration::from_secs(90)))
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .expect("Failed to build proxy reqwest client")
+}
+
 /// Request headers we forward upstream. Anything not on this list is dropped
 /// — including `host` (reqwest sets it correctly), `authorization`, `cookie`,
 /// `x-api-key` (we inject the decrypted key), `x-forwarded-*`, `via`, and

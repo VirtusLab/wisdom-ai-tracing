@@ -61,16 +61,9 @@ async fn main() {
     let repo_manager = repo_manager::RepoManager::new(&cfg.repos_dir);
     let extensions = build_extensions(&cfg);
     let http_client = reqwest::Client::new();
-    // Dedicated client for the Anthropic proxy. `connect_timeout` bounds
-    // how long a stalled TCP/TLS handshake can park the proxy task; we
-    // intentionally do *not* set an overall `timeout()` because the proxy
-    // carries SSE streams whose total duration is bounded by the model's
-    // output, not by the wall clock.
-    let proxy_http_client = reqwest::Client::builder()
-        .connect_timeout(std::time::Duration::from_secs(10))
-        .pool_idle_timeout(Some(std::time::Duration::from_secs(90)))
-        .build()
-        .expect("Failed to build proxy reqwest client");
+    // Dedicated client for the Anthropic proxy (no redirects, bounded connect
+    // timeout, no overall timeout for long-lived SSE) — see the function.
+    let proxy_http_client = api::proxy::build_proxy_http_client();
 
     // Optional global concurrency cap across all proxy requests. Unset = no
     // global limit; this is the right default for the small-team deployments

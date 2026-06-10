@@ -95,7 +95,7 @@ async fn build_harness(pool: sqlx::PgPool) -> Harness {
         extensions: tracevault_server::extensions::community_registry(),
         encryption_key: Some(encryption_key),
         http_client: reqwest::Client::new(),
-        proxy_http_client: reqwest::Client::new(),
+        proxy_http_client: tracevault_server::api::proxy::build_proxy_http_client(),
         cors_origin: "*".to_string(),
         invite_expiry_minutes: 60,
         embedding_service: None,
@@ -188,7 +188,7 @@ async fn build_harness_with_caps(
         extensions: tracevault_server::extensions::community_registry(),
         encryption_key: Some(encryption_key),
         http_client: reqwest::Client::new(),
-        proxy_http_client: reqwest::Client::new(),
+        proxy_http_client: tracevault_server::api::proxy::build_proxy_http_client(),
         cors_origin: "*".to_string(),
         invite_expiry_minutes: 60,
         embedding_service: None,
@@ -406,6 +406,46 @@ async fn proxy_passes_upstream_5xx_through_verbatim(pool: sqlx::PgPool) {
     assert_eq!(resp.status().as_u16(), 529);
     let body = read_body_to_value(resp.into_body()).await;
     assert_eq!(body, upstream_error);
+}
+
+// --- Proxy: redirects must NOT be followed (SSRF / key-leak guard) ---------
+
+/// An upstream 3xx must be returned to the client verbatim, NEVER followed.
+/// Following it would re-attach the injected upstream API key to whatever host
+/// the `Location` points at — an SSRF / key-exfiltration vector, since the
+/// upstream base_url is user-supplied. The redirect target mock asserts it is
+/// never hit (`expect(0)`).
+#[sqlx::test(migrations = "./migrations")]
+async fn proxy_does_not_follow_upstream_redirects(pool: sqlx::PgPool) {
+    let h = build_harness(pool).await;
+
+    // Upstream replies 302 pointing at another path on the same mock server.
+    Mock::given(method("POST"))
+        .and(wm_path("/v1/messages"))
+        .respond_with(ResponseTemplate::new(302).insert_header("location", "/internal/secret"))
+        .expect(1)
+        .mount(&h.upstream)
+        .await;
+
+    // The redirect target must NEVER be requested by the proxy.
+    Mock::given(wm_path("/internal/secret"))
+        .respond_with(ResponseTemplate::new(200).set_body_string("SHOULD-NOT-BE-FETCHED"))
+        .expect(0)
+        .mount(&h.upstream)
+        .await;
+
+    let req = Request::builder()
+        .method("POST")
+        .uri("/proxy/anthropic/v1/messages")
+        .header("x-api-key", &h.user_session_token)
+        .header("content-type", "application/json")
+        .body(Body::from("{}"))
+        .unwrap();
+
+    let resp = h.app.clone().oneshot(req).await.unwrap();
+    // The 3xx is passed through verbatim; the proxy did not chase the Location.
+    assert_eq!(resp.status(), StatusCode::FOUND);
+    // The `expect(0)` on /internal/secret is verified when `h.upstream` drops.
 }
 
 // --- Proxy: auth + missing-key error envelope -----------------------------
@@ -1052,7 +1092,7 @@ async fn me_anthropic_key_lifecycle(pool: sqlx::PgPool) {
         extensions: tracevault_server::extensions::community_registry(),
         encryption_key: Some(encryption_key),
         http_client: reqwest::Client::new(),
-        proxy_http_client: reqwest::Client::new(),
+        proxy_http_client: tracevault_server::api::proxy::build_proxy_http_client(),
         cors_origin: "*".to_string(),
         invite_expiry_minutes: 60,
         embedding_service: None,
@@ -1213,7 +1253,7 @@ async fn build_me_endpoints_only(
         extensions: tracevault_server::extensions::community_registry(),
         encryption_key: Some(encryption_key),
         http_client: reqwest::Client::new(),
-        proxy_http_client: reqwest::Client::new(),
+        proxy_http_client: tracevault_server::api::proxy::build_proxy_http_client(),
         cors_origin: "*".to_string(),
         invite_expiry_minutes: 60,
         embedding_service: None,
