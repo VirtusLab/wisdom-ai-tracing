@@ -1,4 +1,4 @@
-//! Transparent Anthropic API proxy (issue softwaremill/tracevault#207,
+//! Transparent Anthropic API proxy (issue VirtusLab/visdom-ai-tracing#207,
 //! parent #181).
 //!
 //! Mounted as a catch-all at `/proxy/anthropic/{*path}`. Clients point their

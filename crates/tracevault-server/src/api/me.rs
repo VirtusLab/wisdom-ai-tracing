@@ -1,7 +1,7 @@
 //! User-scoped (`/api/v1/me/...`) endpoints that are not org-bound.
 //!
 //! Currently only carries the Anthropic-key management endpoints used by the
-//! transparent LLM proxy (issue softwaremill/tracevault#207, parent #181).
+//! transparent LLM proxy (issue VirtusLab/visdom-ai-tracing#207, parent #181).
 //! Future per-user settings (preferences, personal access tokens, etc.) belong
 //! here as they're added.
 
