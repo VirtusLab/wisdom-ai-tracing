@@ -1507,10 +1507,12 @@ async fn proxy_records_ledger_row_for_streaming_call(pool: sqlx::PgPool) {
     // ceiling (100 × 50ms = 5s) so the spawned insert isn't raced under CI
     // load; the loop breaks as soon as the row lands, so the happy path stays
     // fast.
-    let mut found: Option<(Option<i64>, Option<i64>, Option<String>)> = None;
+    // (input_tokens, output_tokens, total_tokens, stop_reason)
+    type LedgerProbe = (Option<i64>, Option<i64>, Option<i64>, Option<String>);
+    let mut found: Option<LedgerProbe> = None;
     for _ in 0..100 {
-        let row = sqlx::query_as::<_, (Option<i64>, Option<i64>, Option<String>)>(
-            "SELECT input_tokens, output_tokens, stop_reason \
+        let row = sqlx::query_as::<_, LedgerProbe>(
+            "SELECT input_tokens, output_tokens, total_tokens, stop_reason \
              FROM llm_calls ORDER BY created_at DESC LIMIT 1",
         )
         .fetch_optional(&h.pool)
@@ -1523,13 +1525,20 @@ async fn proxy_records_ledger_row_for_streaming_call(pool: sqlx::PgPool) {
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     }
 
-    let (input_tokens, output_tokens, stop_reason) =
+    let (input_tokens, output_tokens, total_tokens, stop_reason) =
         found.expect("expected an llm_calls row to be written for the proxied call");
     assert_eq!(input_tokens, Some(42), "input_tokens must be verbatim");
     assert_eq!(
         output_tokens,
         Some(7),
         "output_tokens must be the final message_delta value"
+    );
+    // total_tokens excludes cache (input + output only), matching the
+    // hook/session convention: 42 + 7 = 49 (cache_read 900 / write 100 excluded).
+    assert_eq!(
+        total_tokens,
+        Some(49),
+        "total_tokens must be input + output, excluding cache"
     );
     assert_eq!(stop_reason.as_deref(), Some("end_turn"));
 }

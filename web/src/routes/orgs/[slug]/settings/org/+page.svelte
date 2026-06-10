@@ -233,7 +233,7 @@
 								disabled={savingUsage}
 								class="border-input bg-background h-9 max-w-xs rounded-md border px-3 text-sm"
 							>
-								<option value="both">Both (hook + proxy)</option>
+								<option value="both">Both (hook + proxy) — recommended</option>
 								<option value="hook">Hook only</option>
 								<option value="proxy">Proxy only</option>
 							</select>
@@ -241,9 +241,11 @@
 							<p class="text-sm capitalize">{usageSource}</p>
 						{/if}
 						<p class="text-muted-foreground text-xs">
-							Controls which usage source feeds analytics token/cost totals. Use a single
-							source if you run Claude Code through the proxy with the hook installed, to
-							avoid double-counting.
+							Controls which usage source feeds analytics token/cost totals. <strong>Both</strong>
+							is recommended: when a call is seen by both the proxy and the Claude Code hook,
+							it is automatically de-duplicated (correlated on the Anthropic message id), so
+							totals are correct without dropping either source. Choose a single source only
+							if you want to exclude one entirely.
 						</p>
 					</div>
 				</div>
