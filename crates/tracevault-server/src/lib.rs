@@ -68,9 +68,9 @@ pub struct AppState {
     /// `None` = unlimited (default); set the operator env var
     /// `PROXY_MAX_GLOBAL_CONCURRENT` to enable.
     pub proxy_global_semaphore: Option<std::sync::Arc<tokio::sync::Semaphore>>,
-    /// Per-credential concurrency semaphores. Keyed by
-    /// `credentials.user_id` (effectively the credential ID today;
-    /// generalizes to org/credential IDs once those land). Each semaphore is
+    /// Per-credential concurrency semaphores. Keyed by `credentials.id` so a
+    /// user with multiple credentials (per-model routing) gets an independent
+    /// cap per credential rather than one shared cap. Each semaphore is
     /// lazily created on first request for a credential, sized to the
     /// credential's stored `max_concurrent` at that moment.
     ///

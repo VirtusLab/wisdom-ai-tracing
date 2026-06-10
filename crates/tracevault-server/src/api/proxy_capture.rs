@@ -239,6 +239,96 @@ impl<S> Drop for CapturingStream<S> {
     fn drop(&mut self) {
         // Catches client disconnect mid-stream: poll_next never reached
         // Ready(None), so finalize here. No-op if already finalized.
+        //
+        // Reaching Drop with `ctx` still present means we did NOT finalize via
+        // a natural `Ready(None)` or a `stream_error` — the response body was
+        // dropped before completing, i.e. the client disconnected mid-stream.
+        // A 2xx left as "success" here would record partial/zero usage (the
+        // final `message_delta` may never have arrived), so relabel it. The
+        // "success"-gated usage in `write_row` then records status/duration
+        // only, never misleading partial token counts.
+        if let Some(ctx) = self.ctx.as_mut() {
+            if ctx.outcome == "success" {
+                ctx.outcome = "client_disconnect";
+            }
+        }
         self.finalize();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use futures_util::stream;
+
+    /// A stream dropped before reaching `Ready(None)` (client disconnect mid
+    /// body) must NOT be recorded as `success`. The relabel happens in `Drop`.
+    #[sqlx::test(migrations = "./migrations")]
+    async fn client_disconnect_is_not_recorded_as_success(pool: sqlx::PgPool) {
+        let org_id: Uuid =
+            sqlx::query_scalar("INSERT INTO orgs (name) VALUES ('disc-test') RETURNING id")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        let user_id: Uuid = sqlx::query_scalar(
+            "INSERT INTO users (email, password_hash, name) VALUES ($1, 'h', 'n') RETURNING id",
+        )
+        .bind(format!("disc-{org_id}@test.test"))
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+        let ctx = LedgerContext {
+            pool: pool.clone(),
+            org_id,
+            user_id,
+            credential_id: None,
+            auth_session_id: None,
+            client_session_id: None,
+            repo_id: None,
+            branch: None,
+            requested_model: None,
+            provider_model: None,
+            http_status: 200,
+            outcome: "success",
+            anthropic_request_id: Some("req_disc".into()),
+            path: "v1/messages".into(),
+            start: Instant::now(),
+        };
+        let permits = HeldPermits::new(
+            std::sync::Arc::new(tokio::sync::Semaphore::new(1))
+                .try_acquire_owned()
+                .unwrap(),
+            None,
+        );
+        // Construct the wrapper and drop it WITHOUT polling to Ready(None) —
+        // models a client that disconnected mid-stream.
+        let s = CapturingStream {
+            inner: stream::empty::<reqwest::Result<Bytes>>(),
+            _permits: permits,
+            capture: Some(UsageCapture::new(Some("text/event-stream"))),
+            ctx: Some(ctx),
+        };
+        drop(s);
+
+        // The ledger write is spawned; poll until the row lands.
+        let mut outcome = None;
+        for _ in 0..100 {
+            outcome = sqlx::query_scalar::<_, String>(
+                "SELECT outcome FROM llm_calls WHERE anthropic_request_id = 'req_disc'",
+            )
+            .fetch_optional(&pool)
+            .await
+            .unwrap();
+            if outcome.is_some() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        assert_eq!(
+            outcome.as_deref(),
+            Some("client_disconnect"),
+            "a mid-stream disconnect must not be recorded as success"
+        );
     }
 }

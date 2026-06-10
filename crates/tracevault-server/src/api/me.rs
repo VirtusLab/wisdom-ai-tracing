@@ -195,9 +195,26 @@ pub async fn put_anthropic_key(
     // In-flight requests still hold permits on the old, now-orphaned
     // Arc<Semaphore> — when they finish they release naturally and the
     // arc drops.
-    state.proxy_per_credential_semaphores.remove(&user_id);
+    evict_credential_semaphore(&state, user_id, &name).await;
 
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// Flush the in-memory concurrency semaphore for the named credential so a
+/// changed `max_concurrent` (or a deletion) takes effect on the next request
+/// rather than only after a restart. The DashMap is keyed by credential id, so
+/// resolve the id from `(user_id, name)` first; a no-op if the credential
+/// doesn't exist or has never had a semaphore created.
+async fn evict_credential_semaphore(state: &AppState, user_id: Uuid, name: &str) {
+    if let Ok(Some(id)) =
+        sqlx::query_scalar::<_, Uuid>("SELECT id FROM credentials WHERE user_id = $1 AND name = $2")
+            .bind(user_id)
+            .bind(name)
+            .fetch_optional(&state.pool)
+            .await
+    {
+        state.proxy_per_credential_semaphores.remove(&id);
+    }
 }
 
 /// Validate and store (rotate or first-time insert) a named credential,
@@ -388,7 +405,7 @@ pub async fn put_credential(
 
     // Flush the in-memory per-credential semaphore so the next request
     // rebuilds it against the new cap (or freshly-persisted row).
-    state.proxy_per_credential_semaphores.remove(&user_id);
+    evict_credential_semaphore(&state, user_id, &name).await;
 
     Ok(StatusCode::NO_CONTENT)
 }
@@ -403,8 +420,9 @@ pub async fn delete_credential(
     Path(name): Path<String>,
 ) -> Result<StatusCode, AppError> {
     let user_id = require_real_user(&auth)?;
+    // Evict before deleting so the credential id is still resolvable.
+    evict_credential_semaphore(&state, user_id, &name).await;
     CredentialRepo::delete(&state.pool, user_id, &name).await?;
-    state.proxy_per_credential_semaphores.remove(&user_id);
     Ok(StatusCode::NO_CONTENT)
 }
 
