@@ -562,12 +562,12 @@ mod tests {
     #[test]
     fn normalize_remote_ssh_https_equal() {
         assert_eq!(
-            normalize_remote("git@github.com:softwaremill/tracevault.git"),
-            normalize_remote("https://github.com/softwaremill/tracevault")
+            normalize_remote("git@github.com:VirtusLab/visdom-ai-tracing.git"),
+            normalize_remote("https://github.com/VirtusLab/visdom-ai-tracing")
         );
         assert_eq!(
-            normalize_remote("https://github.com/softwaremill/tracevault.git/"),
-            "github.com/softwaremill/tracevault"
+            normalize_remote("https://github.com/VirtusLab/visdom-ai-tracing.git/"),
+            "github.com/VirtusLab/visdom-ai-tracing"
         );
     }
 

@@ -1,5 +1,5 @@
 //! End-to-end integration tests for the transparent Anthropic proxy
-//! (issue softwaremill/tracevault#207, parent #181).
+//! (issue VirtusLab/visdom-ai-tracing#207, parent #181).
 //!
 //! Spins up:
 //!   * a real Postgres pool via `sqlx::test` with all migrations applied

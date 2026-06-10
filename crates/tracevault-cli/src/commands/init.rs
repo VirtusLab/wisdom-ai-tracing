@@ -71,11 +71,11 @@ pub fn git_remote_url(project_root: &Path) -> Option<String> {
 }
 
 fn parse_github_org(remote_url: &str) -> Option<String> {
-    // SSH: git@github.com:softwaremill/tracevault.git
+    // SSH: git@github.com:VirtusLab/visdom-ai-tracing.git
     if let Some(path) = remote_url.strip_prefix("git@github.com:") {
         return path.split('/').next().map(String::from);
     }
-    // HTTPS: https://github.com/softwaremill/tracevault.git
+    // HTTPS: https://github.com/VirtusLab/visdom-ai-tracing.git
     if let Some(path) = remote_url
         .strip_prefix("https://github.com/")
         .or_else(|| remote_url.strip_prefix("http://github.com/"))
