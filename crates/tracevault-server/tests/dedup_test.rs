@@ -102,3 +102,42 @@ async fn ingestion_message_id_is_idempotent(pool: sqlx::PgPool) {
     .unwrap();
     assert_eq!(count, 1, "duplicate ingestion must not create a second row");
 }
+
+#[sqlx::test(migrations = "./migrations")]
+async fn fetch_ledger_kpis_dedups_under_both(pool: sqlx::PgPool) {
+    use tracevault_server::repo::llm_calls::{LlmCallRecord, LlmCallRepo};
+    let user_id = common::seed_user(&pool).await;
+    let org_id = common::seed_org_with_member(&pool, user_id).await;
+    let repo_id = common::seed_repo(&pool, org_id).await;
+    let session_id = common::seed_session(&pool, org_id, repo_id, user_id).await;
+
+    sqlx::query(
+        "INSERT INTO session_message_ids (anthropic_message_id, org_id, session_id) VALUES ($1,$2,$3)",
+    )
+    .bind("msg_X").bind(org_id).bind(session_id)
+    .execute(&pool).await.unwrap();
+
+    let rec = LlmCallRecord {
+        org_id, user_id,
+        credential_id: None, auth_session_id: None, client_session_id: None,
+        repo_id: Some(repo_id), branch: None,
+        requested_model: None, provider_model: None, response_model: Some("m".into()),
+        input_tokens: Some(180), output_tokens: Some(20),
+        cache_read_tokens: Some(0), cache_write_tokens: Some(0),
+        total_tokens: Some(200), estimated_cost_usd: Some(0.20),
+        stop_reason: None, http_status: 200, outcome: "success".into(),
+        duration_ms: 1, anthropic_request_id: None, path: "v1/messages".into(),
+        anthropic_message_id: Some("msg_X".into()),
+    };
+    LlmCallRepo::insert(&pool, &rec).await.unwrap();
+
+    // dedup on (the `both` case): matched ledger row excluded.
+    let deduped = LlmCallRepo::fetch_ledger_kpis(&pool, org_id, None, None, None, None, true)
+        .await.unwrap();
+    assert_eq!(deduped.total_tokens, 0, "msg_X ledger row must be deduped");
+
+    // dedup off (the `proxy` case): row counts.
+    let raw = LlmCallRepo::fetch_ledger_kpis(&pool, org_id, None, None, None, None, false)
+        .await.unwrap();
+    assert_eq!(raw.total_tokens, 200, "proxy mode ignores dedup");
+}

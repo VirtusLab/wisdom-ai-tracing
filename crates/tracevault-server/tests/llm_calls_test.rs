@@ -35,7 +35,7 @@ async fn kpis_sum_ledger_rows(pool: sqlx::PgPool) {
         };
         LlmCallRepo::insert(&pool, &rec).await.unwrap();
     }
-    let k = LlmCallRepo::fetch_ledger_kpis(&pool, org_id, None, None, None, None)
+    let k = LlmCallRepo::fetch_ledger_kpis(&pool, org_id, None, None, None, None, false)
         .await
         .unwrap();
     assert_eq!(k.input_tokens, 120);

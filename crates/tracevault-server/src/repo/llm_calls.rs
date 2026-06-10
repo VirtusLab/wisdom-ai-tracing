@@ -57,6 +57,7 @@ impl LlmCallRepo {
         author: Option<&str>,
         from: Option<chrono::DateTime<chrono::Utc>>,
         to: Option<chrono::DateTime<chrono::Utc>>,
+        dedup: bool,
     ) -> Result<LedgerKpis, AppError> {
         let row = sqlx::query_as::<_, (i64, i64, i64, i64, i64, f64)>(
             "SELECT
@@ -73,13 +74,18 @@ impl LlmCallRepo {
                AND ($2::TEXT IS NULL OR r.name = $2)
                AND ($3::TEXT IS NULL OR u.email = $3)
                AND ($4::TIMESTAMPTZ IS NULL OR c.created_at >= $4)
-               AND ($5::TIMESTAMPTZ IS NULL OR c.created_at <= $5)",
+               AND ($5::TIMESTAMPTZ IS NULL OR c.created_at <= $5)
+               AND ($6 = FALSE OR NOT EXISTS (
+                     SELECT 1 FROM session_message_ids sm
+                     WHERE sm.anthropic_message_id = c.anthropic_message_id
+                       AND sm.org_id = c.org_id))",
         )
         .bind(org_id)
         .bind(repo)
         .bind(author)
         .bind(from)
         .bind(to)
+        .bind(dedup)
         .fetch_one(pool)
         .await?;
         Ok(LedgerKpis {

@@ -112,7 +112,7 @@ async fn overview_total_tokens(
     let ledger_total: i64 = if source == UsageSource::Hook {
         0
     } else {
-        crate::repo::llm_calls::LlmCallRepo::fetch_ledger_kpis(pool, org_id, repo, author, from, to)
+        crate::repo::llm_calls::LlmCallRepo::fetch_ledger_kpis(pool, org_id, repo, author, from, to, source == UsageSource::Both)
             .await?
             .total_tokens
     };
@@ -532,6 +532,7 @@ pub async fn get_overview(
             q.author.as_deref(),
             q.from,
             q.to,
+            source == UsageSource::Both,
         )
         .await?
     };
@@ -837,6 +838,7 @@ pub async fn get_tokens(
             q.author.as_deref(),
             q.from,
             q.to,
+            source == UsageSource::Both,
         )
         .await?
     };
@@ -1753,7 +1755,7 @@ async fn cost_total(
     let ledger_cost: f64 = if source == UsageSource::Hook {
         0.0
     } else {
-        crate::repo::llm_calls::LlmCallRepo::fetch_ledger_kpis(pool, org_id, repo, author, from, to)
+        crate::repo::llm_calls::LlmCallRepo::fetch_ledger_kpis(pool, org_id, repo, author, from, to, source == UsageSource::Both)
             .await?
             .cost_usd
     };
@@ -1803,7 +1805,7 @@ async fn cost_cache_read_total(
     let ledger_cache: i64 = if source == UsageSource::Hook {
         0
     } else {
-        crate::repo::llm_calls::LlmCallRepo::fetch_ledger_kpis(pool, org_id, repo, author, from, to)
+        crate::repo::llm_calls::LlmCallRepo::fetch_ledger_kpis(pool, org_id, repo, author, from, to, source == UsageSource::Both)
             .await?
             .cache_read_tokens
     };
@@ -2770,6 +2772,7 @@ pub async fn get_author_detail(
             Some(user.1.as_str()),
             q.from,
             q.to,
+            source == UsageSource::Both,
         )
         .await?
     };
