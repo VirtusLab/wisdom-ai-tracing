@@ -166,6 +166,8 @@ pub struct OrgResponse {
     pub name: String,
     pub display_name: Option<String>,
     pub created_at: chrono::DateTime<chrono::Utc>,
+    /// Which usage source feeds analytics token/cost totals: hook | proxy | both.
+    pub usage_source: String,
 }
 
 pub async fn get_org(
@@ -176,8 +178,20 @@ pub async fn get_org(
         return Err(AppError::Forbidden("Requires admin role".into()));
     }
 
-    let row = sqlx::query_as::<_, (Uuid, String, Option<String>, chrono::DateTime<chrono::Utc>)>(
-        "SELECT id, name, display_name, created_at FROM orgs WHERE id = $1",
+    let row = sqlx::query_as::<
+        _,
+        (
+            Uuid,
+            String,
+            Option<String>,
+            chrono::DateTime<chrono::Utc>,
+            String,
+        ),
+    >(
+        "SELECT o.id, o.name, o.display_name, o.created_at, COALESCE(s.usage_source, 'both')
+         FROM orgs o
+         LEFT JOIN org_compliance_settings s ON s.org_id = o.id
+         WHERE o.id = $1",
     )
     .bind(auth.org_id)
     .fetch_optional(&state.pool)
@@ -189,6 +203,7 @@ pub async fn get_org(
         name: row.1,
         display_name: row.2,
         created_at: row.3,
+        usage_source: row.4,
     }))
 }
 
@@ -196,6 +211,8 @@ pub async fn get_org(
 pub struct UpdateOrgRequest {
     pub display_name: Option<String>,
     pub name: Option<String>,
+    /// Optional: set the analytics usage source (hook | proxy | both).
+    pub usage_source: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -262,6 +279,24 @@ pub async fn update_org(
         .await;
 
         new_name = Some(name.to_string());
+    }
+
+    if let Some(src) = req.usage_source.as_deref() {
+        if !matches!(src, "hook" | "proxy" | "both") {
+            return Err(AppError::BadRequest(
+                "usage_source must be hook, proxy, or both".into(),
+            ));
+        }
+        // The org_compliance_settings row is created at registration; upsert to
+        // be safe regardless.
+        sqlx::query(
+            "INSERT INTO org_compliance_settings (org_id, usage_source) VALUES ($1, $2)
+             ON CONFLICT (org_id) DO UPDATE SET usage_source = $2, updated_at = now()",
+        )
+        .bind(auth.org_id)
+        .bind(src)
+        .execute(&state.pool)
+        .await?;
     }
 
     let current_name = match new_name {
