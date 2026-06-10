@@ -389,3 +389,88 @@ async fn dedup_keeps_non_overlapping_and_null_id_ledger(pool: sqlx::PgPool) {
         "proxy counts all ledger"
     );
 }
+
+// Dedup is org-scoped: the same Anthropic message id seen by two orgs must only
+// be deduped in the org whose hook session recorded it. This validates the
+// composite (org_id, anthropic_message_id) key — without the `sm.org_id =
+// c.org_id` guard, one org's ingestion would suppress another org's ledger row.
+#[sqlx::test(migrations = "./migrations")]
+async fn dedup_is_isolated_per_org(pool: sqlx::PgPool) {
+    use tracevault_server::api::analytics as a;
+
+    // Org A: hook recorded `msg_shared`, and the proxy ledger also has it.
+    let ua = common::seed_user(&pool).await;
+    let oa = common::seed_org_with_member(&pool, ua).await;
+    sqlx::query("INSERT INTO org_compliance_settings (org_id) VALUES ($1) ON CONFLICT DO NOTHING")
+        .bind(oa)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let ra = common::seed_repo(&pool, oa).await;
+    let sa = common::seed_session(&pool, oa, ra, ua).await;
+    sqlx::query(
+        "INSERT INTO session_message_ids (anthropic_message_id, org_id, session_id) VALUES ('msg_shared', $1, $2)",
+    )
+    .bind(oa)
+    .bind(sa)
+    .execute(&pool)
+    .await
+    .unwrap();
+    insert_ledger(
+        &pool,
+        oa,
+        ua,
+        ra,
+        "m",
+        Some("msg_shared"),
+        100,
+        20,
+        0,
+        0,
+        0.1,
+    )
+    .await;
+
+    // Org B: the proxy ledger has the SAME message id, but org B's hook never
+    // recorded it (no session_message_ids row for org B).
+    let ub = common::seed_user(&pool).await;
+    let ob = common::seed_org_with_member(&pool, ub).await;
+    sqlx::query("INSERT INTO org_compliance_settings (org_id) VALUES ($1) ON CONFLICT DO NOTHING")
+        .bind(ob)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let rb = common::seed_repo(&pool, ob).await;
+    insert_ledger(
+        &pool,
+        ob,
+        ub,
+        rb,
+        "m",
+        Some("msg_shared"),
+        100,
+        20,
+        0,
+        0,
+        0.1,
+    )
+    .await;
+
+    set_source(&pool, oa, "both").await;
+    set_source(&pool, ob, "both").await;
+
+    // Org A: ledger row deduped (its own session recorded msg_shared); the
+    // session itself was seeded with no tokens, so the total is 0.
+    assert_eq!(
+        a::overview_total_tokens_for_test(&pool, oa).await,
+        0,
+        "org A dedupes its own overlapping ledger row"
+    );
+    // Org B: same message id, but it belongs to org A — org B's row is NOT
+    // deduped and counts in full (120 tokens).
+    assert_eq!(
+        a::overview_total_tokens_for_test(&pool, ob).await,
+        120,
+        "org B keeps the row: the message id was recorded by a different org"
+    );
+}
