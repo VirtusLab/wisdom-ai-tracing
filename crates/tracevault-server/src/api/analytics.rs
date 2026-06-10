@@ -391,6 +391,10 @@ pub async fn get_overview(
                AND ($4::TIMESTAMPTZ IS NULL OR c.created_at >= $4)
                AND ($5::TIMESTAMPTZ IS NULL OR c.created_at <= $5)
                AND $6 IN ('both','proxy')
+               AND ($6 <> 'both' OR NOT EXISTS (
+                     SELECT 1 FROM session_message_ids sm
+                     WHERE sm.anthropic_message_id = c.anthropic_message_id
+                       AND sm.org_id = c.org_id))
          ) t
          GROUP BY day
          ORDER BY day",
@@ -686,6 +690,10 @@ pub(crate) async fn tokens_by_author(
                AND ($3::TIMESTAMPTZ IS NULL OR c.created_at >= $3)
                AND ($4::TIMESTAMPTZ IS NULL OR c.created_at <= $4)
                AND $5 IN ('both','proxy')
+               AND ($5 <> 'both' OR NOT EXISTS (
+                     SELECT 1 FROM session_message_ids sm
+                     WHERE sm.anthropic_message_id = c.anthropic_message_id
+                       AND sm.org_id = c.org_id))
          ) t
          GROUP BY email
          ORDER BY 2 DESC",
@@ -757,6 +765,10 @@ pub async fn get_tokens(
                AND ($4::TIMESTAMPTZ IS NULL OR c.created_at >= $4)
                AND ($5::TIMESTAMPTZ IS NULL OR c.created_at <= $5)
                AND $6 IN ('both','proxy')
+               AND ($6 <> 'both' OR NOT EXISTS (
+                     SELECT 1 FROM session_message_ids sm
+                     WHERE sm.anthropic_message_id = c.anthropic_message_id
+                       AND sm.org_id = c.org_id))
          ) t
          GROUP BY day
          ORDER BY day",
@@ -984,6 +996,10 @@ pub(crate) async fn models_distribution(
                -- that carry no response_model, so they don't bucket as 'unknown'.
                AND c.response_model IS NOT NULL
                AND $6 IN ('both','proxy')
+               AND ($6 <> 'both' OR NOT EXISTS (
+                     SELECT 1 FROM session_message_ids sm
+                     WHERE sm.anthropic_message_id = c.anthropic_message_id
+                       AND sm.org_id = c.org_id))
          ) md GROUP BY model ORDER BY 2 DESC"
     ))
     .bind(org_id)
@@ -1081,6 +1097,10 @@ pub async fn get_models(
                AND ($5::TIMESTAMPTZ IS NULL OR c.created_at <= $5)
                AND c.response_model IS NOT NULL
                AND $6 IN ('both','proxy')
+               AND ($6 <> 'both' OR NOT EXISTS (
+                     SELECT 1 FROM session_message_ids sm
+                     WHERE sm.anthropic_message_id = c.anthropic_message_id
+                       AND sm.org_id = c.org_id))
          ) amm WHERE author IS NOT NULL GROUP BY author, model ORDER BY author, 3 DESC")
     )
     .bind(org_id).bind(&q.repo).bind(&q.author).bind(q.from).bind(q.to).bind(source.as_str())
@@ -1253,6 +1273,10 @@ pub(crate) async fn authors_leaderboard(
                AND ($3::TIMESTAMPTZ IS NULL OR c.created_at >= $3)
                AND ($4::TIMESTAMPTZ IS NULL OR c.created_at <= $4)
                AND $5 IN ('both','proxy')
+               AND ($5 <> 'both' OR NOT EXISTS (
+                     SELECT 1 FROM session_message_ids sm
+                     WHERE sm.anthropic_message_id = c.anthropic_message_id
+                       AND sm.org_id = c.org_id))
          ) t
          GROUP BY id, email
          ORDER BY 3 DESC",
@@ -1948,6 +1972,10 @@ pub async fn get_cost(
                AND ($4::TIMESTAMPTZ IS NULL OR c.created_at >= $4)
                AND ($5::TIMESTAMPTZ IS NULL OR c.created_at <= $5)
                AND $6 IN ('both','proxy')
+               AND ($6 <> 'both' OR NOT EXISTS (
+                     SELECT 1 FROM session_message_ids sm
+                     WHERE sm.anthropic_message_id = c.anthropic_message_id
+                       AND sm.org_id = c.org_id))
          ) t
          GROUP BY day
          ORDER BY day",
@@ -1998,6 +2026,10 @@ pub async fn get_cost(
                AND ($5::TIMESTAMPTZ IS NULL OR c.created_at <= $5)
                AND c.response_model IS NOT NULL
                AND $6 IN ('both','proxy')
+               AND ($6 <> 'both' OR NOT EXISTS (
+                     SELECT 1 FROM session_message_ids sm
+                     WHERE sm.anthropic_message_id = c.anthropic_message_id
+                       AND sm.org_id = c.org_id))
          ) t
          GROUP BY model
          ORDER BY 2 DESC",
@@ -2060,6 +2092,10 @@ pub async fn get_cost(
                AND ($3::TIMESTAMPTZ IS NULL OR c.created_at >= $3)
                AND ($4::TIMESTAMPTZ IS NULL OR c.created_at <= $4)
                AND $5 IN ('both','proxy')
+               AND ($5 <> 'both' OR NOT EXISTS (
+                     SELECT 1 FROM session_message_ids sm
+                     WHERE sm.anthropic_message_id = c.anthropic_message_id
+                       AND sm.org_id = c.org_id))
          ) t
          GROUP BY email
          ORDER BY 2 DESC",
