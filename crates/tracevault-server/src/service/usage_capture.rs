@@ -20,6 +20,7 @@ pub struct ParsedUsage {
     pub cache_read_tokens: Option<i64>,
     pub cache_write_tokens: Option<i64>,
     pub stop_reason: Option<String>,
+    pub message_id: Option<String>,
 }
 
 /// The (bounded) raw response body retained for capture, plus whether it was
@@ -160,6 +161,12 @@ impl UsageCapture {
                 self.sse_seen = true;
             }
         }
+        if self.sse_parsed.message_id.is_none() {
+            if let Some(id) = message.get("id").and_then(|m| m.as_str()) {
+                self.sse_parsed.message_id = Some(id.to_string());
+                self.sse_seen = true;
+            }
+        }
         if let Some(usage) = message.get("usage") {
             apply_usage(&mut self.sse_parsed, usage);
             self.sse_seen = true;
@@ -249,6 +256,10 @@ fn parse_json(buf: &[u8]) -> Option<ParsedUsage> {
     }
     if let Some(usage) = root_json.get("usage") {
         apply_usage(&mut parsed, usage);
+        seen = true;
+    }
+    if let Some(id) = root_json.get("id").and_then(|v| v.as_str()) {
+        parsed.message_id = Some(id.to_string());
         seen = true;
     }
 
