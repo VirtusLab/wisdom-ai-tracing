@@ -1,8 +1,8 @@
 [submodule "enterprise"]
 	path = enterprise
-	url = git@github.com:softwaremill/tracevault-enterprise.git
+	url = git@github.com:VirtusLab/visdom-ai-tracing-enterprise.git
 	update = none
 [submodule "website"]
 	path = website
-	url = https://github.com/softwaremill/tracevault-website.git
+	url = git@github.com:VirtusLab/visdom-ai-tracing-website.git
 	update = none
