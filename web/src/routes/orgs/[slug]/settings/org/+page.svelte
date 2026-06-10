@@ -17,6 +17,7 @@
 		name: string;
 		display_name: string | null;
 		created_at: string;
+		usage_source: 'hook' | 'proxy' | 'both';
 	}
 
 	const slug = $derived($page.params.slug);
@@ -31,6 +32,8 @@
 	let editName = $state('');
 	let saving = $state(false);
 	let savingName = $state(false);
+	let usageSource = $state<'hook' | 'proxy' | 'both'>('both');
+	let savingUsage = $state(false);
 	let error = $state('');
 	let nameError = $state('');
 	let success = $state('');
@@ -42,6 +45,7 @@
 			org = await api.get<OrgDetail>(`/api/v1/orgs/${slug}`);
 			editDisplayName = org.display_name ?? '';
 			editName = org.name;
+			usageSource = org.usage_source ?? 'both';
 		} catch (err) {
 			error = err instanceof Error ? err.message : 'Failed to load organization';
 		}
@@ -61,6 +65,22 @@
 			error = err instanceof Error ? err.message : 'Failed to update';
 		} finally {
 			saving = false;
+		}
+	}
+
+	async function handleSaveUsageSource() {
+		if (!org) return;
+		savingUsage = true;
+		error = '';
+		success = '';
+		try {
+			await api.put(`/api/v1/orgs/${slug}`, { usage_source: usageSource });
+			org.usage_source = usageSource;
+			success = 'Analytics usage source updated.';
+		} catch (err) {
+			error = err instanceof Error ? err.message : 'Failed to update usage source';
+		} finally {
+			savingUsage = false;
 		}
 	}
 
@@ -199,6 +219,32 @@
 					<div class="flex items-center justify-between py-1.5 text-sm">
 						<span class="text-muted-foreground text-xs">Created</span>
 						<span class="text-xs">{formatDate(org.created_at)}</span>
+					</div>
+				</div>
+
+				<div class="border-t pt-4">
+					<div class="grid gap-2">
+						<Label for="usage_source">Analytics usage source</Label>
+						{#if isOwner}
+							<select
+								id="usage_source"
+								bind:value={usageSource}
+								onchange={handleSaveUsageSource}
+								disabled={savingUsage}
+								class="border-input bg-background h-9 max-w-xs rounded-md border px-3 text-sm"
+							>
+								<option value="both">Both (hook + proxy)</option>
+								<option value="hook">Hook only</option>
+								<option value="proxy">Proxy only</option>
+							</select>
+						{:else}
+							<p class="text-sm capitalize">{usageSource}</p>
+						{/if}
+						<p class="text-muted-foreground text-xs">
+							Controls which usage source feeds analytics token/cost totals. Use a single
+							source if you run Claude Code through the proxy with the hook installed, to
+							avoid double-counting.
+						</p>
 					</div>
 				</div>
 			</div>

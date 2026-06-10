@@ -102,12 +102,28 @@
 		recent_commits: RecentCommit[];
 	}
 
+	interface OrgInfo {
+		usage_source: 'hook' | 'proxy' | 'both';
+	}
+
 	const slug = $derived($page.params.slug);
 	const search = $derived($page.url.search.replace(/^\?/, ''));
 
 	const overview = useFetch<OverviewResponse>(
 		() => `/api/v1/orgs/${slug}/analytics/overview` + (search ? '?' + search : '')
 	);
+
+	// usage_source lives on the org endpoint (core, owner/admin readable) — not
+	// the compliance endpoint, which is enterprise-gated. Non-admins fall back
+	// to the 'both' note; the analytics numbers are gated server-side regardless.
+	const orgInfo = useFetch<OrgInfo>(() => `/api/v1/orgs/${slug}`);
+
+	const usageSourceNote = $derived.by(() => {
+		const src = orgInfo.data?.usage_source ?? 'both';
+		if (src === 'hook') return 'Showing hook usage only.';
+		if (src === 'proxy') return 'Showing proxy usage only.';
+		return 'Totals combine hook + proxy usage.';
+	});
 
 	function tokensChartData(d: OverviewResponse) {
 		return {
@@ -259,6 +275,7 @@
 		<ErrorState message={overview.error} onRetry={overview.refetch} />
 	{:else if overview.data}
 		{@const data = overview.data}
+		<p class="text-muted-foreground text-xs">{usageSourceNote}</p>
 		<div class="grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-3 xl:grid-cols-3">
 			<StatCard label="Total Commits" value={fmtNum(data.total_commits)} icon={GitCommitHorizontalIcon} color="#3b82f6" tooltip="Total git commits linked to AI sessions in the selected period." />
 			<StatCard label="Sessions" value={fmtNum(data.total_sessions)} icon={MonitorPlayIcon} color="#10b981" tooltip="Total AI coding sessions in the selected period." />

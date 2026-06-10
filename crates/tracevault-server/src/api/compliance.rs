@@ -108,6 +108,7 @@ pub async fn update_compliance_settings(
         req.signing_enabled.unwrap_or(false),
         req.chain_verification_interval_hours,
         mode,
+        None,
     )
     .await?;
 
