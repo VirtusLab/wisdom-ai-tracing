@@ -143,7 +143,10 @@ impl LedgerContext {
             cache_read_tokens: u.cache_read_tokens,
             cache_write_tokens: u.cache_write_tokens,
             stop_reason: u.stop_reason,
-            total_tokens: Some(input + output + cache_read + cache_write),
+            // total_tokens excludes cache, matching the hook/session convention
+            // (sessions store total = input + output). Keeping the two sources
+            // consistent is required for a correct mixed `both` analytics view.
+            total_tokens: Some(input + output),
             estimated_cost_usd: Some(cost),
             anthropic_message_id: u.message_id,
         }

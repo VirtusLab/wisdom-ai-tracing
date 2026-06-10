@@ -4,15 +4,17 @@
 
 ALTER TABLE llm_calls ADD COLUMN IF NOT EXISTS anthropic_message_id TEXT;
 
+-- One row per assistant message the hook has accounted for, scoped by org.
+-- The composite primary key (org_id, anthropic_message_id) is org-scoped on
+-- purpose: a message id is globally unique per Anthropic call, but scoping by
+-- org keeps one org's ingestion from "claiming" an id another org could see,
+-- and it directly backs the dedup probe (sm.org_id = c.org_id AND
+-- sm.anthropic_message_id = c.anthropic_message_id) — so no extra index is
+-- needed.
 CREATE TABLE IF NOT EXISTS session_message_ids (
-    anthropic_message_id TEXT PRIMARY KEY,
     org_id     UUID NOT NULL REFERENCES orgs(id)     ON DELETE CASCADE,
+    anthropic_message_id TEXT NOT NULL,
     session_id UUID NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (org_id, anthropic_message_id)
 );
-
-CREATE INDEX IF NOT EXISTS idx_session_message_ids_org_msg
-    ON session_message_ids (org_id, anthropic_message_id);
-
-CREATE INDEX IF NOT EXISTS idx_llm_calls_message_id
-    ON llm_calls (anthropic_message_id) WHERE anthropic_message_id IS NOT NULL;

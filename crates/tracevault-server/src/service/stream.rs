@@ -123,7 +123,7 @@ impl StreamService {
                     sqlx::query(
                         "INSERT INTO session_message_ids (anthropic_message_id, org_id, session_id) \
                          SELECT mid, $2, $3 FROM UNNEST($1::text[]) AS mid \
-                         ON CONFLICT (anthropic_message_id) DO NOTHING",
+                         ON CONFLICT (org_id, anthropic_message_id) DO NOTHING",
                     )
                     .bind(&message_ids)
                     .bind(org_id)
