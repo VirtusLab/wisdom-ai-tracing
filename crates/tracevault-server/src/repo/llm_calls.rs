@@ -29,6 +29,7 @@ pub struct LlmCallRecord {
     pub duration_ms: i64,
     pub anthropic_request_id: Option<String>,
     pub path: String,
+    pub anthropic_message_id: Option<String>,
 }
 
 /// Scalar token/cost sums over llm_calls for the analytics filters. Filters
@@ -98,9 +99,9 @@ impl LlmCallRepo {
                 repo_id, branch, requested_model, provider_model, response_model,
                 input_tokens, output_tokens, cache_read_tokens, cache_write_tokens,
                 total_tokens, estimated_cost_usd, stop_reason, http_status, outcome,
-                duration_ms, anthropic_request_id, path
+                duration_ms, anthropic_request_id, path, anthropic_message_id
              ) VALUES (
-                $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22
+                $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23
              )
              RETURNING id",
         )
@@ -126,6 +127,7 @@ impl LlmCallRepo {
         .bind(rec.duration_ms)
         .bind(&rec.anthropic_request_id)
         .bind(&rec.path)
+        .bind(&rec.anthropic_message_id)
         .fetch_one(pool)
         .await?;
         Ok(id)

@@ -74,6 +74,7 @@ impl LedgerContext {
             stop_reason,
             total_tokens,
             estimated_cost_usd,
+            anthropic_message_id,
         } = match usage {
             Some(u) => self.usage_fields(u).await,
             None => UsageFields::default(),
@@ -102,6 +103,7 @@ impl LedgerContext {
             duration_ms: self.start.elapsed().as_millis() as i64,
             anthropic_request_id: self.anthropic_request_id,
             path: self.path,
+            anthropic_message_id,
         };
 
         if let Err(e) = LlmCallRepo::insert(&self.pool, &rec).await {
@@ -143,6 +145,7 @@ impl LedgerContext {
             stop_reason: u.stop_reason,
             total_tokens: Some(input + output + cache_read + cache_write),
             estimated_cost_usd: Some(cost),
+            anthropic_message_id: u.message_id,
         }
     }
 }
@@ -159,6 +162,7 @@ struct UsageFields {
     stop_reason: Option<String>,
     total_tokens: Option<i64>,
     estimated_cost_usd: Option<f64>,
+    anthropic_message_id: Option<String>,
 }
 
 /// Stream wrapper that owns concurrency permits alongside the inner
