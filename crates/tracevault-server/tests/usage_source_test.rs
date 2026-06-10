@@ -237,3 +237,73 @@ async fn authors_leaderboard_respects_source(pool: sqlx::PgPool) {
         220
     );
 }
+
+// A generation ledger call whose response model didn't parse must still be
+// counted in the per-model breakdown (as 'unknown'), so the breakdown
+// reconciles with the headline total. Zero-token non-generation calls (model
+// listing, errors) are excluded as noise.
+#[sqlx::test(migrations = "./migrations")]
+async fn model_breakdown_reconciles_with_total_for_unparsed_model(pool: sqlx::PgPool) {
+    use tracevault_server::repo::llm_calls::{LlmCallRecord, LlmCallRepo};
+    let user_id = common::seed_user(&pool).await;
+    let org_id = common::seed_org_with_member(&pool, user_id).await;
+    sqlx::query("INSERT INTO org_compliance_settings (org_id) VALUES ($1) ON CONFLICT DO NOTHING")
+        .bind(org_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let repo_id = common::seed_repo(&pool, org_id).await;
+
+    let mk = |model: Option<&str>, inp: i64, out: i64, outcome: &str| LlmCallRecord {
+        org_id,
+        user_id,
+        credential_id: None,
+        auth_session_id: None,
+        client_session_id: None,
+        repo_id: Some(repo_id),
+        branch: None,
+        requested_model: None,
+        provider_model: None,
+        response_model: model.map(String::from),
+        input_tokens: Some(inp),
+        output_tokens: Some(out),
+        cache_read_tokens: Some(0),
+        cache_write_tokens: Some(0),
+        total_tokens: Some(inp + out),
+        estimated_cost_usd: Some(0.1),
+        stop_reason: None,
+        http_status: 200,
+        outcome: outcome.into(),
+        duration_ms: 1,
+        anthropic_request_id: None,
+        path: "v1/messages".into(),
+        anthropic_message_id: None,
+    };
+    // Token-bearing call with an unparsed response model (120 tokens).
+    LlmCallRepo::insert(&pool, &mk(None, 100, 20, "success"))
+        .await
+        .unwrap();
+    // Zero-token noise (e.g. an error / model-listing call).
+    LlmCallRepo::insert(&pool, &mk(None, 0, 0, "upstream_error"))
+        .await
+        .unwrap();
+
+    set_source(&pool, org_id, "proxy").await;
+
+    let total =
+        tracevault_server::api::analytics::overview_total_tokens_for_test(&pool, org_id).await;
+    assert_eq!(total, 120, "headline total counts the token-bearing call");
+
+    let dist = tracevault_server::api::analytics::models_distribution_for_test(&pool, org_id).await;
+    let unknown = dist.iter().find(|(m, _, _)| m == "unknown");
+    assert_eq!(
+        unknown.map(|(_, _, t)| *t),
+        Some(120),
+        "unparsed-model tokens bucket as 'unknown'"
+    );
+    let dist_total: i64 = dist.iter().map(|(_, _, t)| *t).sum();
+    assert_eq!(
+        dist_total, total,
+        "per-model breakdown reconciles with the headline total"
+    );
+}

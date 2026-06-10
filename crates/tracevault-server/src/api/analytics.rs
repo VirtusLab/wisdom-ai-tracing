@@ -1000,9 +1000,13 @@ pub(crate) async fn models_distribution(
                AND ($3::TEXT IS NULL OR u.email = $3)
                AND ($4::TIMESTAMPTZ IS NULL OR c.created_at >= $4)
                AND ($5::TIMESTAMPTZ IS NULL OR c.created_at <= $5)
-               -- Exclude non-generation ledger calls (model listing, errors)
-               -- that carry no response_model, so they don't bucket as 'unknown'.
-               AND c.response_model IS NOT NULL
+               -- Include only token-bearing ledger calls so the per-model
+               -- breakdown reconciles with the headline token totals (which
+               -- sum all ledger rows). A generation call whose response model
+               -- didn't parse buckets as 'unknown' (via the COALESCE above)
+               -- rather than vanishing; zero-token non-generation calls (model
+               -- listing, errors) are dropped as noise — they add 0 anyway.
+               AND COALESCE(c.input_tokens, 0) + COALESCE(c.output_tokens, 0) > 0
                AND $6 IN ('both','proxy')
                AND ($6 <> 'both' OR NOT EXISTS (
                      SELECT 1 FROM session_message_ids sm
@@ -1031,6 +1035,17 @@ pub async fn model_m_for_test(pool: &sqlx::PgPool, org_id: uuid::Uuid) -> (i64, 
         .find(|(m, _, _)| m == "m")
         .map(|(_, sc, tok)| (tok, sc))
         .unwrap_or((0, 0))
+}
+
+/// Test seam: the full per-model distribution as `(model, session_count, tokens)`.
+pub async fn models_distribution_for_test(
+    pool: &sqlx::PgPool,
+    org_id: uuid::Uuid,
+) -> Vec<(String, i64, i64)> {
+    let source = fetch_usage_source(pool, org_id).await.unwrap();
+    models_distribution(pool, org_id, source, None, None, None, None)
+        .await
+        .unwrap()
 }
 
 pub async fn get_models(
@@ -1076,6 +1091,11 @@ pub async fn get_models(
     )
     .await?;
 
+    // Session-only by design: `trends` is a COUNT of sessions per model per
+    // day. Counts are never folded with the proxy ledger (a ledger row is not
+    // a session) — same rule as every other count in this module. A proxy-only
+    // org shows no trend data, which is correct: there are no sessions to count.
+    // Token *sums* for those calls still appear in `distribution`/KPIs.
     let trends = sqlx::query_as::<_, (String, String, i64)>(
         &format!("{model_cte} SELECT TO_CHAR(created_at::date, 'YYYY-MM-DD'), model, COUNT(*) FROM model_data GROUP BY created_at::date, model ORDER BY 1, 2")
     )
@@ -1103,7 +1123,9 @@ pub async fn get_models(
                AND ($3::TEXT IS NULL OR u.email = $3)
                AND ($4::TIMESTAMPTZ IS NULL OR c.created_at >= $4)
                AND ($5::TIMESTAMPTZ IS NULL OR c.created_at <= $5)
-               AND c.response_model IS NOT NULL
+               -- token-bearing calls only, so this breakdown reconciles with
+               -- the headline totals (see models_distribution for rationale).
+               AND COALESCE(c.input_tokens, 0) + COALESCE(c.output_tokens, 0) > 0
                AND $6 IN ('both','proxy')
                AND ($6 <> 'both' OR NOT EXISTS (
                      SELECT 1 FROM session_message_ids sm
@@ -1115,6 +1137,11 @@ pub async fn get_models(
     .fetch_all(&state.pool).await
     ?;
 
+    // Session-only by design: per-model AVG tokens/cost/duration are
+    // per-session statistics (a ledger row is not a session, and averaging a
+    // proxy call alongside a session would be meaningless). The cache sums
+    // here are likewise session-scoped; proxy cache usage surfaces in the
+    // token/cost totals and `distribution`, not in this per-model comparison.
     let comparison = sqlx::query_as::<_, (String, i64, f64, i64, i64, Option<i64>)>(
         &format!("{model_cte} SELECT model, COALESCE(CAST(AVG(tokens) AS BIGINT), 0), COALESCE(AVG(estimated_cost_usd), 0.0), COALESCE(CAST(SUM(cache_read_tokens) AS BIGINT), 0), COALESCE(CAST(SUM(cache_write_tokens) AS BIGINT), 0), CAST(AVG(duration_ms) AS BIGINT) FROM model_data GROUP BY model ORDER BY 2 DESC")
     )
@@ -2048,7 +2075,9 @@ pub async fn get_cost(
                AND ($3::TEXT IS NULL OR u.email = $3)
                AND ($4::TIMESTAMPTZ IS NULL OR c.created_at >= $4)
                AND ($5::TIMESTAMPTZ IS NULL OR c.created_at <= $5)
-               AND c.response_model IS NOT NULL
+               -- token-bearing calls only, so this breakdown reconciles with
+               -- the headline totals (see models_distribution for rationale).
+               AND COALESCE(c.input_tokens, 0) + COALESCE(c.output_tokens, 0) > 0
                AND $6 IN ('both','proxy')
                AND ($6 <> 'both' OR NOT EXISTS (
                      SELECT 1 FROM session_message_ids sm
