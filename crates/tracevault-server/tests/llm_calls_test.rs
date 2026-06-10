@@ -31,6 +31,7 @@ async fn kpis_sum_ledger_rows(pool: sqlx::PgPool) {
             duration_ms: 1,
             anthropic_request_id: None,
             path: "v1/messages".into(),
+            anthropic_message_id: None,
         };
         LlmCallRepo::insert(&pool, &rec).await.unwrap();
     }
@@ -69,6 +70,7 @@ async fn insert_ledger_row(pool: sqlx::PgPool) {
         duration_ms: 842,
         anthropic_request_id: Some(format!("req_{}", Uuid::new_v4())),
         path: "v1/messages".into(),
+        anthropic_message_id: None,
     };
 
     let id = LlmCallRepo::insert(&pool, &rec).await.unwrap();

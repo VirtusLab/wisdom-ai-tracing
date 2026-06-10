@@ -55,6 +55,7 @@ async fn seed_one_session_and_one_ledger(pool: &sqlx::PgPool) -> (uuid::Uuid, St
         duration_ms: 1,
         anthropic_request_id: None,
         path: "v1/messages".into(),
+        anthropic_message_id: None,
     };
     LlmCallRepo::insert(pool, &rec).await.unwrap();
     let email = sqlx::query_scalar::<_, String>("SELECT email FROM users WHERE id=$1")
