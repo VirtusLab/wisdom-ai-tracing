@@ -375,6 +375,60 @@ async fn proxy_passes_upstream_4xx_through_verbatim(pool: sqlx::PgPool) {
     assert_eq!(body, upstream_error);
 }
 
+/// A failed (non-2xx) proxied call must still write a ledger row, with
+/// `outcome = 'upstream_error'`, the upstream status, and no usage.
+#[sqlx::test(migrations = "./migrations")]
+async fn proxy_records_upstream_error_outcome_in_ledger(pool: sqlx::PgPool) {
+    let h = build_harness(pool).await;
+
+    // The harness seeds the credential user but no org membership; give the
+    // session user one so resolve_ledger_org_id attributes (and writes) the row.
+    let user_id = user_id_for_token(&h.pool, &h.user_session_token).await;
+    let org_id = common::seed_org(&h.pool).await;
+    common::seed_membership(&h.pool, user_id, org_id, "admin").await;
+
+    Mock::given(method("POST"))
+        .and(wm_path("/v1/messages"))
+        .respond_with(ResponseTemplate::new(400).set_body_json(json!({
+            "type": "error",
+            "error": { "type": "invalid_request_error", "message": "bad" }
+        })))
+        .expect(1)
+        .mount(&h.upstream)
+        .await;
+
+    let req = Request::builder()
+        .method("POST")
+        .uri("/proxy/anthropic/v1/messages")
+        .header("x-api-key", &h.user_session_token)
+        .header("content-type", "application/json")
+        .body(Body::from("{}"))
+        .unwrap();
+    let resp = h.app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    // Drain so the capture stream reaches its end and the ledger write fires.
+    let _ = read_body_to_value(resp.into_body()).await;
+
+    // The ledger write is spawned; poll until the row lands.
+    let mut row: Option<(String, i32, Option<i64>)> = None;
+    for _ in 0..100 {
+        row = sqlx::query_as::<_, (String, i32, Option<i64>)>(
+            "SELECT outcome, http_status, total_tokens FROM llm_calls ORDER BY created_at DESC LIMIT 1",
+        )
+        .fetch_optional(&h.pool)
+        .await
+        .unwrap();
+        if row.is_some() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    let (outcome, status, tokens) = row.expect("a ledger row is written for the failed call");
+    assert_eq!(outcome, "upstream_error");
+    assert_eq!(status, 400);
+    assert_eq!(tokens, None, "error rows carry no usage");
+}
+
 #[sqlx::test(migrations = "./migrations")]
 async fn proxy_passes_upstream_5xx_through_verbatim(pool: sqlx::PgPool) {
     let h = build_harness(pool).await;
