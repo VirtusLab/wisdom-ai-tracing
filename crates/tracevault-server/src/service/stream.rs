@@ -64,6 +64,7 @@ impl StreamService {
                 let mut batch_cache_read: i64 = 0;
                 let mut batch_cache_write: i64 = 0;
                 let mut detected_model: Option<String> = None;
+                let mut message_ids: Vec<String> = Vec::new();
 
                 for (i, line) in lines.iter().enumerate() {
                     let chunk_index = offset as i32 + i as i32;
@@ -107,7 +108,23 @@ impl StreamService {
                             detected_model =
                                 msg.get("model").and_then(|v| v.as_str()).map(String::from);
                         }
+                        if let Some(id) = msg.get("id").and_then(|v| v.as_str()) {
+                            message_ids.push(id.to_string());
+                        }
                     }
+                }
+
+                // Record assistant message ids for hook/proxy usage dedup.
+                for msg_id in &message_ids {
+                    sqlx::query(
+                        "INSERT INTO session_message_ids (anthropic_message_id, org_id, session_id) \
+                         VALUES ($1, $2, $3) ON CONFLICT (anthropic_message_id) DO NOTHING",
+                    )
+                    .bind(msg_id)
+                    .bind(org_id)
+                    .bind(session_db_id)
+                    .execute(&state.pool)
+                    .await?;
                 }
 
                 // Update session token counts and cost if we found usage data
