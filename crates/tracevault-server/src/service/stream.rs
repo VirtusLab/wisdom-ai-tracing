@@ -115,12 +115,17 @@ impl StreamService {
                 }
 
                 // Record assistant message ids for hook/proxy usage dedup.
-                for msg_id in &message_ids {
+                // Bulk-insert in one round trip; dedup in-memory first so a
+                // batch repeating an id doesn't bloat the array.
+                if !message_ids.is_empty() {
+                    message_ids.sort();
+                    message_ids.dedup();
                     sqlx::query(
                         "INSERT INTO session_message_ids (anthropic_message_id, org_id, session_id) \
-                         VALUES ($1, $2, $3) ON CONFLICT (anthropic_message_id) DO NOTHING",
+                         SELECT mid, $2, $3 FROM UNNEST($1::text[]) AS mid \
+                         ON CONFLICT (anthropic_message_id) DO NOTHING",
                     )
-                    .bind(msg_id)
+                    .bind(&message_ids)
                     .bind(org_id)
                     .bind(session_db_id)
                     .execute(&state.pool)

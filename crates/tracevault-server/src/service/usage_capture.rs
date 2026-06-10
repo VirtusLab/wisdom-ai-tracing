@@ -291,13 +291,14 @@ mod tests {
         assert_eq!(p.cache_write_tokens, Some(500));
         assert_eq!(p.model.as_deref(), Some("claude-opus-4-6"));
         assert_eq!(p.stop_reason.as_deref(), Some("end_turn"));
+        assert_eq!(p.message_id.as_deref(), Some("msg_1")); // captured for dedup
     }
 
     #[test]
     fn parses_streaming_sse_split_across_chunks() {
         let parts = [
             "event: message_start\n",
-            "data: {\"type\":\"message_start\",\"message\":{\"model\":\"claude-sonnet-4-6\",\"usage\":{\"input_tokens\":42,\"cache_read_input_tokens\":900,\"cache_creation_input_tokens\":100,\"output_tokens\":1}}}\n\n",
+            "data: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_sse_1\",\"model\":\"claude-sonnet-4-6\",\"usage\":{\"input_tokens\":42,\"cache_read_input_tokens\":900,\"cache_creation_input_tokens\":100,\"output_tokens\":1}}}\n\n",
             "event: content_block_delta\n",
             "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"hi\"}}\n\n",
             "event: message_delta\n",
@@ -314,6 +315,7 @@ mod tests {
         assert_eq!(p.output_tokens, Some(7)); // final from message_delta, not the initial 1
         assert_eq!(p.stop_reason.as_deref(), Some("end_turn"));
         assert_eq!(p.model.as_deref(), Some("claude-sonnet-4-6"));
+        assert_eq!(p.message_id.as_deref(), Some("msg_sse_1")); // captured for dedup
     }
 
     #[test]
