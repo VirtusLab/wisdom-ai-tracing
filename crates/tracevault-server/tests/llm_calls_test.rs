@@ -73,7 +73,10 @@ async fn insert_ledger_row(pool: sqlx::PgPool) {
         anthropic_message_id: None,
     };
 
-    let id = LlmCallRepo::insert(&pool, &rec).await.unwrap();
+    let id = LlmCallRepo::insert(&pool, &rec)
+        .await
+        .unwrap()
+        .expect("row inserted");
 
     let (input, total, outcome): (Option<i64>, Option<i64>, String) =
         sqlx::query_as("SELECT input_tokens, total_tokens, outcome FROM llm_calls WHERE id = $1")
@@ -159,18 +162,10 @@ async fn fetch_ledger_kpis_respects_window_and_filters(pool: sqlx::PgPool) {
         "matching repo includes both"
     );
     assert_eq!(
-        LlmCallRepo::fetch_ledger_kpis(
-            &pool,
-            org_id,
-            Some("no-such-repo"),
-            None,
-            None,
-            None,
-            false
-        )
-        .await
-        .unwrap()
-        .total_tokens,
+        LlmCallRepo::fetch_ledger_kpis(&pool, org_id, Some("no-such-repo"), None, None, None, false)
+            .await
+            .unwrap()
+            .total_tokens,
         0,
         "non-matching repo excludes all"
     );
@@ -185,19 +180,57 @@ async fn fetch_ledger_kpis_respects_window_and_filters(pool: sqlx::PgPool) {
         "matching author includes both"
     );
     assert_eq!(
-        LlmCallRepo::fetch_ledger_kpis(
-            &pool,
-            org_id,
-            None,
-            Some("nobody@x.test"),
-            None,
-            None,
-            false
-        )
-        .await
-        .unwrap()
-        .total_tokens,
+        LlmCallRepo::fetch_ledger_kpis(&pool, org_id, None, Some("nobody@x.test"), None, None, false)
+            .await
+            .unwrap()
+            .total_tokens,
         0,
         "non-matching author excludes all"
     );
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn insert_is_idempotent_on_duplicate_request_id(pool: sqlx::PgPool) {
+    let user_id = common::seed_user(&pool).await;
+    let org_id = common::seed_org_with_member(&pool, user_id).await;
+
+    let mk = |req_id: &str| LlmCallRecord {
+        org_id,
+        user_id,
+        credential_id: None,
+        auth_session_id: None,
+        client_session_id: None,
+        repo_id: None,
+        branch: None,
+        requested_model: None,
+        provider_model: None,
+        response_model: Some("m".into()),
+        input_tokens: Some(10),
+        output_tokens: Some(2),
+        cache_read_tokens: Some(0),
+        cache_write_tokens: Some(0),
+        total_tokens: Some(12),
+        estimated_cost_usd: Some(0.01),
+        stop_reason: None,
+        http_status: 200,
+        outcome: "success".into(),
+        duration_ms: 1,
+        anthropic_request_id: Some(req_id.into()),
+        path: "v1/messages".into(),
+        anthropic_message_id: None,
+    };
+
+    // First insert returns an id; a second with the SAME request_id is a no-op
+    // (returns None) rather than a unique-violation error.
+    let first = LlmCallRepo::insert(&pool, &mk("req_dup")).await.unwrap();
+    let second = LlmCallRepo::insert(&pool, &mk("req_dup")).await.unwrap();
+    assert!(first.is_some(), "first insert should create a row");
+    assert!(second.is_none(), "duplicate request_id must be a no-op");
+
+    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM llm_calls WHERE org_id = $1")
+        .bind(org_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(count, 1, "only one row despite two inserts");
 }

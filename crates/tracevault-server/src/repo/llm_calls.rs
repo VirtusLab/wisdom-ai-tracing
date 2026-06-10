@@ -98,8 +98,12 @@ impl LlmCallRepo {
         })
     }
 
-    pub async fn insert(pool: &PgPool, rec: &LlmCallRecord) -> Result<Uuid, AppError> {
-        let id: Uuid = sqlx::query_scalar(
+    /// Insert one ledger row. Returns the new id, or `None` if a row with the
+    /// same `anthropic_request_id` already exists (idempotent no-op against the
+    /// partial unique index on `anthropic_request_id`) — so a retried/replayed
+    /// request_id is silently skipped rather than erroring.
+    pub async fn insert(pool: &PgPool, rec: &LlmCallRecord) -> Result<Option<Uuid>, AppError> {
+        let id: Option<Uuid> = sqlx::query_scalar(
             "INSERT INTO llm_calls (
                 org_id, user_id, credential_id, auth_session_id, client_session_id,
                 repo_id, branch, requested_model, provider_model, response_model,
@@ -109,6 +113,7 @@ impl LlmCallRepo {
              ) VALUES (
                 $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23
              )
+             ON CONFLICT (anthropic_request_id) WHERE anthropic_request_id IS NOT NULL DO NOTHING
              RETURNING id",
         )
         .bind(rec.org_id)
@@ -134,7 +139,7 @@ impl LlmCallRepo {
         .bind(&rec.anthropic_request_id)
         .bind(&rec.path)
         .bind(&rec.anthropic_message_id)
-        .fetch_one(pool)
+        .fetch_optional(pool)
         .await?;
         Ok(id)
     }

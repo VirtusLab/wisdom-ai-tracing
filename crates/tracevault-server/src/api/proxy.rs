@@ -234,7 +234,7 @@ pub async fn anthropic_proxy(
         Err(resp) => return resp,
     };
     let credential_permit =
-        match try_acquire_credential_permit(&state, user_id, max_concurrent, &path) {
+        match try_acquire_credential_permit(&state, credential_id, max_concurrent, &path) {
             Ok(p) => p,
             Err(resp) => return resp,
         };
@@ -779,10 +779,15 @@ fn try_acquire_global_permit(
 /// On capacity exhaustion returns an Anthropic-shaped 429 with
 /// `overloaded_error` and a message naming the configured cap so the user
 /// can debug it from their `/me/proxy/` UI.
+///
+/// Keyed by `credential_id`, not `user_id`: a single user can have multiple
+/// credentials (per-model routing) with different `max_concurrent` caps, so
+/// sharing one semaphore per user would apply whichever cap was resolved
+/// first to all of that user's credentials.
 #[allow(clippy::result_large_err)]
 fn try_acquire_credential_permit(
     state: &AppState,
-    user_id: Uuid,
+    credential_id: Uuid,
     max_concurrent: i32,
     path: &str,
 ) -> Result<tokio::sync::OwnedSemaphorePermit, Response> {
@@ -796,7 +801,7 @@ fn try_acquire_credential_permit(
     // a yield point or self-deadlocking on the same shard.
     let sem = state
         .proxy_per_credential_semaphores
-        .entry(user_id)
+        .entry(credential_id)
         .or_insert_with(|| std::sync::Arc::new(tokio::sync::Semaphore::new(cap)))
         .clone();
 
@@ -804,7 +809,7 @@ fn try_acquire_credential_permit(
         Ok(p) => Ok(p),
         Err(_) => {
             tracing::warn!(
-                user_id = %user_id,
+                credential_id = %credential_id,
                 error_type = "overloaded_error",
                 reason = "per_credential_cap",
                 cap_value = max_concurrent,
