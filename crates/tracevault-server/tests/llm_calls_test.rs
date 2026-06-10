@@ -162,10 +162,18 @@ async fn fetch_ledger_kpis_respects_window_and_filters(pool: sqlx::PgPool) {
         "matching repo includes both"
     );
     assert_eq!(
-        LlmCallRepo::fetch_ledger_kpis(&pool, org_id, Some("no-such-repo"), None, None, None, false)
-            .await
-            .unwrap()
-            .total_tokens,
+        LlmCallRepo::fetch_ledger_kpis(
+            &pool,
+            org_id,
+            Some("no-such-repo"),
+            None,
+            None,
+            None,
+            false
+        )
+        .await
+        .unwrap()
+        .total_tokens,
         0,
         "non-matching repo excludes all"
     );
@@ -180,10 +188,18 @@ async fn fetch_ledger_kpis_respects_window_and_filters(pool: sqlx::PgPool) {
         "matching author includes both"
     );
     assert_eq!(
-        LlmCallRepo::fetch_ledger_kpis(&pool, org_id, None, Some("nobody@x.test"), None, None, false)
-            .await
-            .unwrap()
-            .total_tokens,
+        LlmCallRepo::fetch_ledger_kpis(
+            &pool,
+            org_id,
+            None,
+            Some("nobody@x.test"),
+            None,
+            None,
+            false
+        )
+        .await
+        .unwrap()
+        .total_tokens,
         0,
         "non-matching author excludes all"
     );

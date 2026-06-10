@@ -1356,10 +1356,17 @@ async fn me_anthropic_key_put_updates_cap_only(pool: sqlx::PgPool) {
         .unwrap();
     assert_eq!(r.status(), StatusCode::NO_CONTENT);
 
+    // The semaphore is keyed by credential id; resolve the default credential.
+    let cred_id: Uuid =
+        sqlx::query_scalar("SELECT id FROM credentials WHERE user_id = $1 AND name = 'default'")
+            .bind(user_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
     // Prime the in-memory semaphore so we can prove it gets dropped.
-    sems.entry(user_id)
+    sems.entry(cred_id)
         .or_insert_with(|| std::sync::Arc::new(tokio::sync::Semaphore::new(4)));
-    assert!(sems.contains_key(&user_id));
+    assert!(sems.contains_key(&cred_id));
 
     // Cap-only PUT.
     let r = app
@@ -1392,7 +1399,7 @@ async fn me_anthropic_key_put_updates_cap_only(pool: sqlx::PgPool) {
     assert_eq!(body["configured"], true);
     assert_eq!(body["max_concurrent"], 16);
     assert!(
-        !sems.contains_key(&user_id),
+        !sems.contains_key(&cred_id),
         "settings-only PUT must drop the in-memory semaphore so the new cap takes effect"
     );
 
