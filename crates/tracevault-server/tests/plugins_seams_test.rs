@@ -199,3 +199,69 @@ async fn ingest_hook_fires_on_session_end(pool: PgPool) {
     );
     assert_ne!(seen.lock().unwrap()[0], uuid::Uuid::nil());
 }
+
+struct OneMetric;
+#[async_trait::async_trait]
+impl tracevault_server::plugins::MetricContributor for OneMetric {
+    fn slot(&self) -> &'static str {
+        "session.detail"
+    }
+    async fn contribute(
+        &self,
+        _state: &AppState,
+        _ctx: &tracevault_server::plugins::SessionMetricContext,
+    ) -> Vec<tracevault_server::plugins::Metric> {
+        vec![tracevault_server::plugins::Metric {
+            key: "demo".into(),
+            label: "Demo".into(),
+            value: serde_json::json!(1),
+            format: "count".into(),
+        }]
+    }
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn session_detail_includes_contributor_metrics(pool: PgPool) {
+    let user_id = common::seed_user(&pool).await;
+    let org_id = common::seed_org_with_member(&pool, user_id).await;
+    let repo_id = common::seed_repo(&pool, org_id).await;
+    let session_id = common::seed_session(&pool, org_id, repo_id, user_id).await;
+    let token = common::seed_auth_session(&pool, user_id).await;
+
+    // The `{slug}` path param is matched against orgs.name (case-insensitive);
+    // there is no separate slug column.
+    let slug = sqlx::query_scalar::<_, String>("SELECT name FROM orgs WHERE id = $1")
+        .bind(org_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+    let mut plugins = Plugins::default();
+    plugins.metrics.push(Arc::new(OneMetric));
+    let state = common::test_state_with_plugins(pool.clone(), Arc::new(plugins));
+    let app = tracevault_server::build_router(state);
+
+    let uri = format!("/api/v1/orgs/{slug}/analytics/sessions/{session_id}/detail");
+    let resp = app
+        .oneshot(
+            axum::http::Request::builder()
+                .method("GET")
+                .uri(&uri)
+                .header("authorization", format!("Bearer {token}"))
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let metrics = json["metrics"].as_array().expect("metrics array");
+    assert!(
+        metrics.iter().any(|m| m["key"] == "demo"),
+        "expected a metric with key 'demo', got {json}"
+    );
+}
