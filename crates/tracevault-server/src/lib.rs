@@ -35,6 +35,31 @@ use tower_governor::{governor::GovernorConfigBuilder, GovernorLayer};
 use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
 
+/// Spawn all registered [`plugins::BackgroundTask`]s from `state.plugins`.
+/// Startup tasks run once immediately; interval tasks loop on their period.
+/// Must be called from within a Tokio runtime context.
+pub fn spawn_plugin_tasks(state: &AppState) {
+    for task in state.plugins.tasks.clone() {
+        let state = state.clone();
+        match task.schedule() {
+            crate::plugins::Schedule::Startup => {
+                tokio::spawn(async move {
+                    task.run(state).await;
+                });
+            }
+            crate::plugins::Schedule::Interval(period) => {
+                tokio::spawn(async move {
+                    let mut tick = tokio::time::interval(period);
+                    loop {
+                        tick.tick().await;
+                        task.run(state.clone()).await;
+                    }
+                });
+            }
+        }
+    }
+}
+
 /// Assemble the full HTTP router from `state`. Route groups, layers, and
 /// merge/layer ordering are identical to the original `main()` assembly;
 /// the only additions are the RoutePlugin routers and the capabilities

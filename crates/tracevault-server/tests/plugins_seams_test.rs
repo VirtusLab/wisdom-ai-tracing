@@ -4,7 +4,7 @@ use axum::http::StatusCode;
 use sqlx::PgPool;
 use std::sync::Arc;
 use tower::ServiceExt; // for oneshot
-use tracevault_server::plugins::{Plugins, RoutePlugin};
+use tracevault_server::plugins::{BackgroundTask, Plugins, RoutePlugin, Schedule};
 use tracevault_server::AppState;
 
 struct PingPlugin;
@@ -58,5 +58,41 @@ async fn route_plugin_is_mounted(pool: PgPool) {
     assert!(
         caps.iter().any(|c| c == "ping"),
         "expected 'ping' capability to be advertised, got {json}"
+    );
+}
+
+struct FlagTask(Arc<std::sync::atomic::AtomicBool>);
+#[async_trait::async_trait]
+impl BackgroundTask for FlagTask {
+    fn name(&self) -> &'static str {
+        "flag"
+    }
+    fn schedule(&self) -> Schedule {
+        Schedule::Startup
+    }
+    async fn run(&self, _state: AppState) {
+        self.0.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn startup_task_runs(pool: PgPool) {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let flag = Arc::new(AtomicBool::new(false));
+    let mut plugins = Plugins::default();
+    plugins.tasks.push(Arc::new(FlagTask(flag.clone())));
+
+    let state = common::test_state_with_plugins(pool, Arc::new(plugins));
+    tracevault_server::spawn_plugin_tasks(&state);
+
+    for _ in 0..100 {
+        if flag.load(Ordering::SeqCst) {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    assert!(
+        flag.load(Ordering::SeqCst),
+        "Startup background task should have run"
     );
 }

@@ -1,7 +1,8 @@
 use std::net::SocketAddr;
 
 use tracevault_server::{
-    api, build_router, config, db, extensions, plugins, pricing_sync, repo_manager, AppState,
+    api, build_router, config, db, extensions, plugins, pricing_sync, repo_manager,
+    spawn_plugin_tasks, AppState,
 };
 
 #[tokio::main]
@@ -219,6 +220,7 @@ async fn main() {
         plugins: plugins.clone(),
     };
 
+    spawn_plugin_tasks(&state);
     let app = build_router(state);
 
     let listener = tokio::net::TcpListener::bind(&bind_addr).await.unwrap();
