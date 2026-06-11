@@ -102,6 +102,7 @@ async fn build_harness(pool: sqlx::PgPool) -> Harness {
         default_credential_base_url: upstream.uri(),
         proxy_global_semaphore: None,
         proxy_per_credential_semaphores: std::sync::Arc::new(dashmap::DashMap::new()),
+        plugins: std::sync::Arc::new(tracevault_server::plugins::Plugins::default()),
     };
 
     let app = Router::new()
@@ -195,6 +196,7 @@ async fn build_harness_with_caps(
         default_credential_base_url: upstream.uri(),
         proxy_global_semaphore,
         proxy_per_credential_semaphores: std::sync::Arc::new(dashmap::DashMap::new()),
+        plugins: std::sync::Arc::new(tracevault_server::plugins::Plugins::default()),
     };
 
     let app = Router::new()
@@ -632,6 +634,7 @@ async fn proxy_returns_502_when_upstream_unreachable(pool: sqlx::PgPool) {
         default_credential_base_url: "http://127.0.0.1:1".to_string(),
         proxy_global_semaphore: None,
         proxy_per_credential_semaphores: std::sync::Arc::new(dashmap::DashMap::new()),
+        plugins: std::sync::Arc::new(tracevault_server::plugins::Plugins::default()),
     };
 
     let app = Router::new()
@@ -1153,6 +1156,7 @@ async fn me_anthropic_key_lifecycle(pool: sqlx::PgPool) {
         default_credential_base_url: upstream.uri(),
         proxy_global_semaphore: None,
         proxy_per_credential_semaphores: std::sync::Arc::new(dashmap::DashMap::new()),
+        plugins: std::sync::Arc::new(tracevault_server::plugins::Plugins::default()),
     };
 
     let app = Router::new()
@@ -1314,6 +1318,7 @@ async fn build_me_endpoints_only(
         default_credential_base_url: upstream.uri(),
         proxy_global_semaphore: None,
         proxy_per_credential_semaphores: sems.clone(),
+        plugins: std::sync::Arc::new(tracevault_server::plugins::Plugins::default()),
     };
 
     let app = Router::new()

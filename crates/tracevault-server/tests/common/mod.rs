@@ -1,6 +1,30 @@
 use sqlx::PgPool;
 use uuid::Uuid;
 
+/// Build a full `AppState` for tests, with a caller-supplied `Plugins`.
+/// Field values mirror `dedup_test.rs::build_state`.
+#[allow(dead_code)]
+pub fn test_state_with_plugins(
+    pool: sqlx::PgPool,
+    plugins: std::sync::Arc<tracevault_server::plugins::Plugins>,
+) -> tracevault_server::AppState {
+    tracevault_server::AppState {
+        pool,
+        repo_manager: tracevault_server::repo_manager::RepoManager::new("/tmp"),
+        extensions: tracevault_server::extensions::community_registry(),
+        encryption_key: None,
+        http_client: reqwest::Client::new(),
+        proxy_http_client: reqwest::Client::new(),
+        cors_origin: "*".to_string(),
+        invite_expiry_minutes: 60,
+        embedding_service: None,
+        default_credential_base_url: "http://localhost".to_string(),
+        proxy_global_semaphore: None,
+        proxy_per_credential_semaphores: std::sync::Arc::new(dashmap::DashMap::new()),
+        plugins,
+    }
+}
+
 #[allow(dead_code)]
 pub async fn seed_invite(
     pool: &PgPool,
