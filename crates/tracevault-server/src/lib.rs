@@ -12,6 +12,7 @@ pub mod llm;
 pub mod org_signing;
 pub mod password_policy;
 pub mod permissions;
+pub mod plugins;
 pub mod pricing;
 pub mod pricing_sync;
 mod proxy_url;
