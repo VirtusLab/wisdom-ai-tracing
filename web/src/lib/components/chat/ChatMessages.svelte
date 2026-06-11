@@ -2,6 +2,7 @@
 	import type { ChatMessage, MentionItem } from '$lib/types';
 	import { MessageCircle, Bot, User } from '@lucide/svelte';
 	import { marked } from 'marked';
+	import { formatTime } from '$lib/utils/date';
 
 	let {
 		messages,
@@ -61,10 +62,6 @@
 			}
 		}
 		return html;
-	}
-
-	function formatTime(iso: string): string {
-		return new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 	}
 </script>
 

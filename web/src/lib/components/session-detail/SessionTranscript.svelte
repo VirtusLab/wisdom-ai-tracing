@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { locale } from '$lib/utils/date';
+	import { formatDateTime } from '$lib/utils/date';
 
 	interface TranscriptRecordData {
 		record_type: string;
@@ -26,13 +26,7 @@
 	function fmtTime(ts: string | null): string {
 		if (!ts) return '';
 		try {
-			return new Date(ts).toLocaleString(locale, {
-				month: 'short',
-				day: 'numeric',
-				hour: '2-digit',
-				minute: '2-digit',
-				hour12: false
-			});
+			return formatDateTime(ts);
 		} catch {
 			return '';
 		}

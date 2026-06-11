@@ -7,6 +7,7 @@
 	import * as Table from '$lib/components/ui/table/index.js';
 	import * as Select from '$lib/components/ui/select/index.js';
 	import ErrorState from '$lib/components/ErrorState.svelte';
+	import { formatDateTime } from '$lib/utils/date';
 
 	interface Credential {
 		name: string;
@@ -340,7 +341,7 @@
 	function formatTimestamp(ts: string): string {
 		if (!ts) return '';
 		try {
-			return new Date(ts).toLocaleString();
+			return formatDateTime(ts);
 		} catch {
 			return ts;
 		}
