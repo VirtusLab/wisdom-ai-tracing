@@ -96,3 +96,106 @@ async fn startup_task_runs(pool: PgPool) {
         "Startup background task should have run"
     );
 }
+
+struct RecordingHook(Arc<std::sync::Mutex<Vec<uuid::Uuid>>>);
+#[async_trait::async_trait]
+impl tracevault_server::plugins::IngestHook for RecordingHook {
+    async fn on_session_finalized(
+        &self,
+        _state: &AppState,
+        ctx: &tracevault_server::plugins::SessionFinalizedContext,
+    ) {
+        self.0.lock().unwrap().push(ctx.session_db_id);
+    }
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn ingest_hook_fires_on_session_end(pool: PgPool) {
+    use tracevault_core::streaming::{StreamEventRequest, StreamEventType};
+    use tracevault_server::service::stream::StreamService;
+
+    let user_id = common::seed_user(&pool).await;
+    let org_id = common::seed_org_with_member(&pool, user_id).await;
+    let repo_id = common::seed_repo(&pool, org_id).await;
+
+    let seen = Arc::new(std::sync::Mutex::new(Vec::<uuid::Uuid>::new()));
+    let mut plugins = Plugins::default();
+    plugins
+        .ingest_hooks
+        .push(Arc::new(RecordingHook(seen.clone())));
+    let state = common::test_state_with_plugins(pool.clone(), Arc::new(plugins));
+
+    let session_id = "sess-ingest-hook-1";
+
+    // 1) Create the session via a Transcript event.
+    let transcript = StreamEventRequest {
+        protocol_version: 2,
+        tool: Some("claude-code".to_string()),
+        event_type: StreamEventType::Transcript,
+        session_id: session_id.to_string(),
+        timestamp: chrono::Utc::now(),
+        hook_event_name: None,
+        tool_name: None,
+        tool_use_id: None,
+        tool_input: None,
+        tool_response: None,
+        tool_is_error: None,
+        event_index: None,
+        transcript_lines: Some(vec![serde_json::json!({
+            "type": "assistant",
+            "message": {
+                "id": "msg_ingest_hook",
+                "model": "claude-sonnet-4-6",
+                "usage": { "input_tokens": 100, "output_tokens": 10 }
+            }
+        })]),
+        transcript_offset: Some(0),
+        model: Some("claude-sonnet-4-6".to_string()),
+        cwd: Some("/project".to_string()),
+        final_stats: None,
+    };
+    StreamService::process(&state, org_id, repo_id, user_id, transcript)
+        .await
+        .unwrap();
+
+    // 2) Finalize it via a SessionEnd event with final_stats.
+    let session_end = StreamEventRequest {
+        protocol_version: 2,
+        tool: Some("claude-code".to_string()),
+        event_type: StreamEventType::SessionEnd,
+        session_id: session_id.to_string(),
+        timestamp: chrono::Utc::now(),
+        hook_event_name: None,
+        tool_name: None,
+        tool_use_id: None,
+        tool_input: None,
+        tool_response: None,
+        tool_is_error: None,
+        event_index: None,
+        transcript_lines: None,
+        transcript_offset: None,
+        model: Some("claude-sonnet-4-6".to_string()),
+        cwd: Some("/project".to_string()),
+        final_stats: Some(tracevault_core::streaming::SessionFinalStats {
+            duration_ms: Some(5000),
+            total_tokens: Some(110),
+            input_tokens: Some(100),
+            output_tokens: Some(10),
+            cache_read_tokens: None,
+            cache_write_tokens: None,
+            user_messages: Some(1),
+            assistant_messages: Some(1),
+            total_tool_calls: Some(0),
+        }),
+    };
+    StreamService::process(&state, org_id, repo_id, user_id, session_end)
+        .await
+        .unwrap();
+
+    assert_eq!(
+        seen.lock().unwrap().len(),
+        1,
+        "hook should fire exactly once on finalize"
+    );
+    assert_ne!(seen.lock().unwrap()[0], uuid::Uuid::nil());
+}

@@ -320,6 +320,18 @@ impl StreamService {
                     tracing::warn!("Failed to seal session {session_db_id} on end: {e}");
                 }
 
+                // Notify ingest hooks that the session is finalized.
+                let fin_ctx = crate::plugins::SessionFinalizedContext {
+                    org_id,
+                    repo_id,
+                    user_id,
+                    session_db_id,
+                    model: req.model.clone(),
+                };
+                for hook in state.plugins.ingest_hooks.clone() {
+                    hook.on_session_finalized(state, &fin_ctx).await;
+                }
+
                 // Trigger chat indexing if enabled
                 if state.extensions.features.chat_search {
                     if let Some(ref emb_svc) = state.embedding_service {
