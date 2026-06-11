@@ -48,4 +48,15 @@ async fn route_plugin_is_mounted(pool: PgPool) {
         .await
         .unwrap();
     assert_eq!(cap.status(), StatusCode::OK);
+
+    // The registered capability is actually advertised.
+    let body = axum::body::to_bytes(cap.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let caps = json["capabilities"].as_array().expect("capabilities array");
+    assert!(
+        caps.iter().any(|c| c == "ping"),
+        "expected 'ping' capability to be advertised, got {json}"
+    );
 }
