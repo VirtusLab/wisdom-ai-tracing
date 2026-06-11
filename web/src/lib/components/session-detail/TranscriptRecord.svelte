@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { locale } from '$lib/utils/date';
+	import { formatTime } from '$lib/utils/date';
 
 	interface RecordUsage {
 		input_tokens: number;
@@ -46,7 +46,7 @@
 	function fmtTime(ts: string | null): string {
 		if (!ts) return '';
 		try {
-			return new Date(ts).toLocaleTimeString(locale, { hour12: false });
+			return formatTime(ts);
 		} catch {
 			return '';
 		}
