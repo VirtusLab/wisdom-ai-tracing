@@ -9,7 +9,7 @@ use tower_governor::{governor::GovernorConfigBuilder, GovernorLayer};
 use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
 
-use tracevault_server::{api, config, db, extensions, pricing_sync, repo_manager, AppState};
+use tracevault_server::{api, config, db, extensions, plugins, pricing_sync, repo_manager, AppState};
 
 #[tokio::main]
 async fn main() {
@@ -673,6 +673,24 @@ async fn main() {
         )
         .layer(DefaultBodyLimit::max(32 * 1024 * 1024));
 
+    let plugins = std::sync::Arc::new(plugins::Plugins::default());
+
+    let state = AppState {
+        pool: pool.clone(),
+        repo_manager,
+        extensions,
+        encryption_key: cfg.encryption_key.clone(),
+        http_client: http_client.clone(),
+        proxy_http_client: proxy_http_client.clone(),
+        cors_origin: cfg.cors_origin.clone(),
+        invite_expiry_minutes: cfg.invite_expiry_minutes,
+        default_credential_base_url: api::proxy::DEFAULT_ANTHROPIC_UPSTREAM_BASE.to_string(),
+        embedding_service,
+        proxy_global_semaphore: proxy_global_semaphore.clone(),
+        proxy_per_credential_semaphores: proxy_per_credential_semaphores.clone(),
+        plugins: plugins.clone(),
+    };
+
     let app = Router::new()
         .merge(auth_routes)
         .merge(public_routes)
@@ -680,20 +698,7 @@ async fn main() {
         .merge(proxy_routes)
         .layer(TraceLayer::new_for_http())
         .layer(cors)
-        .with_state(AppState {
-            pool: pool.clone(),
-            repo_manager,
-            extensions,
-            encryption_key: cfg.encryption_key.clone(),
-            http_client: http_client.clone(),
-            proxy_http_client: proxy_http_client.clone(),
-            cors_origin: cfg.cors_origin.clone(),
-            invite_expiry_minutes: cfg.invite_expiry_minutes,
-            default_credential_base_url: api::proxy::DEFAULT_ANTHROPIC_UPSTREAM_BASE.to_string(),
-            embedding_service,
-            proxy_global_semaphore: proxy_global_semaphore.clone(),
-            proxy_per_credential_semaphores: proxy_per_credential_semaphores.clone(),
-        });
+        .with_state(state.clone());
 
     let listener = tokio::net::TcpListener::bind(&bind_addr).await.unwrap();
     tracing::info!("TraceVault server listening on {}", bind_addr);

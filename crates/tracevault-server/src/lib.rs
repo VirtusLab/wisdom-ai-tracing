@@ -87,4 +87,5 @@ pub struct AppState {
     /// (TTL or LRU) if active credentials exceed that threshold.
     pub proxy_per_credential_semaphores:
         std::sync::Arc<dashmap::DashMap<uuid::Uuid, std::sync::Arc<tokio::sync::Semaphore>>>,
+    pub plugins: std::sync::Arc<crate::plugins::Plugins>,
 }
