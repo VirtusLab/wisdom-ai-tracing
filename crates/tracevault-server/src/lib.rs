@@ -567,6 +567,10 @@ struct CapabilitiesResponse {
     capabilities: Vec<String>,
 }
 
+/// Advertises the capability keys registered by extensions. Intentionally public
+/// and unauthenticated, mirroring `/api/v1/features` — the frontend reads it
+/// before login to decide which slots to render. In OSS the set is empty.
+/// (Enterprise should only advertise keys it is comfortable exposing anonymously.)
 async fn capabilities_handler(
     axum::extract::State(state): axum::extract::State<AppState>,
 ) -> axum::Json<CapabilitiesResponse> {
