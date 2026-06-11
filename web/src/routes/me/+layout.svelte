@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { page } from '$app/stores';
 	import { orgStore } from '$lib/stores/org';
 	import AppLayout from '$lib/components/app-layout.svelte';
 
@@ -12,6 +13,16 @@
 	let { children } = $props();
 
 	let loaded = $state(false);
+
+	// Personal "Profile" config tabs. Proxy config lives here as one section.
+	const tabs = [
+		{ href: '/me', label: 'Profile' },
+		{ href: '/me/proxy', label: 'LLM Proxy' }
+	];
+	const pathname = $derived($page.url.pathname);
+	function isActive(href: string): boolean {
+		return href === '/me' ? pathname === '/me' : pathname.startsWith(href);
+	}
 
 	$effect(() => {
 		loadIfNeeded();
@@ -44,7 +55,22 @@
 
 {#if loaded}
 	<AppLayout>
-		{@render children()}
+		<div class="space-y-6">
+			<h1 class="text-2xl font-bold">Profile</h1>
+			<div class="flex gap-4 border-b pb-2 text-sm">
+				{#each tabs as t}
+					<a
+						href={t.href}
+						class={isActive(t.href)
+							? 'font-semibold underline'
+							: 'text-muted-foreground hover:underline'}
+					>
+						{t.label}
+					</a>
+				{/each}
+			</div>
+			{@render children()}
+		</div>
 	</AppLayout>
 {:else}
 	<div class="text-muted-foreground flex min-h-screen items-center justify-center text-sm">

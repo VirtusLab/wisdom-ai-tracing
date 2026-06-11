@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { Button } from '$lib/components/ui/button/index.js';
-	import { LogOut, Cable } from '@lucide/svelte';
+	import { LogOut, User } from '@lucide/svelte';
 
 	let {
 		expanded,
@@ -16,16 +16,21 @@
 {#if expanded}
 	<div class="border-t p-2">
 		{#if userEmail}
-			<p class="text-xs text-muted-foreground truncate px-3 py-1">{userEmail}</p>
+			<a
+				href="/me"
+				class="text-xs text-muted-foreground hover:text-foreground block truncate px-3 py-1"
+			>
+				{userEmail}
+			</a>
 		{/if}
 		<Button
 			variant="ghost"
 			size="sm"
 			class="w-full justify-start gap-2"
-			href="/me/proxy"
+			href="/me"
 		>
-			<Cable class="h-4 w-4" />
-			LLM Proxy
+			<User class="h-4 w-4" />
+			Profile
 		</Button>
 		<Button variant="ghost" size="sm" class="w-full justify-start gap-2" onclick={onLogout}>
 			<LogOut class="h-4 w-4" />
@@ -38,10 +43,10 @@
 			variant="ghost"
 			size="sm"
 			class="h-9 w-9 p-0"
-			href="/me/proxy"
-			aria-label="LLM Proxy"
+			href="/me"
+			aria-label="Profile"
 		>
-			<Cable class="h-4 w-4" />
+			<User class="h-4 w-4" />
 		</Button>
 		<Button
 			variant="ghost"
