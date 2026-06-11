@@ -71,6 +71,14 @@ pub trait StoryProvider: Send + Sync {
 // -- Pricing --
 
 pub trait PricingProvider: Send + Sync {
+    /// Whether cost estimation is enabled for this edition. Cost analytics is
+    /// an enterprise feature; the community provider returns `false` so callers
+    /// record/show `$0`. Defaults to `true` so enterprise providers (which
+    /// compute real, DB-backed costs) need no change.
+    fn cost_enabled(&self) -> bool {
+        true
+    }
+
     fn estimate_cost(
         &self,
         model: &str,

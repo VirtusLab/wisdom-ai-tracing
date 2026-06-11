@@ -126,6 +126,7 @@ pub struct SyncResult {
 pub async fn sync_pricing(
     pool: &PgPool,
     http_client: &reqwest::Client,
+    cost_enabled: bool,
 ) -> Result<SyncResult, String> {
     let bytes = http_client
         .get(LITELLM_URL)
@@ -194,7 +195,8 @@ pub async fn sync_pricing(
         .ok()
         .flatten();
 
-        if let Some(from) = old_from {
+        // Recalculating stored session costs is enterprise-only (cost analytics).
+        if let (true, Some(from)) = (cost_enabled, old_from) {
             let pricing = crate::pricing::fetch_pricing_for_model(pool, model, None).await;
             if let Err(e) = crate::pricing::recalculate_sessions_for_pricing(
                 pool, model, &pricing, from, None, None, None,

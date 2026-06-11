@@ -43,6 +43,9 @@ impl StoryProvider for CommunityStoryProvider {
 pub struct CommunityPricingProvider;
 
 impl PricingProvider for CommunityPricingProvider {
+    fn cost_enabled(&self) -> bool {
+        false
+    }
     fn estimate_cost(&self, _: &str, _: i64, _: i64, _: i64, _: i64) -> f64 {
         0.0
     }

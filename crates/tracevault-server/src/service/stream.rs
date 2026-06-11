@@ -142,16 +142,22 @@ impl StreamService {
                     // input_tokens from the API includes cache_read and cache_write,
                     // subtract to get fresh (non-cached) input only
                     let fresh_input = (batch_input - batch_cache_read - batch_cache_write).max(0);
-                    let pricing =
-                        crate::pricing::fetch_pricing_for_model(&state.pool, model_name, None)
-                            .await;
-                    let batch_cost = crate::pricing::estimate_cost_with_pricing(
-                        &pricing,
-                        fresh_input,
-                        batch_output,
-                        batch_cache_read,
-                        batch_cache_write,
-                    );
+                    // Cost analytics is an enterprise feature — the community
+                    // pricing provider reports it disabled, so we store $0.
+                    let batch_cost = if state.extensions.pricing.cost_enabled() {
+                        let pricing =
+                            crate::pricing::fetch_pricing_for_model(&state.pool, model_name, None)
+                                .await;
+                        crate::pricing::estimate_cost_with_pricing(
+                            &pricing,
+                            fresh_input,
+                            batch_output,
+                            batch_cache_read,
+                            batch_cache_write,
+                        )
+                    } else {
+                        0.0
+                    };
 
                     SessionRepo::update_tokens(
                         &state.pool,

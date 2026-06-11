@@ -293,6 +293,7 @@ pub async fn anthropic_proxy(
             anthropic_request_id: None,
             path: path.clone(),
             start,
+            cost_enabled: state.extensions.pricing.cost_enabled(),
         });
 
     build_downstream_response(upstream_resp, permits, ctx)
