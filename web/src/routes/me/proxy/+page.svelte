@@ -353,8 +353,7 @@
 
 <div class="space-y-6">
 	<div>
-		<h1 class="text-2xl font-bold">LLM Proxy</h1>
-		<p class="text-muted-foreground mt-1 text-sm">
+		<p class="text-muted-foreground text-sm">
 			Route AI coding tools (Claude Code, GSD2, Cursor, Codex CLI) through TraceVault by
 			pointing them at the proxy URL below. Store one or more named credentials and route
 			individual models to them. Stored keys are used internally — they are never returned to
