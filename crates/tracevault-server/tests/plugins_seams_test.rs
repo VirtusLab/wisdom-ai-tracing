@@ -265,3 +265,34 @@ async fn session_detail_includes_contributor_metrics(pool: PgPool) {
         "expected a metric with key 'demo', got {json}"
     );
 }
+
+#[sqlx::test(migrations = "./migrations")]
+async fn empty_plugins_change_nothing(pool: PgPool) {
+    // With the default (empty) Plugins, /api/v1/capabilities returns an empty list.
+    let state = common::test_state_with_plugins(pool, Arc::new(Plugins::default()));
+    let app = tracevault_server::build_router(state);
+
+    let resp = app
+        .oneshot(
+            axum::http::Request::builder()
+                .uri("/api/v1/capabilities")
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(
+        json["capabilities"]
+            .as_array()
+            .expect("capabilities array")
+            .len(),
+        0,
+        "OSS default must advertise zero capabilities"
+    );
+}
