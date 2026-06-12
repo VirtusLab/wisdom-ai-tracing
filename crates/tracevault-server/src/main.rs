@@ -108,8 +108,11 @@ async fn main() {
     }
     sync_repos_on_startup(&pool, &repo_manager, &extensions).await;
 
+    // Cost analytics (recalculating stored session costs) is enterprise-only.
+    let cost_enabled = extensions.pricing.cost_enabled();
+
     // Sync pricing from LiteLLM on startup (non-blocking on failure)
-    match pricing_sync::sync_pricing(&pool, &http_client).await {
+    match pricing_sync::sync_pricing(&pool, &http_client, cost_enabled).await {
         Ok(result) => {
             if result.models_updated.is_empty() {
                 tracing::info!("Pricing sync: all prices up to date");
@@ -130,7 +133,7 @@ async fn main() {
             loop {
                 interval.tick().await;
                 tracing::info!("Running daily pricing sync...");
-                match pricing_sync::sync_pricing(&pool, &client).await {
+                match pricing_sync::sync_pricing(&pool, &client, cost_enabled).await {
                     Ok(result) => {
                         if !result.models_updated.is_empty() {
                             tracing::info!(

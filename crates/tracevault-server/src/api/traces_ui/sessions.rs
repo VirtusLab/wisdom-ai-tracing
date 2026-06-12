@@ -360,12 +360,23 @@ pub async fn get_session_transcript(
     .fetch_all(&state.pool)
     .await?;
 
-    let pricing = pricing::fetch_pricing_for_model(
-        &state.pool,
-        session_model.as_deref().unwrap_or("sonnet"),
-        session_started_at,
-    )
-    .await;
+    // Cost analytics is enterprise-only — zero pricing under the community
+    // provider so any recomputed cost is $0.
+    let pricing = if state.extensions.pricing.cost_enabled() {
+        pricing::fetch_pricing_for_model(
+            &state.pool,
+            session_model.as_deref().unwrap_or("sonnet"),
+            session_started_at,
+        )
+        .await
+    } else {
+        pricing::ModelPricing {
+            input_per_m: 0.0,
+            output_per_m: 0.0,
+            cache_write_per_m: 0.0,
+            cache_read_per_m: 0.0,
+        }
+    };
 
     let transcript_array: Vec<serde_json::Value> =
         transcript_chunks.iter().map(|c| c.data.clone()).collect();

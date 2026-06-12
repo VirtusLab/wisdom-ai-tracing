@@ -224,6 +224,12 @@ pub async fn recalculate(
     Path((_slug, pricing_id)): Path<(String, Uuid)>,
 ) -> Result<Json<RecalculateResponse>, AppError> {
     error::require_permission(&state.extensions, &auth.role, Permission::OrgSettingsManage)?;
+    // Recalculating session costs is a cost-analytics (enterprise) operation.
+    if !state.extensions.pricing.cost_enabled() {
+        return Err(AppError::Forbidden(
+            "Cost analytics is an enterprise feature".into(),
+        ));
+    }
 
     let pricing = PricingRepo::get_for_recalculate(&state.pool, pricing_id)
         .await?
@@ -296,9 +302,13 @@ pub async fn trigger_sync(
         }
     }
 
-    let result = pricing_sync::sync_pricing(&state.pool, &state.http_client)
-        .await
-        .map_err(AppError::internal)?;
+    let result = pricing_sync::sync_pricing(
+        &state.pool,
+        &state.http_client,
+        state.extensions.pricing.cost_enabled(),
+    )
+    .await
+    .map_err(AppError::internal)?;
 
     audit::log(
         &state.pool,

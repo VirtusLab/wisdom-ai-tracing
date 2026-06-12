@@ -452,12 +452,24 @@ pub async fn get_session_detail(
     .await?
     .ok_or_else(|| AppError::NotFound("Session not found".into()))?;
 
-    let pricing = pricing::fetch_pricing_for_model(
-        &state.pool,
-        row.model.as_deref().unwrap_or("sonnet"),
-        row.started_at,
-    )
-    .await;
+    // Cost analytics is enterprise-only; with the community pricing provider
+    // we feed zero rates so every recomputed per-call/breakdown cost is $0
+    // (the stored session cost is already $0 — see StreamService).
+    let pricing = if state.extensions.pricing.cost_enabled() {
+        pricing::fetch_pricing_for_model(
+            &state.pool,
+            row.model.as_deref().unwrap_or("sonnet"),
+            row.started_at,
+        )
+        .await
+    } else {
+        ModelPricing {
+            input_per_m: 0.0,
+            output_per_m: 0.0,
+            cache_write_per_m: 0.0,
+            cache_read_per_m: 0.0,
+        }
+    };
 
     // Reassemble transcript from transcript_chunks
     let chunks: Vec<(serde_json::Value,)> = sqlx::query_as(

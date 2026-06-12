@@ -55,6 +55,9 @@ pub(crate) struct LedgerContext {
     pub(crate) anthropic_request_id: Option<String>,
     pub(crate) path: String,
     pub(crate) start: Instant,
+    /// Whether cost estimation is enabled (enterprise). When false, the ledger
+    /// row's cost is recorded as $0 — cost analytics is enterprise-only.
+    pub(crate) cost_enabled: bool,
 }
 
 impl LedgerContext {
@@ -133,8 +136,14 @@ impl LedgerContext {
         let cache_read = u.cache_read_tokens.unwrap_or(0);
         let cache_write = u.cache_write_tokens.unwrap_or(0);
 
-        let pricing = fetch_pricing_for_model(&self.pool, &model, None).await;
-        let cost = estimate_cost_with_pricing(&pricing, input, output, cache_read, cache_write);
+        // Cost analytics is enterprise-only — under the community pricing
+        // provider the ledger row's cost stays $0.
+        let cost = if self.cost_enabled {
+            let pricing = fetch_pricing_for_model(&self.pool, &model, None).await;
+            estimate_cost_with_pricing(&pricing, input, output, cache_read, cache_write)
+        } else {
+            0.0
+        };
 
         UsageFields {
             response_model: u.model,
@@ -294,6 +303,7 @@ mod tests {
             anthropic_request_id: Some("req_disc".into()),
             path: "v1/messages".into(),
             start: Instant::now(),
+            cost_enabled: true,
         };
         let permits = HeldPermits::new(
             std::sync::Arc::new(tokio::sync::Semaphore::new(1))
