@@ -32,6 +32,8 @@ pub struct SessionDetailResponse {
     pub cost_breakdown: CostBreakdown,
     pub token_distribution: TokenDistribution,
     pub transcript_records: Vec<TranscriptRecord>,
+    #[serde(default)]
+    pub metrics: Vec<crate::plugins::Metric>,
 }
 
 #[derive(Serialize)]
@@ -477,6 +479,16 @@ pub async fn get_session_detail(
     // Count API calls from per_call data since api_calls column doesn't exist on sessions
     let api_calls = per_call.len() as i32;
 
+    let metric_ctx = crate::plugins::SessionMetricContext {
+        org_id,
+        session_db_id: session_uuid,
+        model: row.model.clone(),
+    };
+    let metrics = state
+        .plugins
+        .metrics_for("session.detail", &state, &metric_ctx)
+        .await;
+
     Ok(Json(SessionDetailResponse {
         session_id: row.session_id,
         model: row.model,
@@ -499,6 +511,7 @@ pub async fn get_session_detail(
         cost_breakdown,
         token_distribution,
         transcript_records,
+        metrics,
     }))
 }
 

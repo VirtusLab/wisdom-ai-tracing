@@ -18,6 +18,7 @@ fn build_state(pool: sqlx::PgPool) -> AppState {
         default_credential_base_url: "http://localhost".to_string(),
         proxy_global_semaphore: None,
         proxy_per_credential_semaphores: std::sync::Arc::new(dashmap::DashMap::new()),
+        plugins: std::sync::Arc::new(tracevault_server::plugins::Plugins::default()),
     }
 }
 
