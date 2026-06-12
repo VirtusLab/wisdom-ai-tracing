@@ -134,6 +134,8 @@ export PORT=3000
 # Encryption key for per-org signing keys (see "Keys & Secrets" below)
 export TRACEVAULT_ENCRYPTION_KEY=<base64-encoded-32-byte-key>
 
+export CORS_ORIGIN=http://localhost:5173
+
 cargo run -p tracevault-server
 ```
 
