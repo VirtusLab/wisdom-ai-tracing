@@ -141,6 +141,7 @@ async fn ingest_hook_fires_on_session_end(pool: PgPool) {
         tool_response: None,
         tool_is_error: None,
         event_index: None,
+        event_uuid: None,
         transcript_lines: Some(vec![serde_json::json!({
             "type": "assistant",
             "message": {
@@ -172,6 +173,7 @@ async fn ingest_hook_fires_on_session_end(pool: PgPool) {
         tool_response: None,
         tool_is_error: None,
         event_index: None,
+        event_uuid: None,
         transcript_lines: None,
         transcript_offset: None,
         model: Some("claude-sonnet-4-6".to_string()),
