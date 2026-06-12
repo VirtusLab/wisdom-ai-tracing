@@ -12,7 +12,7 @@ keywords = ["tracing", "attribution", "ai", "server"]
 categories = ["web-programming", "development-tools"]
 
 [dependencies]
-tracevault-core = { path = "../tracevault-core", version = "0.17" }
+tracevault-core = { path = "../tracevault-core", version = "0.18" }
 axum = { version = "0.8", features = ["macros"] }
 tokio.workspace = true
 serde.workspace = true
