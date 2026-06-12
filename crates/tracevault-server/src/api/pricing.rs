@@ -302,10 +302,13 @@ pub async fn trigger_sync(
         }
     }
 
-    let result =
-        pricing_sync::sync_pricing(&state.pool, &state.http_client, state.extensions.pricing.cost_enabled())
-            .await
-            .map_err(AppError::internal)?;
+    let result = pricing_sync::sync_pricing(
+        &state.pool,
+        &state.http_client,
+        state.extensions.pricing.cost_enabled(),
+    )
+    .await
+    .map_err(AppError::internal)?;
 
     audit::log(
         &state.pool,

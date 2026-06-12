@@ -68,13 +68,12 @@ async fn community_ingest_records_zero_cost(pool: PgPool) {
         .unwrap();
 
     // Tokens are recorded, but cost is gated to $0 under the community edition.
-    let (tokens, cost): (Option<i64>, Option<f64>) = sqlx::query_as(
-        "SELECT total_tokens, estimated_cost_usd FROM sessions WHERE org_id = $1",
-    )
-    .bind(org_id)
-    .fetch_one(&pool)
-    .await
-    .unwrap();
+    let (tokens, cost): (Option<i64>, Option<f64>) =
+        sqlx::query_as("SELECT total_tokens, estimated_cost_usd FROM sessions WHERE org_id = $1")
+            .bind(org_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
     assert_eq!(tokens, Some(15000), "tokens are still recorded");
     assert_eq!(
         cost.unwrap_or(-1.0),
