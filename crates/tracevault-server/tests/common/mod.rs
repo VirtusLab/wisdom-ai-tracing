@@ -106,7 +106,8 @@ pub async fn seed_event(pool: &PgPool, session_id: Uuid, event_index: i32) -> Uu
         pool,
         &InsertToolEvent {
             session_id,
-            event_index,
+            event_index: Some(event_index),
+            event_uuid: None,
             tool_name: Some("Read".into()),
             tool_input: Some(serde_json::json!({"file_path": "/tmp/test.rs"})),
             tool_response: None,

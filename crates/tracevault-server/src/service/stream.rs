@@ -173,9 +173,13 @@ impl StreamService {
         match req.event_type {
             // 5. ToolUse events
             StreamEventType::ToolUse => {
-                let event_index = req.event_index.ok_or_else(|| {
-                    AppError::BadRequest("event_index required for ToolUse events".to_string())
-                })?;
+                // Need an ordering key: a UUIDv7 (current clients) or a legacy
+                // event_index (older clients). Reject events that carry neither.
+                if req.event_index.is_none() && req.event_uuid.is_none() {
+                    return Err(AppError::BadRequest(
+                        "ToolUse events require event_uuid (or legacy event_index)".to_string(),
+                    ));
+                }
 
                 let tool_name = req.tool_name.as_deref().unwrap_or("");
                 let store_response = is_file_modifying_tool(tool_name);
@@ -184,7 +188,8 @@ impl StreamService {
                     &state.pool,
                     &crate::repo::events::InsertToolEvent {
                         session_id: session_db_id,
-                        event_index,
+                        event_index: req.event_index,
+                        event_uuid: req.event_uuid,
                         tool_name: req.tool_name.clone(),
                         tool_input: req.tool_input.clone(),
                         tool_response: if store_response {

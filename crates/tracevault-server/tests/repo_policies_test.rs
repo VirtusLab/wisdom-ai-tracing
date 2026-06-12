@@ -476,7 +476,8 @@ async fn window_tool_call_stats_after_timestamp(pool: sqlx::PgPool) {
         &pool,
         &InsertToolEvent {
             session_id: session_db_id,
-            event_index: 1,
+            event_index: Some(1),
+            event_uuid: None,
             tool_name: Some("cargo_fmt".into()),
             tool_input: None,
             tool_response: None,
@@ -528,7 +529,8 @@ async fn window_tool_call_stats_excludes_pre_window_events(pool: sqlx::PgPool) {
         &pool,
         &InsertToolEvent {
             session_id: session_db_id,
-            event_index: 1,
+            event_index: Some(1),
+            event_uuid: None,
             tool_name: Some("cargo_fmt".into()),
             tool_input: None,
             tool_response: None,

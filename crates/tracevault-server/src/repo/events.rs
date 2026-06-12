@@ -6,7 +6,11 @@ use crate::error::AppError;
 
 pub struct InsertToolEvent {
     pub session_id: Uuid,
-    pub event_index: i32,
+    /// Legacy ordering counter from older clients; `None` for clients that send
+    /// `event_uuid` instead.
+    pub event_index: Option<i32>,
+    /// Client-minted UUIDv7 ordering key; `None` for legacy clients.
+    pub event_uuid: Option<Uuid>,
     pub tool_name: Option<String>,
     pub tool_input: Option<serde_json::Value>,
     pub tool_response: Option<serde_json::Value>,
@@ -54,11 +58,24 @@ pub struct EventRepo;
 impl EventRepo {
     /// INSERT INTO events ... ON CONFLICT DO NOTHING RETURNING id.
     /// Returns None if the row already existed (conflict).
+    ///
+    /// Dedup is keyed on the event's intrinsic identity when a `tool_use_id` is
+    /// present — `(session_id, tool_use_id, hook_event_name)` — so a re-fired or
+    /// re-delivered hook collapses regardless of its client-assigned
+    /// `event_index`, and two concurrently-raced parallel-tool events (which can
+    /// share an `event_index` because the CLI counter is not atomic) both persist
+    /// because their `tool_use_id`s differ. Legacy rows without a `tool_use_id`
+    /// fall back to the historical `(session_id, event_index)` dedup.
     pub async fn insert_tool_event(
         pool: &PgPool,
         req: &InsertToolEvent,
     ) -> Result<Option<Uuid>, AppError> {
-        let id: Option<Uuid> = sqlx::query_scalar(include_str!("sql/insert_tool_event.sql"))
+        let sql = if req.tool_use_id.is_some() {
+            include_str!("sql/insert_tool_event_by_identity.sql")
+        } else {
+            include_str!("sql/insert_tool_event.sql")
+        };
+        let id: Option<Uuid> = sqlx::query_scalar(sql)
             .bind(req.session_id)
             .bind(req.event_index)
             .bind(&req.tool_name)
@@ -68,6 +85,7 @@ impl EventRepo {
             .bind(req.timestamp)
             .bind(&req.hook_event_name)
             .bind(&req.tool_use_id)
+            .bind(req.event_uuid)
             .fetch_optional(pool)
             .await?;
         Ok(id)

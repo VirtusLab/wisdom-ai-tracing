@@ -10,24 +10,6 @@ fn setup_session_dir() -> (TempDir, std::path::PathBuf) {
 }
 
 #[test]
-fn test_event_counter_increments() {
-    let (_tmp, session_dir) = setup_session_dir();
-    let counter_path = session_dir.join(".event_counter");
-    assert_eq!(
-        tracevault_cli::commands::stream::next_event_index(&counter_path).unwrap(),
-        0
-    );
-    assert_eq!(
-        tracevault_cli::commands::stream::next_event_index(&counter_path).unwrap(),
-        1
-    );
-    assert_eq!(
-        tracevault_cli::commands::stream::next_event_index(&counter_path).unwrap(),
-        2
-    );
-}
-
-#[test]
 fn test_read_new_transcript_lines() {
     let (_tmp, session_dir) = setup_session_dir();
     let transcript_path = session_dir.join("transcript.jsonl");

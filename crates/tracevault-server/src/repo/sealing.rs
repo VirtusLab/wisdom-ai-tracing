@@ -201,7 +201,7 @@ impl SealingRepo {
         session_id: Uuid,
     ) -> Result<
         Vec<(
-            i32,                       // event_index
+            Option<i32>,               // event_index (NULL for UUIDv7 events)
             String,                    // event_type
             Option<String>,            // tool_name
             Option<serde_json::Value>, // tool_input
@@ -212,16 +212,21 @@ impl SealingRepo {
         let rows = sqlx::query_as::<
             _,
             (
-                i32,
+                Option<i32>,
                 String,
                 Option<String>,
                 Option<serde_json::Value>,
                 Option<serde_json::Value>,
             ),
         >(
+            // Order by the UUIDv7 ordering key when present (current clients),
+            // falling back to the legacy event_index for pre-036 rows / older
+            // clients; `id` is the final deterministic tiebreak. Forward-safe:
+            // an all-legacy session has every event_uuid NULL, so this reduces to
+            // `event_index, id` and reproduces its pre-existing seal order.
             "SELECT event_index, event_type, tool_name, tool_input, tool_response
              FROM events WHERE session_id = $1
-             ORDER BY event_index ASC",
+             ORDER BY event_uuid ASC NULLS LAST, event_index ASC NULLS LAST, id ASC",
         )
         .bind(session_id)
         .fetch_all(pool)

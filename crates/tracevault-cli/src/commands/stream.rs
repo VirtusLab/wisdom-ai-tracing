@@ -7,20 +7,6 @@ use tracevault_core::streaming::{
     extract_is_error_from_transcript, StreamEventRequest, StreamEventType,
 };
 
-pub fn next_event_index(counter_path: &Path) -> Result<i32, io::Error> {
-    let current = if counter_path.exists() {
-        let content = fs::read_to_string(counter_path)?;
-        content
-            .trim()
-            .parse::<i32>()
-            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?
-    } else {
-        0
-    };
-    fs::write(counter_path, (current + 1).to_string())?;
-    Ok(current)
-}
-
 pub fn read_new_transcript_lines(
     transcript_path: &Path,
     offset_path: &Path,
@@ -105,9 +91,11 @@ pub async fn run_stream(event_type: &str) -> Result<(), Box<dyn std::error::Erro
         .join(&hook_event.session_id);
     fs::create_dir_all(&session_dir)?;
 
-    // 3. Get event_index
-    let counter_path = session_dir.join(".event_counter");
-    let event_index = next_event_index(&counter_path)?;
+    // 3. Mint a time-ordered event id. UUIDv7 is stamped at hook-fire time, so
+    //    it both orders events and is a stable idempotency key — no shared
+    //    `.event_counter` file (which raced between concurrent parallel-tool
+    //    hooks and could collide/drop events).
+    let event_uuid = uuid::Uuid::now_v7();
 
     // 4. Read new transcript lines
     let transcript_path = Path::new(&hook_event.transcript_path);
@@ -139,7 +127,8 @@ pub async fn run_stream(event_type: &str) -> Result<(), Box<dyn std::error::Erro
         tool_input: hook_event.tool_input.clone(),
         tool_response: hook_event.tool_response.clone(),
         tool_is_error,
-        event_index: Some(event_index),
+        event_index: None,
+        event_uuid: Some(event_uuid),
         transcript_lines: if transcript_lines.is_empty() {
             None
         } else {
