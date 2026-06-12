@@ -5,10 +5,12 @@ use axum::{
 };
 use http::Method;
 use std::net::SocketAddr;
+use std::sync::Arc;
 use tower_governor::{governor::GovernorConfigBuilder, GovernorLayer};
 use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
 
+use tracevault_core::agent_adapter::AgentAdapterRegistry;
 use tracevault_server::{api, config, db, extensions, pricing_sync, repo_manager, AppState};
 
 #[tokio::main]
@@ -693,6 +695,7 @@ async fn main() {
             embedding_service,
             proxy_global_semaphore: proxy_global_semaphore.clone(),
             proxy_per_credential_semaphores: proxy_per_credential_semaphores.clone(),
+            agent_registry: Arc::new(AgentAdapterRegistry::new()),
         });
 
     let listener = tokio::net::TcpListener::bind(&bind_addr).await.unwrap();

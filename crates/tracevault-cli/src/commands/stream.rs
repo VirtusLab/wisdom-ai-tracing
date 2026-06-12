@@ -2,10 +2,9 @@ use std::fs::{self, OpenOptions};
 use std::io::{self, BufRead, Read, Seek, SeekFrom, Write};
 use std::path::Path;
 
-use tracevault_core::hooks::{parse_hook_event, HookResponse};
-use tracevault_core::streaming::{
-    extract_is_error_from_transcript, StreamEventRequest, StreamEventType,
-};
+use tracevault_core::agent_adapter::AgentAdapterRegistry;
+use tracevault_core::hooks::parse_hook_event;
+use tracevault_core::streaming::{extract_is_error_from_transcript, StreamEventRequest};
 
 pub fn read_new_transcript_lines(
     transcript_path: &Path,
@@ -70,7 +69,11 @@ pub fn drain_pending(pending_path: &Path) -> Result<Vec<String>, io::Error> {
     Ok(lines)
 }
 
-pub async fn run_stream(event_type: &str) -> Result<(), Box<dyn std::error::Error>> {
+// Routing is driven by `hook_event.hook_event_name` from stdin (see
+// `adapter.map_event_type` below). The `--event` CLI flag is kept only because
+// the installed hooks pass it for shell-log readability. `project_root` is
+// resolved internally from `hook_event.cwd`, matching single-agent (main) behaviour.
+pub async fn run_stream(_event_type: &str, agent: &str) -> Result<(), Box<dyn std::error::Error>> {
     // 1. Read HookEvent from stdin
     let mut input = String::new();
     io::stdin().read_to_string(&mut input)?;
@@ -102,12 +105,13 @@ pub async fn run_stream(event_type: &str) -> Result<(), Box<dyn std::error::Erro
     let offset_path = session_dir.join(".stream_offset");
     let (transcript_lines, new_offset) = read_new_transcript_lines(transcript_path, &offset_path)?;
 
-    // 5. Build StreamEventRequest
-    let stream_event_type = match event_type {
-        "notification" => StreamEventType::SessionStart,
-        "stop" => StreamEventType::SessionEnd,
-        _ => StreamEventType::ToolUse,
-    };
+    // 5. Map hook event to stream event type via the agent adapter.
+    // Resolve the adapter once; it owns the wire protocol version and the
+    // canonical tool name so user-supplied aliases (e.g. "claude" → "claude-code")
+    // produce the same wire bytes as the canonical name.
+    let registry = AgentAdapterRegistry::new();
+    let adapter = registry.get(agent);
+    let stream_event_type = adapter.map_event_type(&hook_event.hook_event_name);
 
     // Extract is_error from transcript for this tool_use_id
     let tool_is_error = hook_event
@@ -116,8 +120,8 @@ pub async fn run_stream(event_type: &str) -> Result<(), Box<dyn std::error::Erro
         .and_then(|uid| extract_is_error_from_transcript(uid, &transcript_lines));
 
     let mut req = StreamEventRequest {
-        protocol_version: 1,
-        tool: Some("claude-code".to_string()),
+        protocol_version: adapter.wire_protocol_version(),
+        tool: Some(adapter.name().to_string()),
         event_type: stream_event_type,
         session_id: hook_event.session_id.clone(),
         timestamp: chrono::Utc::now(),
@@ -199,8 +203,8 @@ pub async fn run_stream(event_type: &str) -> Result<(), Box<dyn std::error::Erro
         }
     }
 
-    // 12. Always print HookResponse::allow() to stdout
-    let response = HookResponse::allow();
+    // 12. Always print agent-specific hook response to stdout
+    let response = adapter.hook_response();
     println!("{}", serde_json::to_string(&response)?);
 
     Ok(())

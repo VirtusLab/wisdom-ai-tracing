@@ -24,6 +24,9 @@ pub mod story;
 pub use error::AppError;
 pub use proxy_url::validate_base_url;
 
+use std::sync::Arc;
+use tracevault_core::agent_adapter::AgentAdapterRegistry;
+
 /// Stable replacement for `str::floor_char_boundary` (nightly-only).
 /// Returns the largest byte index `<= index` that is a char boundary.
 pub fn floor_char_boundary(s: &str, index: usize) -> usize {
@@ -86,4 +89,5 @@ pub struct AppState {
     /// (TTL or LRU) if active credentials exceed that threshold.
     pub proxy_per_credential_semaphores:
         std::sync::Arc<dashmap::DashMap<uuid::Uuid, std::sync::Arc<tokio::sync::Semaphore>>>,
+    pub agent_registry: Arc<AgentAdapterRegistry>,
 }

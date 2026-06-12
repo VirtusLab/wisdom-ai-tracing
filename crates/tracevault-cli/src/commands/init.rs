@@ -3,6 +3,7 @@ use crate::config::TracevaultConfig;
 use std::fs;
 use std::io::{self, BufRead, IsTerminal, Write};
 use std::path::Path;
+use tracevault_core::agent_adapter::AgentAdapterRegistry;
 
 /// Which Claude Code settings file to install hooks into.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
@@ -90,6 +91,7 @@ pub async fn init_in_directory(
     server_url: Option<&str>,
     claude_settings: Option<ClaudeSettingsTarget>,
     no_gitignore: bool,
+    agents: Option<&[String]>,
 ) -> Result<ClaudeSettingsTarget, io::Error> {
     // Check for git repository
     if !project_root.join(".git").exists() {
@@ -133,8 +135,25 @@ pub async fn init_in_directory(
         config.to_toml(),
     )?;
 
-    // Install Claude Code hooks into the chosen settings file
+    // Install Claude Code hooks into the chosen settings file.
+    // Claude is always installed via this path so it stays byte-equivalent
+    // with the single-agent (main) behaviour, including the --claude-settings target.
     install_claude_hooks(project_root, target)?;
+
+    // Install hooks for any additional agents (e.g. codex) requested via --agent.
+    if let Some(agents) = agents {
+        let registry = AgentAdapterRegistry::new();
+        for agent in agents {
+            if agent == "claude" || agent == "claude-code" {
+                // Claude is already installed above via the settings target.
+                continue;
+            }
+            match registry.try_get(agent) {
+                Some(adapter) => adapter.install_hooks(project_root)?,
+                None => eprintln!("Warning: unknown agent '{}', skipping hooks", agent),
+            }
+        }
+    }
 
     // Install git hooks
     install_git_hook(project_root)?;

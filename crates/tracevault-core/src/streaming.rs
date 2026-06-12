@@ -1,6 +1,5 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
@@ -89,10 +88,6 @@ pub struct ExtractedFileChange {
     pub content_hash: Option<String>,
 }
 
-pub fn is_file_modifying_tool(tool_name: &str) -> bool {
-    matches!(tool_name, "Write" | "Edit" | "Bash")
-}
-
 impl StreamEventRequest {
     /// Drop optional fields largest-first until the serialized payload is
     /// under 512 KB. Prevents 413 errors on both real-time sends and flush.
@@ -139,43 +134,4 @@ pub fn extract_is_error_from_transcript(
         }
     }
     None
-}
-
-pub fn extract_file_change(
-    tool_name: &str,
-    tool_input: &serde_json::Value,
-) -> Option<ExtractedFileChange> {
-    match tool_name {
-        "Write" => {
-            let file_path = tool_input.get("file_path")?.as_str()?.to_string();
-            let content = tool_input.get("content")?.as_str()?;
-            let mut hasher = Sha256::new();
-            hasher.update(content.as_bytes());
-            let hash = hex::encode(hasher.finalize());
-            let diff = content
-                .lines()
-                .map(|l| format!("+{l}"))
-                .collect::<Vec<_>>()
-                .join("\n");
-            Some(ExtractedFileChange {
-                file_path,
-                change_type: "create".to_string(),
-                diff_text: Some(diff),
-                content_hash: Some(hash),
-            })
-        }
-        "Edit" => {
-            let file_path = tool_input.get("file_path")?.as_str()?.to_string();
-            let old_string = tool_input.get("old_string")?.as_str()?;
-            let new_string = tool_input.get("new_string")?.as_str()?;
-            let diff = format!("--- {old_string}\n+++ {new_string}");
-            Some(ExtractedFileChange {
-                file_path,
-                change_type: "edit".to_string(),
-                diff_text: Some(diff),
-                content_hash: None,
-            })
-        }
-        _ => None,
-    }
 }

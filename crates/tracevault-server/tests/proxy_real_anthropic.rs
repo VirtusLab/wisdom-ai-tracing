@@ -74,6 +74,9 @@ async fn build_real_state(pool: &sqlx::PgPool, upstream_key: &str) -> (AppState,
         default_credential_base_url: api::proxy::DEFAULT_ANTHROPIC_UPSTREAM_BASE.to_string(),
         proxy_global_semaphore: None,
         proxy_per_credential_semaphores: std::sync::Arc::new(dashmap::DashMap::new()),
+        agent_registry: std::sync::Arc::new(
+            tracevault_core::agent_adapter::AgentAdapterRegistry::new(),
+        ),
     };
     (state, session_token)
 }
