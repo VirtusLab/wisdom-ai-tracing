@@ -38,6 +38,9 @@ async fn setup(pool: sqlx::PgPool) -> (Router, String) {
         default_credential_base_url: "https://api.anthropic.com".to_string(),
         proxy_global_semaphore: None,
         proxy_per_credential_semaphores: std::sync::Arc::new(dashmap::DashMap::new()),
+        agent_registry: std::sync::Arc::new(
+            tracevault_core::agent_adapter::AgentAdapterRegistry::new(),
+        ),
     };
 
     let app = Router::new()

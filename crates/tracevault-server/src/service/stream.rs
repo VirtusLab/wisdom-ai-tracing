@@ -95,12 +95,21 @@ impl StreamService {
                                 &state.pool,
                                 &crate::repo::events::InsertToolEvent {
                                     session_id: session_db_id,
-                                    event_index: chunk_index,
+                                    // Synthetic transcript-sourced event: mint a
+                                    // server-side UUIDv7 ordering key instead of
+                                    // reusing chunk_index as a legacy counter
+                                    // (which could collide with real hook events).
+                                    // Dedup is provided by the was_inserted chunk
+                                    // gate above, not the insert conflict target.
+                                    event_index: None,
+                                    event_uuid: Some(uuid::Uuid::now_v7()),
                                     tool_name: Some(record.tool_name),
                                     tool_input: record.tool_input,
                                     tool_response: None,
                                     tool_is_error: None,
                                     timestamp: Some(record.timestamp),
+                                    hook_event_name: None,
+                                    tool_use_id: None,
                                 },
                             )
                             .await?;
