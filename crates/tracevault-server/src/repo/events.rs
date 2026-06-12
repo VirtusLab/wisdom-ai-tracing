@@ -54,11 +54,24 @@ pub struct EventRepo;
 impl EventRepo {
     /// INSERT INTO events ... ON CONFLICT DO NOTHING RETURNING id.
     /// Returns None if the row already existed (conflict).
+    ///
+    /// Dedup is keyed on the event's intrinsic identity when a `tool_use_id` is
+    /// present — `(session_id, tool_use_id, hook_event_name)` — so a re-fired or
+    /// re-delivered hook collapses regardless of its client-assigned
+    /// `event_index`, and two concurrently-raced parallel-tool events (which can
+    /// share an `event_index` because the CLI counter is not atomic) both persist
+    /// because their `tool_use_id`s differ. Legacy rows without a `tool_use_id`
+    /// fall back to the historical `(session_id, event_index)` dedup.
     pub async fn insert_tool_event(
         pool: &PgPool,
         req: &InsertToolEvent,
     ) -> Result<Option<Uuid>, AppError> {
-        let id: Option<Uuid> = sqlx::query_scalar(include_str!("sql/insert_tool_event.sql"))
+        let sql = if req.tool_use_id.is_some() {
+            include_str!("sql/insert_tool_event_by_identity.sql")
+        } else {
+            include_str!("sql/insert_tool_event.sql")
+        };
+        let id: Option<Uuid> = sqlx::query_scalar(sql)
             .bind(req.session_id)
             .bind(req.event_index)
             .bind(&req.tool_name)

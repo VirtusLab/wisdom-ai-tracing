@@ -219,9 +219,13 @@ impl SealingRepo {
                 Option<serde_json::Value>,
             ),
         >(
+            // `, id ASC` keeps the seal order deterministic now that two raced
+            // parallel-tool events can share an event_index (see migration 035).
+            // Forward-safe: sessions sealed before 035 have unique indices, so
+            // the tiebreak never changes their order.
             "SELECT event_index, event_type, tool_name, tool_input, tool_response
              FROM events WHERE session_id = $1
-             ORDER BY event_index ASC",
+             ORDER BY event_index ASC, id ASC",
         )
         .bind(session_id)
         .fetch_all(pool)
