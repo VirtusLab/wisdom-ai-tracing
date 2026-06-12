@@ -20,7 +20,7 @@ name = "tracevault"
 path = "src/main.rs"
 
 [dependencies]
-tracevault-core = { path = "../tracevault-core", version = "0.17" }
+tracevault-core = { path = "../tracevault-core", version = "0.18" }
 clap = { version = "4", features = ["derive"] }
 chrono.workspace = true
 tokio.workspace = true
