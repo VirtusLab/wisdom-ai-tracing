@@ -55,6 +55,7 @@ async fn community_ingest_records_zero_cost(pool: PgPool) {
         tool_response: None,
         tool_is_error: None,
         event_index: None,
+        event_uuid: None,
         transcript_lines: Some(vec![line]),
         transcript_offset: Some(0),
         model: Some("claude-sonnet-4-6".to_string()),
