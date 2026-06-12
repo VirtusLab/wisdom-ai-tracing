@@ -6,7 +6,11 @@ use crate::error::AppError;
 
 pub struct InsertToolEvent {
     pub session_id: Uuid,
-    pub event_index: i32,
+    /// Legacy ordering counter from older clients; `None` for clients that send
+    /// `event_uuid` instead.
+    pub event_index: Option<i32>,
+    /// Client-minted UUIDv7 ordering key; `None` for legacy clients.
+    pub event_uuid: Option<Uuid>,
     pub tool_name: Option<String>,
     pub tool_input: Option<serde_json::Value>,
     pub tool_response: Option<serde_json::Value>,
@@ -81,6 +85,7 @@ impl EventRepo {
             .bind(req.timestamp)
             .bind(&req.hook_event_name)
             .bind(&req.tool_use_id)
+            .bind(req.event_uuid)
             .fetch_optional(pool)
             .await?;
         Ok(id)

@@ -35,6 +35,7 @@ fn transcript_request(session_id: &str, lines: Vec<serde_json::Value>) -> Stream
         tool_response: None,
         tool_is_error: None,
         event_index: None,
+        event_uuid: None,
         transcript_lines: Some(lines),
         transcript_offset: Some(0),
         model: Some("claude-sonnet-4-6".to_string()),

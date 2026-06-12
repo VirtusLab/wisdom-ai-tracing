@@ -2,6 +2,7 @@ mod common;
 
 use sqlx::PgPool;
 use tracevault_server::repo::events::{EventRepo, InsertToolEvent};
+use tracevault_server::repo::sealing::SealingRepo;
 
 fn evt(
     session_id: uuid::Uuid,
@@ -11,7 +12,28 @@ fn evt(
 ) -> InsertToolEvent {
     InsertToolEvent {
         session_id,
-        event_index,
+        event_index: Some(event_index),
+        event_uuid: None,
+        tool_name: Some("Edit".to_string()),
+        tool_input: None,
+        tool_response: None,
+        tool_is_error: None,
+        timestamp: Some(chrono::Utc::now()),
+        hook_event_name: hook_event_name.map(|s| s.to_string()),
+        tool_use_id: tool_use_id.map(|s| s.to_string()),
+    }
+}
+
+/// A current-client event: no event_index, ordered by a UUIDv7.
+fn evt_uuid(
+    session_id: uuid::Uuid,
+    tool_use_id: Option<&str>,
+    hook_event_name: Option<&str>,
+) -> InsertToolEvent {
+    InsertToolEvent {
+        session_id,
+        event_index: None,
+        event_uuid: Some(uuid::Uuid::now_v7()),
         tool_name: Some("Edit".to_string()),
         tool_input: None,
         tool_response: None,
@@ -114,6 +136,63 @@ async fn pre_and_post_are_distinct(pool: PgPool) {
 
     assert!(pre.is_some() && post.is_some());
     assert_eq!(event_count(&pool, session_id).await, 2);
+}
+
+/// Current-client events carry a UUIDv7 and no event_index: they persist (the
+/// event_index column is nullable) and still dedup on identity.
+#[sqlx::test(migrations = "./migrations")]
+async fn uuid_events_without_index_persist_and_dedup(pool: PgPool) {
+    let session_id = seed_session(&pool).await;
+
+    let first = EventRepo::insert_tool_event(
+        &pool,
+        &evt_uuid(session_id, Some("toolu_z"), Some("PostToolUse")),
+    )
+    .await
+    .unwrap();
+    let dup = EventRepo::insert_tool_event(
+        &pool,
+        &evt_uuid(session_id, Some("toolu_z"), Some("PostToolUse")),
+    )
+    .await
+    .unwrap();
+    let other = EventRepo::insert_tool_event(
+        &pool,
+        &evt_uuid(session_id, Some("toolu_w"), Some("PostToolUse")),
+    )
+    .await
+    .unwrap();
+
+    assert!(
+        first.is_some(),
+        "uuid event with NULL event_index must insert"
+    );
+    assert!(
+        dup.is_none(),
+        "same identity dedups even with NULL event_index"
+    );
+    assert!(other.is_some(), "distinct tool persists");
+    assert_eq!(event_count(&pool, session_id).await, 2);
+}
+
+/// The seal-load path must tolerate UUIDv7 events whose `event_index` is NULL —
+/// decoding NULL into a non-optional `i32` would error at seal time for any
+/// signed org using a current client.
+#[sqlx::test(migrations = "./migrations")]
+async fn sealing_loads_events_with_null_event_index(pool: PgPool) {
+    let session_id = seed_session(&pool).await;
+    EventRepo::insert_tool_event(
+        &pool,
+        &evt_uuid(session_id, Some("toolu_seal"), Some("PostToolUse")),
+    )
+    .await
+    .unwrap();
+
+    let events = SealingRepo::get_session_events_for_sealing(&pool, session_id)
+        .await
+        .expect("seal load must not fail on NULL event_index");
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].0, None, "UUIDv7 event has NULL event_index");
 }
 
 /// Legacy events without a tool_use_id keep the historical event_index dedup.

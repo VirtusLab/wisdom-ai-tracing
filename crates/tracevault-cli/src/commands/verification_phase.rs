@@ -4,7 +4,6 @@ use std::path::Path;
 use tracevault_core::streaming::{StreamEventRequest, StreamEventType};
 
 use crate::api_client::ApiClient;
-use crate::commands::stream::next_event_index;
 use crate::config::TracevaultConfig;
 use crate::credentials::Credentials;
 
@@ -58,11 +57,6 @@ pub async fn open_verification_phase(
             .to_string()
     };
 
-    let session_dir = sessions_dir.join(&session_id);
-    let counter_path = session_dir.join(".event_counter");
-    let event_index = next_event_index(&counter_path)
-        .map_err(|e| format!("Failed to read event counter: {e}"))?;
-
     let event = StreamEventRequest {
         protocol_version: 2,
         // Carry the tool like the hook stream path does — the server's
@@ -79,7 +73,10 @@ pub async fn open_verification_phase(
         tool_input: None,
         tool_response: None,
         tool_is_error: None,
-        event_index: Some(event_index),
+        // The server's VerificationPhaseStart handler only records a timestamp;
+        // it stores no event row, so neither an index nor a uuid is needed.
+        event_index: None,
+        event_uuid: None,
         transcript_lines: None,
         transcript_offset: None,
         model: None,

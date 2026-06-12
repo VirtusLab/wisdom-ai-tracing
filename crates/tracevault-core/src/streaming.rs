@@ -29,7 +29,15 @@ pub struct StreamEventRequest {
     pub tool_input: Option<serde_json::Value>,
     pub tool_response: Option<serde_json::Value>,
     pub tool_is_error: Option<bool>,
+    /// Legacy per-session ordering counter (from the CLI's `.event_counter`).
+    /// Superseded by `event_uuid`; still accepted from older clients and used as
+    /// an ordering fallback. New clients send `None`.
     pub event_index: Option<i32>,
+    /// Client-minted UUIDv7 stamped at hook-fire time. Time-ordered, so it is the
+    /// ordering key for events; absent (`None`) from older clients, which fall
+    /// back to `event_index`.
+    #[serde(default)]
+    pub event_uuid: Option<uuid::Uuid>,
     pub transcript_lines: Option<Vec<serde_json::Value>>,
     pub transcript_offset: Option<i64>,
     pub model: Option<String>,
